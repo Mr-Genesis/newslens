@@ -1,0 +1,47 @@
+version: "3.9"
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: newslens
+      POSTGRES_USER: newslens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-newslens_dev}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U newslens"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://newslens:${POSTGRES_PASSWORD:-newslens_dev}@db:5432/newslens
+      DATABASE_URL_SYNC: postgresql://newslens:${POSTGRES_PASSWORD:-newslens_dev}@db:5432/newslens
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      RSS_FETCH_INTERVAL_MINUTES: ${RSS_FETCH_INTERVAL_MINUTES:-10}
+      GDELT_FETCH_INTERVAL_MINUTES: ${GDELT_FETCH_INTERVAL_MINUTES:-15}
+      EMBEDDING_BACKFILL_INTERVAL_MINUTES: ${EMBEDDING_BACKFILL_INTERVAL_MINUTES:-5}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  pgdata:
+    name: newslens_pgdata
