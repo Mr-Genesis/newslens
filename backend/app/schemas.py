@@ -114,3 +114,37 @@ class BreadthMetricsOut(BaseModel):
     exploit_engagement_rate: float
     topic_diversity_score: float  # unique topics / total articles in recent window
     explore_ratio_history: list[dict]  # [{timestamp, ratio}]
+
+
+# --- Briefing ---
+class BriefingStory(BaseModel):
+    title: str
+    summary: str
+    cluster_id: int
+    category: str
+    source_count: int
+    coherence: float
+    is_read: bool = False
+
+
+class BriefingResponse(BaseModel):
+    stories: list[BriefingStory]
+    generated_at: datetime
+
+
+# --- Discover ---
+class DiscoverCardOut(BaseModel):
+    id: int
+    article_id: int
+    title: str
+    tension_line: str
+    facts: list[str]
+    sources: list[str]
+    topic_id: int
+    topic_name: str
+    coherence: float
+
+
+class SwipeRequest(BaseModel):
+    article_id: int
+    direction: str  # "right" | "left" | "up"

@@ -1,4 +1,5 @@
 import structlog
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,22 +8,28 @@ from sqlalchemy.orm import selectinload
 from app.database import async_session, get_db
 from app.models import (
     Article,
+    ArticleTopic,
     ClusterArticle,
     FeedbackType,
     Source,
     StoryCluster,
     Topic,
     UserFeedback,
+    UserPreference,
 )
 from app.schemas import (
     ArticleOut,
+    BriefingResponse,
+    BriefingStory,
     ClusterDetailOut,
     ClusterSourceCard,
+    DiscoverCardOut,
     FeedbackCreate,
     FeedbackOut,
     FeedResponse,
     HealthResponse,
     SourceOut,
+    SwipeRequest,
     TopicOut,
     TopicListResponse,
 )
@@ -206,3 +213,251 @@ async def create_feedback(
     )
 
     return FeedbackOut.model_validate(feedback)
+
+
+# ── Briefing ──────────────────────────────────────────────
+
+
+@router.get("/briefing", response_model=BriefingResponse)
+async def get_briefing(db: AsyncSession = Depends(get_db)):
+    """
+    Returns AI-generated daily briefing built from story clusters.
+    Groups top clusters by topic/category. MVP: generates from existing
+    clusters without GPT (uses cluster title + first article snippet).
+    """
+    # Get recent clusters with their articles + sources + topics
+    result = await db.execute(
+        select(StoryCluster)
+        .options(
+            selectinload(StoryCluster.articles)
+            .selectinload(ClusterArticle.article)
+            .selectinload(Article.source),
+            selectinload(StoryCluster.articles)
+            .selectinload(ClusterArticle.article)
+            .selectinload(Article.topics)
+            .selectinload(ArticleTopic.topic),
+        )
+        .order_by(StoryCluster.created_at.desc())
+        .limit(20)
+    )
+    clusters = result.scalars().all()
+
+    stories: list[BriefingStory] = []
+    for cluster in clusters:
+        # Count unique sources
+        source_names = set()
+        first_snippet = None
+        category = "General"
+        for ca in cluster.articles:
+            source_names.add(ca.article.source.name)
+            if first_snippet is None and ca.article.snippet:
+                first_snippet = ca.article.snippet
+            # Get category from first article's topic
+            if category == "General" and ca.article.topics:
+                for at in ca.article.topics:
+                    if at.topic:
+                        category = at.topic.name
+                        break
+
+        summary = cluster.summary or first_snippet or "No summary available."
+        # Truncate summary to 2 sentences
+        sentences = summary.split(". ")
+        if len(sentences) > 2:
+            summary = ". ".join(sentences[:2]) + "."
+
+        stories.append(
+            BriefingStory(
+                title=cluster.title,
+                summary=summary,
+                cluster_id=cluster.id,
+                category=category,
+                source_count=len(source_names),
+                coherence=0.85,  # placeholder until AI scoring
+                is_read=False,
+            )
+        )
+
+    # Take top 8 stories by source diversity
+    stories.sort(key=lambda s: s.source_count, reverse=True)
+    stories = stories[:8]
+
+    return BriefingResponse(
+        stories=stories,
+        generated_at=datetime.now(timezone.utc),
+    )
+
+
+# ── Discover ─────────────────────────────────────────────
+
+
+@router.get("/discover/deck", response_model=list[DiscoverCardOut])
+async def get_discover_deck(
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns a deck of 20-30 cards for the discover/swipe interface.
+    MVP: returns recent articles with cluster context.
+    """
+    result = await db.execute(
+        select(Article)
+        .options(
+            selectinload(Article.source),
+            selectinload(Article.topics).selectinload(ArticleTopic.topic),
+        )
+        .where(Article.snippet.isnot(None))
+        .order_by(func.random())
+        .limit(25)
+    )
+    articles = result.scalars().all()
+
+    cards: list[DiscoverCardOut] = []
+    for i, article in enumerate(articles):
+        # Get topic info
+        topic_id = 0
+        topic_name = "General"
+        if article.topics:
+            for at in article.topics:
+                if at.topic:
+                    topic_id = at.topic.id
+                    topic_name = at.topic.name
+                    break
+
+        # Build facts from snippet
+        snippet = article.snippet or ""
+        sentences = [s.strip() for s in snippet.split(". ") if s.strip()]
+        facts = sentences[:3] if sentences else ["No details available."]
+
+        cards.append(
+            DiscoverCardOut(
+                id=i + 1,
+                article_id=article.id,
+                title=article.title,
+                tension_line=article.title,  # MVP: title as tension line
+                facts=facts,
+                sources=[article.source.name],
+                topic_id=topic_id,
+                topic_name=topic_name,
+                coherence=0.82,  # placeholder
+            )
+        )
+
+    return cards
+
+
+@router.post("/discover/swipe", status_code=204)
+async def record_swipe(
+    body: SwipeRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Records a swipe action and adjusts user preferences.
+    Right = +0.1 weight, Left = -0.2 weight, Up = +0.3 weight.
+    """
+    # Map swipe direction to feedback type
+    feedback_map = {
+        "right": FeedbackType.interesting,
+        "left": FeedbackType.less,
+        "up": FeedbackType.save,
+    }
+    feedback_type = feedback_map.get(body.direction, FeedbackType.interesting)
+
+    # Record feedback
+    feedback = UserFeedback(
+        user_id=DEFAULT_USER_ID,
+        article_id=body.article_id,
+        feedback_type=feedback_type,
+    )
+    db.add(feedback)
+
+    # Adjust user preference for the article's topic
+    article_result = await db.execute(
+        select(Article)
+        .options(selectinload(Article.topics).selectinload(ArticleTopic.topic))
+        .where(Article.id == body.article_id)
+    )
+    article = article_result.scalar_one_or_none()
+
+    if article and article.topics:
+        weight_delta = {"right": 0.1, "left": -0.2, "up": 0.3}.get(
+            body.direction, 0
+        )
+        for at in article.topics:
+            if at.topic:
+                # Upsert preference
+                pref_result = await db.execute(
+                    select(UserPreference).where(
+                        UserPreference.user_id == DEFAULT_USER_ID,
+                        UserPreference.topic_id == at.topic_id,
+                    )
+                )
+                pref = pref_result.scalar_one_or_none()
+                if pref:
+                    pref.weight = max(0.0, pref.weight + weight_delta)
+                else:
+                    db.add(
+                        UserPreference(
+                            user_id=DEFAULT_USER_ID,
+                            topic_id=at.topic_id,
+                            weight=max(0.0, 1.0 + weight_delta),
+                        )
+                    )
+                break  # Only adjust primary topic
+
+    await db.commit()
+
+    logger.info(
+        "swipe_recorded",
+        article_id=body.article_id,
+        direction=body.direction,
+    )
+
+
+@router.get("/discover/topic/{topic_id}", response_model=list[DiscoverCardOut])
+async def get_topic_cards(
+    topic_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Returns 5 cards from a specific topic (triggered by swipe-up).
+    """
+    result = await db.execute(
+        select(Article)
+        .options(
+            selectinload(Article.source),
+            selectinload(Article.topics).selectinload(ArticleTopic.topic),
+        )
+        .join(Article.topics)
+        .where(ArticleTopic.topic_id == topic_id)
+        .where(Article.snippet.isnot(None))
+        .order_by(Article.published_at.desc().nullslast())
+        .limit(5)
+    )
+    articles = result.scalars().all()
+
+    cards: list[DiscoverCardOut] = []
+    for i, article in enumerate(articles):
+        topic_name = "General"
+        for at in article.topics:
+            if at.topic and at.topic_id == topic_id:
+                topic_name = at.topic.name
+                break
+
+        snippet = article.snippet or ""
+        sentences = [s.strip() for s in snippet.split(". ") if s.strip()]
+        facts = sentences[:3] if sentences else ["No details available."]
+
+        cards.append(
+            DiscoverCardOut(
+                id=1000 + i,
+                article_id=article.id,
+                title=article.title,
+                tension_line=article.title,
+                facts=facts,
+                sources=[article.source.name],
+                topic_id=topic_id,
+                topic_name=topic_name,
+                coherence=0.82,
+            )
+        )
+
+    return cards

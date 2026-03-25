@@ -113,6 +113,15 @@ news-app/
 - **Explore/exploit:** Feed is 70% exploit (user's topics) + 30% explore (new topics). Ratio adjusts 10-50% based on feedback.
 - **Graceful degradation:** If OpenAI is down, articles ingested without embeddings; UI shows snippet instead of AI summary.
 
+## Design System
+
+Always read `design-system.md` before making any visual or UI decisions.
+All font choices, colors, spacing, and aesthetic direction are defined there.
+Do not deviate without explicit user approval.
+In QA mode, flag any code that doesn't match design-system.md.
+
+Key tokens: dark bg `#0C0C0E`, accent amber `#F97316`, fonts Instrument Serif (display) + DM Sans (body) + JetBrains Mono (data).
+
 ## Build & Validation
 
 **IMPORTANT:** After every code change, validate the build succeeds.
