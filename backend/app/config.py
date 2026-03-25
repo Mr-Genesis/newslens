@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = ""
 
+    # Encryption (for storing API keys in DB)
+    encryption_key: str = ""
+
     # Fetch intervals (minutes)
     rss_fetch_interval_minutes: int = 10
     gdelt_fetch_interval_minutes: int = 15

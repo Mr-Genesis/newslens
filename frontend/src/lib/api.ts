@@ -185,3 +185,35 @@ export async function postFeedback(
     body: JSON.stringify({ article_id: articleId, feedback_type: type }),
   });
 }
+
+/* ── Settings ── */
+
+export interface UserSettings {
+  has_openai_key: boolean;
+  openai_key_verified: boolean;
+  openai_key_last4: string | null;
+  openai_key_verified_at: string | null;
+}
+
+export interface KeyTestResult {
+  success: boolean;
+  error: string | null;
+  models_available: number;
+}
+
+export async function getSettings(): Promise<UserSettings> {
+  return fetchJSON("/settings");
+}
+
+export async function updateSettings(data: {
+  openai_api_key: string | null;
+}): Promise<UserSettings> {
+  return fetchJSON("/settings", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function testApiKey(): Promise<KeyTestResult> {
+  return fetchJSON("/settings/test-key", { method: "POST" });
+}

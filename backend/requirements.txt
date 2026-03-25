@@ -21,6 +21,9 @@ openai==1.59.5
 # Scheduling
 apscheduler==3.10.4
 
+# Encryption
+cryptography>=42.0.0
+
 # Utilities
 pydantic==2.10.4
 pydantic-settings==2.7.1

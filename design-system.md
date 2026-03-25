@@ -412,6 +412,217 @@ returned → resting (snap back with spring)
 - **Lg:** `0 8px 24px rgba(0,0,0,0.5)` — active/dragging swipe card
 - **Glow:** `0 0 Npx var(--semantic-color)` — swipe edge glow (N = 2-6 based on distance)
 
+## Mobile Viewport Specs
+
+### Safe Areas
+- Use `viewport-fit=cover` in `<meta name="viewport">` to extend into notch/dynamic island area
+- Apply `env(safe-area-inset-top)` and `env(safe-area-inset-bottom)` for padding on affected edges
+- CSS pattern: `padding-top: calc(env(safe-area-inset-top, 0px) + 48px)` for navbar clearance
+- CSS pattern: `padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 64px)` for bottom safe area
+
+### Device Width Tiers
+| Device | Width | Adjustments |
+|--------|-------|-------------|
+| iPhone SE (3rd gen) | 320px | Hero 24px, category label 11px, card padding 12px, max 2 facts on discover |
+| iPhone 12 mini | 375px | Standard sizes per typography scale |
+| iPhone 14 | 390px | Standard (reference device) |
+| iPhone 14 Pro Max | 430px | Standard, slightly more breathing room |
+| Tablet (640-1024px) | 640px+ | 24px horizontal padding, max-width 640px centered |
+| Desktop (>1024px) | 1024px+ | Same as tablet, top nav replaces segment bar (future) |
+
+### Orientation
+- **Primary:** Portrait
+- **Landscape:** Card stack height → `min(360px, 60vh)` to prevent overflow. Swipe commit threshold → `40% * viewport width` (already percentage-based). NavBar remains sticky top.
+- **Lock:** No forced orientation lock — graceful adaptation
+
+### Input Detection
+```css
+@media (pointer: coarse) {
+  /* Touch devices: enforce 44px minimum on all interactive elements */
+  /* Swipe dead zone: 4px */
+}
+@media (pointer: fine) {
+  /* Mouse/trackpad: no dead zone, hover states enabled */
+  /* Swipe dead zone: 0px */
+}
+```
+
+### Scroll Behavior
+- **Briefing:** `scroll-snap-type: y proximity` on the scrollable container. Category section headers as snap points (`scroll-snap-align: start`). Momentum scrolling via `-webkit-overflow-scrolling: touch`.
+- **Discover:** No scroll — fixed card stack with gesture control
+- **Deep Dive:** Standard vertical scroll, no snap points. Smooth scroll for back-to-top.
+- **Settings:** Standard vertical scroll
+
+### Pull-to-Refresh (Briefing)
+- Threshold: 60px pull distance
+- Resistance curve: `Math.min(distance * 0.4, 80)` — rubber-band effect
+- Visual feedback: Accent-colored spinner appears at threshold
+- Release: Spinner animates while data refreshes, fades on completion (300ms)
+
+## Per-Screen Layout Specs
+
+### Briefing Screen (`/`)
+```
+┌─────────────────────────────┐
+│ safe-area-inset-top          │
+├─────────────────────────────┤
+│ NavBar (48px)                │
+│ ┌─ 3px progress bar ──────┐ │
+├─┴──────────────────────────┴─┤
+│ pt: 24px                     │
+│ ┌──────────────────────────┐ │
+│ │ CATEGORY LABEL (12px)    │ │
+│ │ ─────────────────────────│ │
+│ │ • Story title (17px)     │ │
+│ │   Summary (14px)         │ │
+│ │   src:N · coh:0.XX · 2h  │ │
+│ │ ─────── hairline ────────│ │
+│ │ • Story title (17px)     │ │
+│ │   Summary (14px)         │ │
+│ │   src:N · coh:0.XX · 5h  │ │
+│ └──────────────────────────┘ │
+│ mt: 24px                     │
+│ ┌──────────────────────────┐ │
+│ │ CATEGORY LABEL           │ │
+│ │ ...more stories...       │ │
+│ └──────────────────────────┘ │
+│ pb: safe-area-inset-bottom   │
+│     + 64px                   │
+└─────────────────────────────┘
+```
+- **Horizontal padding:** 16px (var(--space-md))
+- **Max width:** 640px centered
+- **Story separation:** 1px hairline + 32px vertical gap
+- **Category gap:** 24px top margin between sections
+- **Scroll snap:** Category headers snap to top on scroll proximity
+- **320px override:** Hero text 24px (from 28px), category label 11px (from 12px)
+- **Focus order:** Skip-to-content → NavBar → Category headers (h2) → Story cards (article elements)
+- **Screen reader:** Categories as `role="heading" aria-level="2"`, stories as `<article>` landmarks
+
+### Discover Screen (`/discover`)
+```
+┌─────────────────────────────┐
+│ safe-area-inset-top          │
+├─────────────────────────────┤
+│ NavBar (48px)                │
+├─────────────────────────────┤
+│ pt: 24px                     │
+│ ┌──────────────────────────┐ │
+│ │ ┌────────────────────┐   │ │
+│ │ │   [Topic Badge]    │   │ │
+│ │ │                    │   │ │
+│ │ │ Tension Line (22px)│   │ │
+│ │ │                    │   │ │
+│ │ │ • Fact 1 (14px)    │   │ │
+│ │ │ • Fact 2           │   │ │
+│ │ │ • Fact 3           │   │ │
+│ │ │ ────────────────── │   │ │
+│ │ │ src · coh:0.XX     │   │ │
+│ │ └────────────────────┘   │ │
+│ │  ┌──────────────────┐    │ │ ← 0.97 scale, 8px below
+│ │  └──────────────────┘    │ │
+│ │   ┌────────────────┐     │ │ ← 0.94 scale, 16px below
+│ │   └────────────────┘     │ │
+│ └──────────────────────────┘ │
+│ Deck counter: "3 of 25"     │
+│ pb: safe-area-inset-bottom   │
+└─────────────────────────────┘
+```
+- **Card stack container:** `height: min(380px, calc(100vh - 200px))` — prevents overflow on short viewports
+- **Card height:** `min(360px, calc(100vh - 240px))` — responsive to viewport
+- **Card padding:** 24px (p-6) standard, 16px on 320px screens
+- **Swipe thresholds:** `40% * viewport width` horizontal, `25% * card height` vertical (replace hardcoded 120px / -100px)
+- **320px override:** Tension line 20px (from 22px), max 2 facts (from 3), card padding 16px
+- **Reduced motion:** Instant card swap, no physics animation, no tilt/glow
+- **Accessibility:** `role="group" aria-label="Discover card deck"`, active card `aria-live="polite"`, keyboard arrows for navigation
+- **Stack peek:** 2nd card at 0.97 scale / 0.6 opacity / 8px translateY. 3rd card at 0.94 scale / 0.3 opacity / 16px translateY
+
+### Deep Dive Screen (`/story/[clusterId]`)
+```
+┌─────────────────────────────┐
+│ safe-area-inset-top          │
+├─────────────────────────────┤
+│ NavBar (48px)                │
+├─────────────────────────────┤
+│ ← Back (44px tap target)    │
+│                              │
+│ Story Title (28px hero)      │
+│ src:N · coh:0.XX             │
+│                              │
+│ ┌──────────────────────────┐ │
+│ │ AI SUMMARY (violet box)  │ │
+│ │ 2-3 sentence summary     │ │
+│ │ Disclaimer footer        │ │
+│ └──────────────────────────┘ │
+│                              │
+│ SOURCES  3 free · 1 paywall  │
+│ ┌──────────────────────────┐ │
+│ │ Reuters [FREE]           │ │
+│ │ Excerpt text...          │ │
+│ │ Read full article →      │ │
+│ ├──────────────────────────┤ │
+│ │ BBC News [FREE]          │ │
+│ │ Excerpt text...          │ │
+│ │ Read full article →      │ │
+│ ├──────────────────────────┤ │
+│ │ WSJ [PAYWALL] (50% op.)  │ │
+│ │ Excerpt text...          │ │
+│ │ Read full article →      │ │
+│ └──────────────────────────┘ │
+│ pb: safe-area-inset-bottom   │
+└─────────────────────────────┘
+```
+- **Back button:** `min-h-[44px]` tap target enforced (currently just text — needs fix)
+- **320px override:** AI summary box padding 12px (from 16px), source card text 12px (from 13px)
+- **Scroll:** Standard vertical, no snap. Smooth scroll enabled.
+- **Screen reader:** AI summary `role="complementary" aria-label="AI-generated summary"`, source list `role="list"`, each source `role="listitem"`
+- **Focus order:** Back button → Title → Confidence → AI summary → Source cards in DOM order
+
+### Settings Screen (`/settings`) — NEW
+```
+┌─────────────────────────────┐
+│ safe-area-inset-top          │
+├─────────────────────────────┤
+│ NavBar (48px)                │
+├─────────────────────────────┤
+│ pt: 24px                     │
+│                              │
+│ Settings (28px hero)         │
+│                              │
+│ ┌──────────────────────────┐ │
+│ │ OpenAI API Key            │ │
+│ │ (description text)        │ │
+│ │                           │ │
+│ │ ┌──────────────────── 👁┐ │ │
+│ │ │ ••••••••••••XXXX       │ │ │
+│ │ └────────────────────────┘ │ │
+│ │                           │ │
+│ │ [  Save Key  ] [Remove]   │ │
+│ │                           │ │
+│ │ [ Test Connection ]       │ │
+│ │                           │ │
+│ │ ● Connected (green)       │ │
+│ │   Verified 2h ago         │ │
+│ └──────────────────────────┘ │
+│                              │
+│ (encrypted, stored securely) │
+│                              │
+│ pb: safe-area-inset-bottom   │
+└─────────────────────────────┘
+```
+- **Max form width:** 480px within 640px content column
+- **Input field:** Full-width, 48px height, `--radius-md` corners, `--surface` background, `--border` border. Focus: 2px `--accent` outline offset 2px
+- **Show/hide toggle:** 44px eye icon button inside input field (right-aligned)
+- **Buttons:** Full-width primary (Save), secondary (Test), ghost (Remove). All 48px height, `--radius-md`
+- **Status indicator:** 8px dot + text. Green (--agree) = "Connected", Red (--dismiss) = error message, Muted (--text-ghost) = "Not tested"
+- **State machine:**
+  ```
+  idle (no key) → editing → saving → idle (key saved, show last4)
+  idle (has key) → editing (change) | removing → idle (no key)
+  idle (has key) → testing → test_success | test_error → idle
+  ```
+- **No 320px overrides needed** — single-column form adapts naturally
+
 ## Decisions Log
 | Date | Decision | Rationale |
 |------|----------|-----------|
@@ -421,3 +632,6 @@ returned → resting (snap back with spring)
 | 2026-03-26 | Visible confidence scoring | Builds trust with news-savvy users; teaches attention calibration; unique differentiator |
 | 2026-03-26 | High-inertia swipe physics | Cards feel weighty and deliberate, not playful — matches intelligence-brief aesthetic |
 | 2026-03-26 | 3-segment top nav instead of bottom tabs | Minimal chrome; saves vertical space on mobile; gestural navigation between screens |
+| 2026-03-26 | Mobile viewport specs added | Pixel-precise per-screen layouts, safe areas, device tiers, responsive card heights |
+| 2026-03-26 | Settings screen as utility page | Gear icon in NavBar (not a nav segment) — settings is utility, not primary workflow |
+| 2026-03-26 | Per-user encrypted API key storage | Fernet encryption in DB, env var fallback, forward-compatible with multi-user |

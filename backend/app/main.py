@@ -21,10 +21,20 @@ async def check_db() -> bool:
 
 
 async def init_db():
-    """Ensure pgvector extension exists and seed default user."""
+    """Create tables, ensure pgvector extension exists, and seed default user."""
+    from app.database import Base
+    import app.models  # noqa: F401 — ensure models are registered
+
+    # Create pgvector extension first (before table creation needs it)
+    async with engine.begin() as conn:
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+
+    # Create all tables
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    # Seed default user
     async with async_session() as session:
-        await session.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-        # Seed default user if not exists
         result = await session.execute(text("SELECT id FROM users LIMIT 1"))
         if result.scalar_one_or_none() is None:
             await session.execute(

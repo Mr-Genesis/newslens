@@ -16,6 +16,7 @@ from app.models import (
     Topic,
     UserFeedback,
     UserPreference,
+    UserSetting,
 )
 from app.schemas import (
     ArticleOut,
@@ -28,10 +29,13 @@ from app.schemas import (
     FeedbackOut,
     FeedResponse,
     HealthResponse,
+    KeyTestResult,
     SourceOut,
     SwipeRequest,
     TopicOut,
     TopicListResponse,
+    UserSettingsOut,
+    UserSettingsUpdate,
 )
 
 logger = structlog.get_logger()
@@ -47,8 +51,21 @@ async def health_check():
         async with async_session() as session:
             await session.execute(text("SELECT 1"))
             db_ok = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("health_check_db_failed", error=str(e))
+        # Fallback: try raw asyncpg connection
+        try:
+            import asyncpg
+            from app.config import settings
+
+            # Extract connection params from async URL
+            url = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+            conn = await asyncpg.connect(url)
+            await conn.fetchval("SELECT 1")
+            await conn.close()
+            db_ok = True
+        except Exception as e2:
+            logger.warning("health_check_fallback_failed", error=str(e2))
 
     return HealthResponse(
         status="ok" if db_ok else "degraded",
@@ -281,6 +298,49 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     stories.sort(key=lambda s: s.source_count, reverse=True)
     stories = stories[:8]
 
+    # Fallback: if no clusters, build briefing from recent articles
+    if not stories:
+        article_result = await db.execute(
+            select(Article)
+            .options(selectinload(Article.source))
+            .where(Article.snippet.isnot(None))
+            .order_by(Article.published_at.desc().nullslast())
+            .limit(8)
+        )
+        articles = article_result.scalars().all()
+
+        # Categorize by source type
+        source_categories = {
+            "BBC News": "World",
+            "Al Jazeera": "World",
+            "NPR News": "World",
+            "Reuters - World": "World",
+            "TechCrunch": "Tech",
+            "Ars Technica": "Tech",
+            "The Verge": "Tech",
+            "Hacker News": "Tech",
+            "Nature News": "Science",
+            "Wall Street Journal": "Business",
+        }
+
+        for a in articles:
+            snippet = a.snippet or ""
+            sentences = snippet.split(". ")
+            summary = ". ".join(sentences[:2]) + "." if len(sentences) > 1 else snippet
+            category = source_categories.get(a.source.name, "General")
+
+            stories.append(
+                BriefingStory(
+                    title=a.title,
+                    summary=summary,
+                    cluster_id=a.id,  # use article ID as fallback
+                    category=category,
+                    source_count=1,
+                    coherence=0.70,
+                    is_read=False,
+                )
+            )
+
     return BriefingResponse(
         stories=stories,
         generated_at=datetime.now(timezone.utc),
@@ -461,3 +521,123 @@ async def get_topic_cards(
         )
 
     return cards
+
+
+# ── Settings ─────────────────────────────────────────────
+
+
+@router.get("/settings", response_model=UserSettingsOut)
+async def get_settings(db: AsyncSession = Depends(get_db)):
+    """Return current user settings (API key masked)."""
+    result = await db.execute(
+        select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID)
+    )
+    setting = result.scalar_one_or_none()
+
+    if not setting or not setting.openai_api_key_encrypted:
+        return UserSettingsOut(has_openai_key=False)
+
+    from app.services.encryption import decrypt_value
+
+    raw_key = decrypt_value(setting.openai_api_key_encrypted)
+    last4 = raw_key[-4:] if len(raw_key) >= 4 else "****"
+
+    return UserSettingsOut(
+        has_openai_key=True,
+        openai_key_verified=setting.openai_key_verified,
+        openai_key_last4=last4,
+        openai_key_verified_at=setting.openai_key_verified_at,
+    )
+
+
+@router.put("/settings", response_model=UserSettingsOut)
+async def update_settings(
+    body: UserSettingsUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save or remove the OpenAI API key."""
+    result = await db.execute(
+        select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID)
+    )
+    setting = result.scalar_one_or_none()
+
+    if not setting:
+        setting = UserSetting(user_id=DEFAULT_USER_ID)
+        db.add(setting)
+
+    if body.openai_api_key:
+        from app.services.encryption import encrypt_value
+
+        setting.openai_api_key_encrypted = encrypt_value(body.openai_api_key)
+        setting.openai_key_verified = False
+        setting.openai_key_verified_at = None
+        logger.info("settings_api_key_saved")
+    else:
+        setting.openai_api_key_encrypted = None
+        setting.openai_key_verified = False
+        setting.openai_key_verified_at = None
+        logger.info("settings_api_key_removed")
+
+    await db.commit()
+    await db.refresh(setting)
+
+    if not setting.openai_api_key_encrypted:
+        return UserSettingsOut(has_openai_key=False)
+
+    from app.services.encryption import decrypt_value
+
+    raw_key = decrypt_value(setting.openai_api_key_encrypted)
+    last4 = raw_key[-4:] if len(raw_key) >= 4 else "****"
+
+    return UserSettingsOut(
+        has_openai_key=True,
+        openai_key_verified=setting.openai_key_verified,
+        openai_key_last4=last4,
+    )
+
+
+@router.post("/settings/test-key", response_model=KeyTestResult)
+async def test_api_key(db: AsyncSession = Depends(get_db)):
+    """Test the saved OpenAI API key by listing models."""
+    result = await db.execute(
+        select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID)
+    )
+    setting = result.scalar_one_or_none()
+
+    if not setting or not setting.openai_api_key_encrypted:
+        return KeyTestResult(success=False, error="No API key saved")
+
+    from app.services.encryption import decrypt_value
+
+    raw_key = decrypt_value(setting.openai_api_key_encrypted)
+
+    try:
+        from openai import AsyncOpenAI
+
+        client = AsyncOpenAI(api_key=raw_key)
+        models = await client.models.list()
+        model_count = len(models.data)
+
+        # Mark as verified
+        setting.openai_key_verified = True
+        setting.openai_key_verified_at = datetime.now(timezone.utc)
+        await db.commit()
+
+        logger.info("settings_key_test_success", models=model_count)
+        return KeyTestResult(success=True, models_available=model_count)
+
+    except Exception as e:
+        setting.openai_key_verified = False
+        setting.openai_key_verified_at = None
+        await db.commit()
+
+        error_msg = str(e)
+        if "authentication" in error_msg.lower() or "api key" in error_msg.lower():
+            error_msg = "Invalid API key"
+        elif "connection" in error_msg.lower():
+            error_msg = "Could not connect to OpenAI"
+        else:
+            error_msg = f"Test failed: {error_msg[:100]}"
+
+        logger.warning("settings_key_test_failed", error=error_msg)
+        return KeyTestResult(success=False, error=error_msg)

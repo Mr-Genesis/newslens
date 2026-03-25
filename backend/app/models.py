@@ -51,6 +51,9 @@ class User(Base):
 
     feedback: Mapped[list["UserFeedback"]] = relationship(back_populates="user")
     preferences: Mapped[list["UserPreference"]] = relationship(back_populates="user")
+    settings: Mapped["UserSetting | None"] = relationship(
+        back_populates="user", uselist=False
+    )
 
 
 class Source(Base):
@@ -191,3 +194,22 @@ class UserPreference(Base):
 
     user: Mapped["User"] = relationship(back_populates="preferences")
     topic: Mapped["Topic"] = relationship()
+
+
+class UserSetting(Base):
+    __tablename__ = "user_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, unique=True
+    )
+    openai_api_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    openai_key_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    openai_key_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    user: Mapped["User"] = relationship(back_populates="settings")

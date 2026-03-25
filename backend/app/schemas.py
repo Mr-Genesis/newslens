@@ -148,3 +148,21 @@ class DiscoverCardOut(BaseModel):
 class SwipeRequest(BaseModel):
     article_id: int
     direction: str  # "right" | "left" | "up"
+
+
+# --- Settings ---
+class UserSettingsOut(BaseModel):
+    has_openai_key: bool
+    openai_key_verified: bool = False
+    openai_key_last4: str | None = None
+    openai_key_verified_at: datetime | None = None
+
+
+class UserSettingsUpdate(BaseModel):
+    openai_api_key: str | None = None  # raw key to save, or None to remove
+
+
+class KeyTestResult(BaseModel):
+    success: bool
+    error: str | None = None
+    models_available: int = 0

@@ -27,6 +27,12 @@ export const metadata: Metadata = {
     "AI-powered news intelligence — daily briefings, swipable discovery, multi-source deep dives",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover" as const,
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{

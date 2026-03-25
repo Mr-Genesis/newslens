@@ -16,15 +16,70 @@ from app.models import Article, EmbeddingStatus
 logger = structlog.get_logger()
 
 
+_cached_user_key: str | None = None
+_cached_user_key_ts: float = 0
+_USER_KEY_TTL = 300  # 5 minutes cache
+
+
+async def _get_user_api_key() -> str | None:
+    """Check DB for per-user OpenAI key. Cached for 5 minutes."""
+    import time
+
+    global _cached_user_key, _cached_user_key_ts
+
+    now = time.time()
+    if _cached_user_key is not None and (now - _cached_user_key_ts) < _USER_KEY_TTL:
+        return _cached_user_key
+
+    try:
+        from sqlalchemy import select as sa_select
+        from app.models import UserSetting
+
+        async with async_session() as session:
+            result = await session.execute(
+                sa_select(UserSetting).where(
+                    UserSetting.user_id == 1,
+                    UserSetting.openai_api_key_encrypted.isnot(None),
+                    UserSetting.openai_key_verified.is_(True),
+                )
+            )
+            setting = result.scalar_one_or_none()
+
+            if setting and setting.openai_api_key_encrypted:
+                from app.services.encryption import decrypt_value
+
+                _cached_user_key = decrypt_value(setting.openai_api_key_encrypted)
+                _cached_user_key_ts = now
+                return _cached_user_key
+    except Exception as e:
+        logger.debug("user_key_lookup_failed", error=str(e))
+
+    _cached_user_key = None
+    _cached_user_key_ts = now
+    return None
+
+
 def _get_client() -> AsyncOpenAI | None:
+    """Synchronous client creation — uses env var key only.
+    For per-user key support, use _get_client_async()."""
     if not settings.openai_api_key:
         return None
     return AsyncOpenAI(api_key=settings.openai_api_key)
 
 
+async def _get_client_async() -> AsyncOpenAI | None:
+    """Get OpenAI client: per-user DB key first, env var fallback."""
+    user_key = await _get_user_api_key()
+    if user_key:
+        return AsyncOpenAI(api_key=user_key)
+    if settings.openai_api_key:
+        return AsyncOpenAI(api_key=settings.openai_api_key)
+    return None
+
+
 async def generate_embedding(text: str) -> list[float] | None:
     """Generate embedding for a text string. Returns None on failure."""
-    client = _get_client()
+    client = await _get_client_async()
     if not client:
         logger.warning("openai_no_api_key")
         return None
@@ -77,7 +132,7 @@ async def embed_article(article_id: int):
 
 async def backfill_embeddings():
     """Backfill embeddings for articles with pending/failed status. Called by APScheduler."""
-    client = _get_client()
+    client = await _get_client_async()
     if not client:
         return
 

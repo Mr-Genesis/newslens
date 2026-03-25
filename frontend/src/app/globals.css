@@ -265,6 +265,54 @@ body {
   }
 }
 
+/* ── Safe Area & Mobile Viewport ── */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --navbar-height: 48px;
+  --page-top: calc(var(--safe-top) + var(--navbar-height));
+  --page-bottom: calc(var(--safe-bottom) + var(--space-3xl));
+}
+
+/* ── Settings Component Tokens ── */
+:root {
+  --settings-input-bg: var(--surface);
+  --settings-input-border: var(--border);
+  --settings-input-focus: var(--accent);
+  --settings-btn-primary-bg: var(--accent);
+  --settings-btn-primary-text: var(--gray-950);
+  --settings-btn-secondary-bg: var(--surface-raised);
+  --settings-btn-secondary-text: var(--text-secondary);
+  --settings-status-connected: var(--agree);
+  --settings-status-error: var(--dismiss);
+  --settings-status-untested: var(--text-ghost);
+}
+
+/* ── 320px Small Device Overrides ── */
+@media (max-width: 320px) {
+  .text-hero { font-size: 24px; }
+  .text-title { font-size: 20px; }
+  .text-category { font-size: 11px; }
+}
+
+/* ── Touch Target Enforcement ── */
+@media (pointer: coarse) {
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* ── Scroll Snap (Briefing) ── */
+.scroll-snap-container {
+  scroll-snap-type: y proximity;
+  -webkit-overflow-scrolling: touch;
+}
+
+.scroll-snap-section {
+  scroll-snap-align: start;
+}
+
 /* ── Scrollbar (dark) ── */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
