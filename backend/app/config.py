@@ -3,8 +3,17 @@ from pydantic_settings import BaseSettings
 
 def _fix_db_url(url: str, async_driver: bool = True) -> str:
     """Normalize DATABASE_URL for SQLAlchemy.
-    Render/Fly provide postgres:// or postgresql://, we need postgresql+asyncpg://.
+    Render/Fly/Neon provide postgres:// or postgresql://, we need postgresql+asyncpg://.
+    Also strips params unsupported by asyncpg (e.g. channel_binding from Neon).
     """
+    # Strip unsupported query params for asyncpg
+    from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+    params.pop("channel_binding", None)
+    clean_query = urlencode(params, doseq=True)
+    url = urlunparse(parsed._replace(query=clean_query))
+
     if async_driver:
         for prefix in ("postgres://", "postgresql://"):
             if url.startswith(prefix):
