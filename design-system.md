@@ -1,5 +1,7 @@
 # Design System — NewsLens
 
+> **Implementation:** See `frontend/src/app/globals.css` for the CSS token implementation of this spec.
+
 ## Product Context
 - **What this is:** AI-powered news intelligence platform with daily briefings, swipable discovery, and multi-source deep dives
 - **Who it's for:** News-savvy readers who want breadth not bubbles, multi-perspective views, and free-first source sorting
