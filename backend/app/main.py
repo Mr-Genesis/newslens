@@ -41,6 +41,53 @@ async def init_db():
                 text("INSERT INTO users (id) VALUES (1)")
             )
         await session.commit()
+
+    # Seed default topics
+    async with async_session() as session:
+        result = await session.execute(text("SELECT id FROM topics LIMIT 1"))
+        if result.scalar_one_or_none() is None:
+            # Insert parent topics first
+            parent_topics = [
+                "World", "Business", "Technology", "Politics",
+                "Science", "Sports", "Health", "Entertainment",
+            ]
+            for name in parent_topics:
+                await session.execute(
+                    text("INSERT INTO topics (name) VALUES (:name)"),
+                    {"name": name},
+                )
+            await session.flush()
+
+            # Get parent IDs for hierarchy
+            world_row = await session.execute(
+                text("SELECT id FROM topics WHERE name = 'World'")
+            )
+            world_id = world_row.scalar_one()
+            biz_row = await session.execute(
+                text("SELECT id FROM topics WHERE name = 'Business'")
+            )
+            biz_id = biz_row.scalar_one()
+
+            # Insert child topics with parent references
+            child_topics = [
+                ("India", world_id),
+                ("Europe", world_id),
+                ("Russia", world_id),
+                ("Geo-Politics", world_id),
+                ("Markets", biz_id),
+                ("Start-up", biz_id),
+            ]
+            for name, parent_id in child_topics:
+                await session.execute(
+                    text(
+                        "INSERT INTO topics (name, parent_topic_id) "
+                        "VALUES (:name, :parent_id)"
+                    ),
+                    {"name": name, "parent_id": parent_id},
+                )
+            await session.commit()
+            logger.info("topics_seeded", count=len(parent_topics) + len(child_topics))
+
     logger.info("database_initialized")
 
 

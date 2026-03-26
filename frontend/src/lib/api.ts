@@ -217,3 +217,40 @@ export async function updateSettings(data: {
 export async function testApiKey(): Promise<KeyTestResult> {
   return fetchJSON("/settings/test-key", { method: "POST" });
 }
+
+/* ── Saved ── */
+
+export interface SavedArticle {
+  article_id: number;
+  title: string;
+  source_name: string;
+  snippet: string | null;
+  url: string;
+  cluster_id: number | null;
+  saved_at: string;
+}
+
+export interface SavedListResponse {
+  articles: SavedArticle[];
+  count: number;
+}
+
+export async function getSavedArticles(): Promise<SavedListResponse> {
+  return fetchJSON("/saved");
+}
+
+export async function unsaveArticle(articleId: number): Promise<void> {
+  await fetchJSON(`/saved/${articleId}`, { method: "DELETE" });
+}
+
+/* ── Stats ── */
+
+export interface StatsResponse {
+  articles_read: number;
+  stories_saved: number;
+  topics_explored: number;
+}
+
+export async function getStats(): Promise<StatsResponse> {
+  return fetchJSON("/stats");
+}

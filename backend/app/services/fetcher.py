@@ -9,10 +9,36 @@ from email.utils import parsedate_to_datetime
 from sqlalchemy import select, text
 
 from app.database import async_session
-from app.models import Article, Source
+from app.models import Article, ArticleTopic, Source, Topic
 from app.services.dedup import is_duplicate
 
 logger = structlog.get_logger()
+
+
+async def assign_topics(session, article: Article):
+    """Assign topics to an article based on keyword matching in title/snippet."""
+    text_to_match = (article.title or "").lower()
+    if article.snippet:
+        text_to_match += " " + article.snippet.lower()
+
+    result = await session.execute(select(Topic))
+    topics = result.scalars().all()
+
+    for topic in topics:
+        keyword = topic.name.lower()
+        # Match whole-word-ish: check if keyword appears in text
+        if keyword in text_to_match:
+            existing = await session.execute(
+                select(ArticleTopic).where(
+                    ArticleTopic.article_id == article.id,
+                    ArticleTopic.topic_id == topic.id,
+                )
+            )
+            if existing.scalar_one_or_none() is None:
+                session.add(
+                    ArticleTopic(article_id=article.id, topic_id=topic.id)
+                )
+
 
 # Starter RSS feeds
 STARTER_FEEDS = [
@@ -135,6 +161,17 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
             new_count += 1
 
         if new_count > 0:
+            await session.commit()
+
+            # Assign topics to newly added articles
+            result = await session.execute(
+                select(Article)
+                .where(Article.source_id == source.id)
+                .order_by(Article.id.desc())
+                .limit(new_count)
+            )
+            for art in result.scalars().all():
+                await assign_topics(session, art)
             await session.commit()
 
     return new_count

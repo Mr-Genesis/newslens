@@ -166,3 +166,28 @@ class KeyTestResult(BaseModel):
     success: bool
     error: str | None = None
     models_available: int = 0
+
+
+# --- Saved ---
+class SavedArticleOut(BaseModel):
+    article_id: int
+    title: str
+    source_name: str
+    snippet: str | None
+    url: str
+    cluster_id: int | None
+    saved_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class SavedListResponse(BaseModel):
+    articles: list[SavedArticleOut]
+    count: int
+
+
+# --- Stats ---
+class StatsResponse(BaseModel):
+    articles_read: int
+    stories_saved: int
+    topics_explored: int

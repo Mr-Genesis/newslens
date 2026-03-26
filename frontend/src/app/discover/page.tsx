@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { NavBar } from "@/components/layout/NavBar";
 import { DiscoverCard } from "@/components/DiscoverCard";
+import { Button } from "@/components/ui/Button";
 import { DiscoverCardSkeleton } from "@/components/ui/Skeleton";
 import {
   getDiscoverDeck,
@@ -19,6 +19,7 @@ const PRE_FETCH_THRESHOLD = 5;
 export default function DiscoverPage() {
   const [state, setState] = useState<PageState>("loading");
   const [deck, setDeck] = useState<DiscoverCardType[]>([]);
+  const [totalSwiped, setTotalSwiped] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [isFetching, setIsFetching] = useState(false);
 
@@ -34,6 +35,7 @@ export default function DiscoverPage() {
       }
 
       setDeck(cards);
+      setTotalSwiped(0);
       setState("swiping");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load deck");
@@ -60,9 +62,7 @@ export default function DiscoverPage() {
             setDeck((prev) => [...prev, ...newCards]);
           }
         })
-        .catch(() => {
-          // Silent failure on pre-fetch
-        })
+        .catch(() => {})
         .finally(() => setIsFetching(false));
     }
   }, [deck.length, isFetching, state]);
@@ -72,14 +72,12 @@ export default function DiscoverPage() {
       const card = deck[0];
       if (!card) return;
 
-      // Optimistic: remove card from deck
       setDeck((prev) => prev.slice(1));
+      setTotalSwiped((prev) => prev + 1);
 
-      // Record swipe (fire and forget)
       recordSwipe(card.article_id, direction).catch(() => {});
 
-      // Swipe up: insert topic cards at front
-      if (direction === "up") {
+      if (direction === "up" && card.topic_id > 0) {
         try {
           const topicCards = await getTopicCards(card.topic_id);
           if (topicCards && topicCards.length > 0) {
@@ -90,7 +88,17 @@ export default function DiscoverPage() {
         }
       }
 
-      // Check if deck exhausted
+      if (direction === "right" && card.topic_id > 0) {
+        try {
+          const topicCards = await getTopicCards(card.topic_id);
+          if (topicCards && topicCards.length > 0) {
+            setDeck((prev) => [...prev, ...topicCards]);
+          }
+        } catch {
+          // Silent failure
+        }
+      }
+
       if (deck.length <= 1) {
         setState("empty");
       }
@@ -102,7 +110,6 @@ export default function DiscoverPage() {
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (state !== "swiping" || deck.length === 0) return;
-
       switch (e.key) {
         case "ArrowRight":
           handleSwipe("right");
@@ -115,71 +122,75 @@ export default function DiscoverPage() {
           break;
       }
     }
-
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [state, deck.length, handleSwipe]);
 
-  // Visible cards (top 3)
   const visibleCards = deck.slice(0, 3);
+  const showAffordance = totalSwiped < 3;
 
   return (
-    <>
-      <NavBar />
-      <main className="flex-1 mx-auto max-w-[640px] w-full px-[var(--space-md)] pb-[var(--space-3xl)]">
-        <div className="pt-[var(--space-lg)] pb-[var(--space-sm)]">
-          <h1 className="text-hero text-[var(--text-primary)]">Discover</h1>
-          <p className="text-mono text-[var(--text-ghost)] mt-1">
-            Swipe right = more like this &middot; left = less &middot; up = deep dive
-          </p>
+    <div className="mx-auto max-w-[640px] w-full px-[var(--space-md)]">
+      {/* Loading */}
+      {state === "loading" && (
+        <div className="pt-6">
+          <DiscoverCardSkeleton />
         </div>
+      )}
 
-        {/* Loading */}
-        {state === "loading" && (
-          <div className="mt-[var(--space-lg)]">
-            <DiscoverCardSkeleton />
+      {/* Error */}
+      {state === "error" && (
+        <div className="flex flex-col items-center justify-center pt-[var(--space-3xl)] text-center">
+          <div className="w-12 h-12 rounded-full bg-[var(--dismiss-muted)] flex items-center justify-center mb-4">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--dismiss)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" />
+            </svg>
           </div>
-        )}
+          <p className="text-heading text-[var(--text-primary)]">
+            Unable to load stories
+          </p>
+          {error && <p className="text-mono text-[var(--dismiss)] mt-2">{error}</p>}
+          <Button variant="secondary" onClick={fetchDeck} className="mt-4">
+            Try again
+          </Button>
+        </div>
+      )}
 
-        {/* Error */}
-        {state === "error" && (
-          <div className="flex flex-col items-center justify-center pt-[var(--space-3xl)] text-center">
-            <p className="text-body text-[var(--text-secondary)]">
-              Couldn&apos;t load discover deck
-            </p>
-            {error && (
-              <p className="text-mono text-[var(--dismiss)] mt-2">{error}</p>
-            )}
-            <button
-              onClick={fetchDeck}
-              className="mt-4 px-4 py-2 rounded-[var(--radius-sm)] bg-[var(--surface-raised)] text-small text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors"
-            >
-              Retry
-            </button>
-          </div>
-        )}
+      {/* Empty */}
+      {state === "empty" && (
+        <div className="flex flex-col items-center justify-center pt-[var(--space-3xl)] text-center">
+          <motion.div
+            animate={{ rotate: [0, 360] }}
+            transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
+            className="w-12 h-12 text-[var(--text-ghost)] mb-4"
+          >
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76" />
+            </svg>
+          </motion.div>
+          <p className="text-heading text-[var(--text-primary)]">
+            You&apos;re all caught up
+          </p>
+          <p className="text-small text-[var(--text-muted)] mt-2">
+            Come back in an hour for fresh stories
+          </p>
+          <Button variant="secondary" onClick={fetchDeck} className="mt-4">
+            Load more stories
+          </Button>
+        </div>
+      )}
 
-        {/* Empty */}
-        {state === "empty" && (
-          <div className="flex flex-col items-center justify-center pt-[var(--space-3xl)] text-center">
-            <p className="text-body text-[var(--text-secondary)]">
-              You&apos;re all caught up
-            </p>
-            <p className="text-small text-[var(--text-ghost)] mt-2">
-              No more stories to discover right now.
-            </p>
-            <button
-              onClick={fetchDeck}
-              className="mt-4 px-4 py-2 rounded-[var(--radius-sm)] bg-[var(--surface-raised)] text-small text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] transition-colors"
-            >
-              Refresh deck
-            </button>
-          </div>
-        )}
-
-        {/* Swiping: card stack */}
-        {state === "swiping" && (
-          <div className="relative mt-[var(--space-lg)] h-[380px]">
+      {/* Swiping: card stack */}
+      {state === "swiping" && (
+        <div className="flex flex-col items-center pt-2">
+          {/* Card stack */}
+          <div
+            className="relative w-full"
+            style={{ height: "min(360px, calc(100dvh - 240px))" }}
+            role="group"
+            aria-label="Discover card deck"
+          >
             <AnimatePresence>
               {visibleCards.map((card, index) => (
                 <DiscoverCard
@@ -191,16 +202,63 @@ export default function DiscoverPage() {
                 />
               ))}
             </AnimatePresence>
-
-            {/* Deck counter */}
-            <div className="absolute bottom-[-32px] left-0 right-0 text-center">
-              <span className="text-mono text-[var(--text-ghost)]">
-                {deck.length} cards remaining
-              </span>
-            </div>
           </div>
-        )}
-      </main>
-    </>
+
+          {/* Progress bar */}
+          <div className="w-full max-w-[180px] mt-3">
+            <div className="h-[2px] bg-[var(--surface-raised)] rounded-full overflow-hidden">
+              <motion.div
+                className="h-full bg-[var(--accent)] rounded-full"
+                initial={{ width: "100%" }}
+                animate={{
+                  width: `${Math.max(5, (deck.length / (deck.length + totalSwiped)) * 100)}%`,
+                }}
+                transition={{ duration: 0.3 }}
+              />
+            </div>
+            <p className="text-mono text-[var(--text-ghost)] text-center mt-2">
+              {deck.length} stories left
+            </p>
+          </div>
+
+          {/* Swipe affordance hints — fade after 3 swipes */}
+          <AnimatePresence>
+            {showAffordance && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="flex items-center justify-center gap-5 mt-2"
+              >
+                <div className="flex flex-col items-center gap-1">
+                  <div className="w-8 h-8 rounded-full bg-[var(--dismiss-muted)] flex items-center justify-center">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dismiss)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </div>
+                  <span className="text-[10px] text-[var(--text-ghost)]">Not interested</span>
+                </div>
+                <div className="flex flex-col items-center gap-1">
+                  <div className="w-8 h-8 rounded-full bg-[var(--drill-muted)] flex items-center justify-center">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--drill)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" />
+                    </svg>
+                  </div>
+                  <span className="text-[10px] text-[var(--text-ghost)]">Deep dive</span>
+                </div>
+                <div className="flex flex-col items-center gap-1">
+                  <div className="w-8 h-8 rounded-full bg-[var(--agree-muted)] flex items-center justify-center">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--agree)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  </div>
+                  <span className="text-[10px] text-[var(--text-ghost)]">More like this</span>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      )}
+    </div>
   );
 }
