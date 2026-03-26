@@ -1,11 +1,17 @@
 import type { Metadata } from "next";
-import { Instrument_Serif, DM_Sans, JetBrains_Mono } from "next/font/google";
+import { Fraunces, DM_Sans, JetBrains_Mono } from "next/font/google";
+import { NavBar } from "@/components/layout/NavBar";
+import { BottomTabBar } from "@/components/layout/BottomTabBar";
+import { ThemeProvider } from "@/components/ThemeProvider";
 import "./globals.css";
 
-const instrumentSerif = Instrument_Serif({
-  variable: "--font-instrument-serif",
+// Inline script to prevent flash of wrong theme (runs before React hydration)
+const themeScript = `(function(){try{var t=localStorage.getItem("newslens-theme");if(t==="light")document.documentElement.classList.add("light");else if(t==="auto"&&window.matchMedia("(prefers-color-scheme: light)").matches)document.documentElement.classList.add("light")}catch(e){}})();`;
+
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
   subsets: ["latin"],
-  weight: "400",
+  weight: ["400", "500", "600", "700"],
   style: ["normal", "italic"],
 });
 
@@ -30,6 +36,8 @@ export const metadata: Metadata = {
 export const viewport = {
   width: "device-width",
   initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
   viewportFit: "cover" as const,
 };
 
@@ -41,9 +49,21 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${instrumentSerif.variable} ${dmSans.variable} ${jetbrainsMono.variable} h-full antialiased`}
+      className={`${fraunces.variable} ${dmSans.variable} ${jetbrainsMono.variable} antialiased`}
+      suppressHydrationWarning
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body className="min-h-[100dvh] flex flex-col overflow-x-hidden">
+        <ThemeProvider>
+          <NavBar />
+          <main className="flex-1 pt-[var(--page-top)] pb-[var(--page-bottom)]">
+            {children}
+          </main>
+          <BottomTabBar />
+        </ThemeProvider>
+      </body>
     </html>
   );
 }

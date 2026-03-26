@@ -30,7 +30,10 @@ from app.schemas import (
     FeedResponse,
     HealthResponse,
     KeyTestResult,
+    SavedArticleOut,
+    SavedListResponse,
     SourceOut,
+    StatsResponse,
     SwipeRequest,
     TopicOut,
     TopicListResponse,
@@ -641,3 +644,111 @@ async def test_api_key(db: AsyncSession = Depends(get_db)):
 
         logger.warning("settings_key_test_failed", error=error_msg)
         return KeyTestResult(success=False, error=error_msg)
+
+
+# ── Saved ──────────────────────────────────────────────
+
+
+@router.get("/saved", response_model=SavedListResponse)
+async def get_saved(db: AsyncSession = Depends(get_db)):
+    """Return articles saved by the user."""
+    result = await db.execute(
+        select(UserFeedback)
+        .where(
+            UserFeedback.user_id == DEFAULT_USER_ID,
+            UserFeedback.feedback_type == FeedbackType.save,
+        )
+        .order_by(UserFeedback.created_at.desc())
+    )
+    feedbacks = result.scalars().all()
+
+    articles = []
+    for fb in feedbacks:
+        art_result = await db.execute(
+            select(Article)
+            .options(selectinload(Article.source))
+            .where(Article.id == fb.article_id)
+        )
+        article = art_result.scalar_one_or_none()
+        if not article:
+            continue
+
+        # Find cluster_id if article is in a cluster
+        cluster_result = await db.execute(
+            select(ClusterArticle.cluster_id)
+            .where(ClusterArticle.article_id == article.id)
+            .limit(1)
+        )
+        cluster_id = cluster_result.scalar_one_or_none()
+
+        articles.append(
+            SavedArticleOut(
+                article_id=article.id,
+                title=article.title,
+                source_name=article.source.name,
+                snippet=article.snippet,
+                url=article.url,
+                cluster_id=cluster_id,
+                saved_at=fb.created_at,
+            )
+        )
+
+    return SavedListResponse(articles=articles, count=len(articles))
+
+
+@router.delete("/saved/{article_id}", status_code=204)
+async def unsave_article(
+    article_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove saved article by deleting the save feedback."""
+    result = await db.execute(
+        select(UserFeedback).where(
+            UserFeedback.user_id == DEFAULT_USER_ID,
+            UserFeedback.article_id == article_id,
+            UserFeedback.feedback_type == FeedbackType.save,
+        )
+    )
+    feedback = result.scalar_one_or_none()
+    if feedback:
+        await db.delete(feedback)
+        await db.commit()
+        logger.info("article_unsaved", article_id=article_id)
+
+
+# ── Stats ──────────────────────────────────────────────
+
+
+@router.get("/stats", response_model=StatsResponse)
+async def get_stats(db: AsyncSession = Depends(get_db)):
+    """Return reading stats for the user."""
+    # Articles read = any feedback given
+    read_result = await db.execute(
+        select(func.count(func.distinct(UserFeedback.article_id))).where(
+            UserFeedback.user_id == DEFAULT_USER_ID,
+        )
+    )
+    articles_read = read_result.scalar_one() or 0
+
+    # Stories saved
+    saved_result = await db.execute(
+        select(func.count()).where(
+            UserFeedback.user_id == DEFAULT_USER_ID,
+            UserFeedback.feedback_type == FeedbackType.save,
+        )
+    )
+    stories_saved = saved_result.scalar_one() or 0
+
+    # Topics explored = distinct topics from articles the user interacted with
+    topics_result = await db.execute(
+        select(func.count(func.distinct(ArticleTopic.topic_id)))
+        .join(UserFeedback, UserFeedback.article_id == ArticleTopic.article_id)
+        .where(UserFeedback.user_id == DEFAULT_USER_ID)
+    )
+    topics_explored = topics_result.scalar_one() or 0
+
+    return StatsResponse(
+        articles_read=articles_read,
+        stories_saved=stories_saved,
+        topics_explored=topics_explored,
+    )

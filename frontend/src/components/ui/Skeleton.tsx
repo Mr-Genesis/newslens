@@ -11,7 +11,7 @@ export function Skeleton({ className }: SkeletonProps) {
 /** Skeleton matching a briefing story card */
 export function StoryCardSkeleton() {
   return (
-    <div className="py-[var(--space-xl)] space-y-3">
+    <div className="py-[var(--space-lg)] space-y-3">
       <Skeleton className="h-5 w-3/4" />
       <Skeleton className="h-4 w-full" />
       <Skeleton className="h-4 w-5/6" />
@@ -55,7 +55,7 @@ export function DeepDiveSkeleton() {
 /** Skeleton matching a discover card */
 export function DiscoverCardSkeleton() {
   return (
-    <div className="rounded-[var(--radius-md)] bg-[var(--surface-raised)] p-6 space-y-4 h-[360px]">
+    <div className="rounded-[var(--radius-md)] bg-[var(--surface-raised)] p-4 space-y-3 h-[320px]">
       <div className="flex justify-end">
         <Skeleton className="h-5 w-16" />
       </div>

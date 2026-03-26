@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ═══════════════════════════════════════════════════
-   NewsLens Design System — "The Intelligence Brief"
+   NewsLens Design System v2 — UX Redesign
    ═══════════════════════════════════════════════════ */
 
 /* ── Tier 1: Global Tokens (raw palette) ── */
@@ -26,6 +26,8 @@
   --red-500: #EF4444;
   --violet-400: #A78BFA;
   --yellow-400: #FACC15;
+  --pink-400: #F472B6;
+  --blue-400: #60A5FA;
 
   /* ── Tier 2: Semantic Tokens (dark mode default) ── */
   --bg: var(--gray-950);
@@ -49,6 +51,22 @@
   --drill-muted: rgba(167, 139, 250, 0.12);
   --border: var(--gray-800);
   --border-subtle: #1E1E22;
+
+  /* ── Topic Category Colors ── */
+  --topic-tech: var(--cyan-400);
+  --topic-politics: var(--violet-400);
+  --topic-business: var(--orange-500);
+  --topic-science: var(--green-400);
+  --topic-sports: var(--yellow-400);
+  --topic-health: var(--pink-400);
+  --topic-world: var(--blue-400);
+  --topic-default: var(--gray-400);
+
+  /* ── Glassmorphism ── */
+  --glass-bg: rgba(24, 24, 27, 0.7);
+  --glass-bg-heavy: rgba(12, 12, 14, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.06);
+  --glass-blur: 20px;
 
   /* ── Tier 3: Component Tokens ── */
 
@@ -80,7 +98,9 @@
 
   /* Navigation */
   --nav-active: var(--accent);
-  --nav-inactive: var(--surface-raised);
+  --nav-inactive: var(--text-muted);
+  --tab-bar-height: 56px;
+  --top-bar-height: 48px;
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -91,26 +111,37 @@
   --radius-sm: 4px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  --radius-xl: 16px;
   --radius-full: 9999px;
 
-  /* Spacing */
+  /* Spacing (mobile-first) */
   --space-2xs: 2px;
   --space-xs: 4px;
   --space-sm: 8px;
-  --space-md: 16px;
-  --space-lg: 24px;
-  --space-xl: 32px;
-  --space-2xl: 48px;
-  --space-3xl: 64px;
+  --space-md: 12px;
+  --space-lg: 20px;
+  --space-xl: 28px;
+  --space-2xl: 40px;
+  --space-3xl: 56px;
 
   /* Motion */
   --ease-enter: ease-out;
   --ease-exit: ease-in;
   --ease-move: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --duration-micro: 75ms;
   --duration-short: 200ms;
   --duration-medium: 300ms;
   --duration-long: 500ms;
+  --duration-page: 300ms;
+  --duration-stagger: 40ms;
+
+  /* Safe Area & Layout */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --navbar-height: 48px;
+  --page-top: calc(var(--safe-top) + var(--navbar-height));
+  --page-bottom: calc(var(--safe-bottom) + var(--tab-bar-height) + var(--space-md));
 }
 
 /* ── Light Mode ── */
@@ -126,6 +157,9 @@
   --accent: var(--orange-600);
   --border: var(--gray-200);
   --border-subtle: var(--gray-100);
+  --glass-bg: rgba(250, 250, 249, 0.7);
+  --glass-bg-heavy: rgba(250, 250, 249, 0.85);
+  --glass-border: rgba(0, 0, 0, 0.06);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
@@ -155,48 +189,69 @@
   --color-agree-muted: var(--agree-muted);
   --color-dismiss-muted: var(--dismiss-muted);
   --color-drill-muted: var(--drill-muted);
-  --font-display: var(--font-instrument-serif);
+  --color-glass-bg: var(--glass-bg);
+  --color-glass-border: var(--glass-border);
+  --color-topic-tech: var(--topic-tech);
+  --color-topic-politics: var(--topic-politics);
+  --color-topic-business: var(--topic-business);
+  --color-topic-science: var(--topic-science);
+  --color-topic-sports: var(--topic-sports);
+  --color-topic-health: var(--topic-health);
+  --color-topic-world: var(--topic-world);
+  --color-topic-default: var(--topic-default);
+  --font-display: var(--font-fraunces);
   --font-body: var(--font-dm-sans);
   --font-mono: var(--font-jetbrains-mono);
 }
 
 /* ── Base styles ── */
+html {
+  height: 100%;
+  height: 100dvh;
+}
+
 body {
   background: var(--bg);
   color: var(--text-primary);
   font-family: var(--font-dm-sans), system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100%;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
-/* ── Typography utilities ── */
+/* ── Typography utilities (mobile-first) ── */
 .text-hero {
-  font-family: var(--font-instrument-serif), Georgia, serif;
-  font-style: italic;
-  font-size: 28px;
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-style: normal;
+  font-weight: 600;
+  font-size: 24px;
   line-height: 1.2;
   letter-spacing: -0.02em;
 }
 
 .text-title {
-  font-family: var(--font-instrument-serif), Georgia, serif;
-  font-style: italic;
-  font-size: 22px;
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-style: normal;
+  font-weight: 500;
+  font-size: 19px;
   line-height: 1.3;
   letter-spacing: -0.01em;
 }
 
 .text-heading {
-  font-family: var(--font-instrument-serif), Georgia, serif;
-  font-style: italic;
-  font-size: 17px;
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 15px;
   line-height: 1.35;
 }
 
 .text-body {
   font-family: var(--font-dm-sans), system-ui, sans-serif;
-  font-size: 15px;
-  line-height: 1.7;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .text-small {
@@ -207,6 +262,7 @@ body {
 
 .text-caption {
   font-family: var(--font-dm-sans), system-ui, sans-serif;
+  font-weight: 500;
   font-size: 12px;
   line-height: 1.4;
 }
@@ -219,11 +275,56 @@ body {
 }
 
 .text-category {
-  font-family: var(--font-instrument-serif), Georgia, serif;
-  font-size: 12px;
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
+  font-weight: 600;
+  font-size: 11px;
   line-height: 1.4;
   text-transform: uppercase;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.1em;
+}
+
+/* Scale up typography on larger phones / tablets */
+@media (min-width: 390px) {
+  .text-hero { font-size: 26px; }
+  .text-title { font-size: 20px; }
+  .text-heading { font-size: 16px; }
+}
+
+@media (min-width: 640px) {
+  .text-hero { font-size: 32px; letter-spacing: -0.03em; }
+  .text-title { font-size: 22px; }
+  .text-heading { font-size: 17px; }
+  .text-body { font-size: 15px; line-height: 1.7; }
+}
+
+/* Italic emphasis — use sparingly (tension lines, pull-quotes) */
+.text-emphasis {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-style: italic;
+  font-weight: 400;
+}
+
+/* ── Glassmorphism utilities ── */
+.glass {
+  background: var(--glass-bg-heavy);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.4);
+  border: 1px solid var(--glass-border);
+}
+
+.glass-light {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.gradient-border {
+  background:
+    linear-gradient(var(--bg), var(--bg)) padding-box,
+    linear-gradient(135deg, var(--accent), transparent 60%) border-box;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
 }
 
 /* ── Skeleton shimmer ── */
@@ -265,34 +366,12 @@ body {
   }
 }
 
-/* ── Safe Area & Mobile Viewport ── */
-:root {
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --navbar-height: 48px;
-  --page-top: calc(var(--safe-top) + var(--navbar-height));
-  --page-bottom: calc(var(--safe-bottom) + var(--space-3xl));
-}
-
-/* ── Settings Component Tokens ── */
-:root {
-  --settings-input-bg: var(--surface);
-  --settings-input-border: var(--border);
-  --settings-input-focus: var(--accent);
-  --settings-btn-primary-bg: var(--accent);
-  --settings-btn-primary-text: var(--gray-950);
-  --settings-btn-secondary-bg: var(--surface-raised);
-  --settings-btn-secondary-text: var(--text-secondary);
-  --settings-status-connected: var(--agree);
-  --settings-status-error: var(--dismiss);
-  --settings-status-untested: var(--text-ghost);
-}
-
 /* ── 320px Small Device Overrides ── */
 @media (max-width: 320px) {
-  .text-hero { font-size: 24px; }
-  .text-title { font-size: 20px; }
-  .text-category { font-size: 11px; }
+  .text-hero { font-size: 20px; }
+  .text-title { font-size: 17px; }
+  .text-heading { font-size: 14px; }
+  .text-category { font-size: 10px; }
 }
 
 /* ── Touch Target Enforcement ── */
@@ -312,6 +391,10 @@ body {
 .scroll-snap-section {
   scroll-snap-align: start;
 }
+
+/* ── Hide scrollbar utility ── */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
 /* ── Scrollbar (dark) ── */
 ::-webkit-scrollbar { width: 6px; }

@@ -17,6 +17,7 @@ from app.config import settings
 from app.database import async_session
 from app.models import Article, Source
 from app.services.dedup import is_duplicate
+from app.services.fetcher import assign_topics
 
 logger = structlog.get_logger()
 
@@ -100,6 +101,9 @@ async def fetch_gdelt():
                     published_at=pub_date,
                 )
                 session.add(article)
+                await session.commit()
+                await session.refresh(article)
+                await assign_topics(session, article)
                 await session.commit()
                 new_count += 1
 
