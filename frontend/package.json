@@ -7,7 +7,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "build:android": "BUILD_TARGET=capacitor NEXT_PUBLIC_API_BASE_URL=http://10.0.2.2:8000 next build --webpack && npx cap sync android",
+    "build:android": "mv src/app/story/[clusterId] src/app/story/_clusterId_bak && BUILD_TARGET=capacitor NEXT_PUBLIC_API_BASE_URL=http://10.0.2.2:8000 next build --webpack; mv src/app/story/_clusterId_bak src/app/story/[clusterId] && npx cap sync android",
+    "build:android:prod": "mv src/app/story/[clusterId] src/app/story/_clusterId_bak && BUILD_TARGET=capacitor NEXT_PUBLIC_API_BASE_URL=https://newslens-3gpu.onrender.com next build --webpack; mv src/app/story/_clusterId_bak src/app/story/[clusterId] && npx cap sync android",
     "apk:debug": "cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
