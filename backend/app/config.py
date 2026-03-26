@@ -6,11 +6,16 @@ def _fix_db_url(url: str, async_driver: bool = True) -> str:
     Render/Fly/Neon provide postgres:// or postgresql://, we need postgresql+asyncpg://.
     Also strips params unsupported by asyncpg (e.g. channel_binding from Neon).
     """
-    # Strip unsupported query params for asyncpg
+    # Strip/convert query params unsupported by asyncpg
     from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
     parsed = urlparse(url)
     params = parse_qs(parsed.query)
     params.pop("channel_binding", None)
+    # asyncpg uses 'ssl' not 'sslmode'
+    if async_driver and "sslmode" in params:
+        sslmode = params.pop("sslmode")[0]
+        if sslmode in ("require", "verify-ca", "verify-full"):
+            params["ssl"] = ["true"]
     clean_query = urlencode(params, doseq=True)
     url = urlunparse(parsed._replace(query=clean_query))
 
