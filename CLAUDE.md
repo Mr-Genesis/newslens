@@ -138,6 +138,9 @@ news-app/
 | GET | /settings | User settings (masked API key) |
 | PUT | /settings | Save/remove OpenAI API key (Fernet encrypted) |
 | POST | /settings/test-key | Validate OpenAI API key |
+| GET | /saved | User's saved articles list |
+| DELETE | /saved/{article_id} | Remove a saved article |
+| GET | /stats | Reading stats (articles read, saved, topics explored) |
 
 **Not yet implemented:** `GET /events` (SSE stream), `GET /admin/sources`, `GET /admin/breadth`
 

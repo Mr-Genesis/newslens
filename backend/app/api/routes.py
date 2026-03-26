@@ -132,12 +132,30 @@ async def get_feed(
             )
         )
 
+    # Compute real explore ratio from recent feedback
+    from app.config import settings as app_settings
+    feedback_result = await db.execute(
+        select(UserFeedback.feedback_type)
+        .where(UserFeedback.user_id == DEFAULT_USER_ID)
+        .order_by(UserFeedback.created_at.desc())
+        .limit(app_settings.feedback_window_size)
+    )
+    recent_feedback = [row[0] for row in feedback_result.all()]
+    if recent_feedback:
+        explore_signals = sum(1 for f in recent_feedback if f == FeedbackType.less)
+        explore_ratio = max(
+            app_settings.min_explore_ratio,
+            min(app_settings.max_explore_ratio, explore_signals / len(recent_feedback)),
+        )
+    else:
+        explore_ratio = app_settings.default_explore_ratio
+
     return FeedResponse(
         articles=article_outs,
         total=total,
         page=page,
         per_page=per_page,
-        explore_ratio=0.3,
+        explore_ratio=explore_ratio,
     )
 
 
@@ -154,9 +172,83 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
     )
     cluster = result.scalar_one_or_none()
     if not cluster:
-        from fastapi import HTTPException
+        # Fallback: briefing may pass article IDs when no clusters exist.
+        # Return a synthetic single-article cluster so the detail page works.
+        art_result = await db.execute(
+            select(Article)
+            .options(selectinload(Article.source))
+            .where(Article.id == cluster_id)
+        )
+        article = art_result.scalar_one_or_none()
+        if not article:
+            from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="Cluster not found")
+            raise HTTPException(status_code=404, detail="Cluster not found")
+
+        # Mark article as read
+        existing_read = await db.execute(
+            select(UserFeedback).where(
+                UserFeedback.user_id == DEFAULT_USER_ID,
+                UserFeedback.article_id == article.id,
+                UserFeedback.feedback_type == FeedbackType.read,
+            )
+        )
+        if existing_read.scalar_one_or_none() is None:
+            db.add(UserFeedback(
+                user_id=DEFAULT_USER_ID,
+                article_id=article.id,
+                feedback_type=FeedbackType.read,
+            ))
+            await db.commit()
+
+        return ClusterDetailOut(
+            id=cluster_id,
+            title=article.title,
+            summary=article.snippet,
+            created_at=article.published_at or article.fetched_at or datetime.now(timezone.utc),
+            sources=[
+                ClusterSourceCard(
+                    article=ArticleOut(
+                        id=article.id,
+                        title=article.title,
+                        snippet=article.snippet,
+                        url=article.url,
+                        source=SourceOut.model_validate(article.source),
+                        published_at=article.published_at,
+                        embedding_status=article.embedding_status,
+                    ),
+                    is_free=not article.source.is_paywalled,
+                )
+            ],
+        )
+
+    # On-demand summary generation if batch missed this cluster
+    if not cluster.summary:
+        try:
+            from app.services.summarizer import summarize_cluster
+            summary_result = await summarize_cluster(cluster.id)
+            if summary_result:
+                cluster.summary, cluster.coherence = summary_result
+        except Exception as e:
+            logger.warning("on_demand_summary_failed", cluster_id=cluster.id, error=str(e))
+
+    # Mark all articles in cluster as read
+    article_ids = [ca.article.id for ca in cluster.articles]
+    for aid in article_ids:
+        existing_read = await db.execute(
+            select(UserFeedback).where(
+                UserFeedback.user_id == DEFAULT_USER_ID,
+                UserFeedback.article_id == aid,
+                UserFeedback.feedback_type == FeedbackType.read,
+            )
+        )
+        if existing_read.scalar_one_or_none() is None:
+            db.add(UserFeedback(
+                user_id=DEFAULT_USER_ID,
+                article_id=aid,
+                feedback_type=FeedbackType.read,
+            ))
+    await db.commit()
 
     # Sort: free sources first, then paywalled
     source_cards = []
@@ -242,9 +334,26 @@ async def create_feedback(
 async def get_briefing(db: AsyncSession = Depends(get_db)):
     """
     Returns AI-generated daily briefing built from story clusters.
-    Groups top clusters by topic/category. MVP: generates from existing
-    clusters without GPT (uses cluster title + first article snippet).
+    Uses real AI summaries, dynamic coherence scores, read state tracking,
+    and explore/exploit ordering based on user preferences.
     """
+    from app.config import settings as app_settings
+
+    # Get read article IDs for this user
+    read_result = await db.execute(
+        select(UserFeedback.article_id).where(
+            UserFeedback.user_id == DEFAULT_USER_ID,
+            UserFeedback.feedback_type == FeedbackType.read,
+        )
+    )
+    read_article_ids = set(row[0] for row in read_result.all())
+
+    # Get user topic preference weights
+    pref_result = await db.execute(
+        select(UserPreference).where(UserPreference.user_id == DEFAULT_USER_ID)
+    )
+    prefs = {p.topic_id: p.weight for p in pref_result.scalars().all()}
+
     # Get recent clusters with their articles + sources + topics
     result = await db.execute(
         select(StoryCluster)
@@ -262,28 +371,65 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     )
     clusters = result.scalars().all()
 
+    # Track stories with their preference weights for explore/exploit sorting
     stories: list[BriefingStory] = []
+    story_weights: dict[int, float] = {}  # cluster_id -> pref_weight
+
     for cluster in clusters:
-        # Count unique sources
+        # Count unique sources and gather metadata
         source_names = set()
         first_snippet = None
         category = "General"
+        topic_id = None
+        cluster_article_ids = []
         for ca in cluster.articles:
             source_names.add(ca.article.source.name)
+            cluster_article_ids.append(ca.article.id)
             if first_snippet is None and ca.article.snippet:
                 first_snippet = ca.article.snippet
-            # Get category from first article's topic
             if category == "General" and ca.article.topics:
                 for at in ca.article.topics:
                     if at.topic:
                         category = at.topic.name
+                        topic_id = at.topic_id
                         break
 
-        summary = cluster.summary or first_snippet or "No summary available."
-        # Truncate summary to 2 sentences
-        sentences = summary.split(". ")
-        if len(sentences) > 2:
-            summary = ". ".join(sentences[:2]) + "."
+        # Use real summary or on-demand generate
+        summary = cluster.summary
+        coherence = cluster.coherence
+        if not summary:
+            try:
+                from app.services.summarizer import summarize_cluster
+                sr = await summarize_cluster(cluster.id)
+                if sr:
+                    summary, coherence = sr
+            except Exception as e:
+                logger.warning("briefing_summary_failed", cluster_id=cluster.id, error=str(e))
+
+        if not summary:
+            summary = first_snippet or "No summary available."
+            sentences = summary.split(". ")
+            if len(sentences) > 2:
+                summary = ". ".join(sentences[:2]) + "."
+
+        # Dynamic coherence from source count if not set
+        if coherence is None:
+            sc = len(source_names)
+            if sc >= 5:
+                coherence = 0.95
+            elif sc >= 3:
+                coherence = 0.85
+            elif sc >= 2:
+                coherence = 0.75
+            else:
+                coherence = 0.65
+
+        # Check if any article in this cluster has been read
+        is_read = any(aid in read_article_ids for aid in cluster_article_ids)
+
+        # Track preference weight for explore/exploit sorting
+        pref_weight = prefs.get(topic_id, 0.0) if topic_id else 0.0
+        story_weights[cluster.id] = pref_weight
 
         stories.append(
             BriefingStory(
@@ -292,13 +438,20 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
                 cluster_id=cluster.id,
                 category=category,
                 source_count=len(source_names),
-                coherence=0.85,  # placeholder until AI scoring
-                is_read=False,
+                coherence=coherence,
+                is_read=is_read,
             )
         )
 
-    # Take top 8 stories by source diversity
-    stories.sort(key=lambda s: s.source_count, reverse=True)
+    # Explore/exploit sorting: top 6 by preference weight (exploit), last 2 low-weight (explore)
+    if len(stories) > 8:
+        stories.sort(key=lambda s: story_weights.get(s.cluster_id, 0.0), reverse=True)
+        exploit = stories[:6]
+        remaining = stories[6:]
+        remaining.sort(key=lambda s: story_weights.get(s.cluster_id, 0.0))
+        explore = remaining[:2]
+        stories = exploit + explore
+
     stories = stories[:8]
 
     # Fallback: if no clusters, build briefing from recent articles
@@ -312,7 +465,6 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
         )
         articles = article_result.scalars().all()
 
-        # Categorize by source type
         source_categories = {
             "BBC News": "World",
             "Al Jazeera": "World",
@@ -331,22 +483,41 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
             sentences = snippet.split(". ")
             summary = ". ".join(sentences[:2]) + "." if len(sentences) > 1 else snippet
             category = source_categories.get(a.source.name, "General")
+            is_read = a.id in read_article_ids
 
             stories.append(
                 BriefingStory(
                     title=a.title,
                     summary=summary,
-                    cluster_id=a.id,  # use article ID as fallback
+                    cluster_id=a.id,
                     category=category,
                     source_count=1,
                     coherence=0.70,
-                    is_read=False,
+                    is_read=is_read,
                 )
             )
+
+    # Compute real explore ratio from recent feedback
+    feedback_result = await db.execute(
+        select(UserFeedback.feedback_type)
+        .where(UserFeedback.user_id == DEFAULT_USER_ID)
+        .order_by(UserFeedback.created_at.desc())
+        .limit(app_settings.feedback_window_size)
+    )
+    recent_feedback = [row[0] for row in feedback_result.all()]
+    if recent_feedback:
+        explore_signals = sum(1 for f in recent_feedback if f == FeedbackType.less)
+        explore_ratio = max(
+            app_settings.min_explore_ratio,
+            min(app_settings.max_explore_ratio, explore_signals / len(recent_feedback)),
+        )
+    else:
+        explore_ratio = app_settings.default_explore_ratio
 
     return BriefingResponse(
         stories=stories,
         generated_at=datetime.now(timezone.utc),
+        explore_ratio=explore_ratio,
     )
 
 

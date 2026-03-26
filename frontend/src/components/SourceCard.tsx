@@ -97,7 +97,7 @@ export function SourceCard({
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="mt-3 flex items-center justify-center gap-2 w-full py-2.5 rounded-[var(--radius-sm)] bg-[var(--surface-bg)] text-small text-[var(--text-secondary)] font-medium transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+          className="mt-3 flex items-center justify-center gap-2 w-full py-2.5 rounded-[var(--radius-sm)] bg-[var(--surface)] text-small text-[var(--text-secondary)] font-medium transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
         >
           Read full article
           <svg

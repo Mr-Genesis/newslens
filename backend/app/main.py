@@ -33,6 +33,19 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Add new columns if they don't exist (schema evolution)
+    async with engine.begin() as conn:
+        for stmt in [
+            "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS coherence FLOAT",
+            "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS summary_generated_at TIMESTAMPTZ",
+            # Add 'read' to feedback_type enum if not present
+            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'read' AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'feedbacktype')) THEN ALTER TYPE feedbacktype ADD VALUE 'read'; END IF; END $$",
+        ]:
+            try:
+                await conn.execute(text(stmt))
+            except Exception as e:
+                logger.debug("schema_migration_skipped", stmt=stmt[:50], error=str(e))
+
     # Seed default user
     async with async_session() as session:
         result = await session.execute(text("SELECT id FROM users LIMIT 1"))
@@ -91,6 +104,35 @@ async def init_db():
     logger.info("database_initialized")
 
 
+async def seed_topic_embeddings():
+    """Seed topic embeddings if missing. Run as background task to avoid blocking startup."""
+    async with async_session() as session:
+        result = await session.execute(
+            text("SELECT COUNT(*) FROM topics WHERE embedding IS NOT NULL")
+        )
+        if result.scalar_one() > 0:
+            return  # Already seeded
+
+        try:
+            from app.services.embeddings import generate_embedding
+
+            topic_result = await session.execute(text("SELECT id, name FROM topics"))
+            topics = topic_result.all()
+            seeded = 0
+            for topic_id, topic_name in topics:
+                embedding = await generate_embedding(f"News about {topic_name}")
+                if embedding:
+                    await session.execute(
+                        text("UPDATE topics SET embedding = :emb WHERE id = :tid"),
+                        {"emb": str(embedding), "tid": topic_id},
+                    )
+                    seeded += 1
+            await session.commit()
+            logger.info("topic_embeddings_seeded", count=seeded)
+        except Exception as e:
+            logger.warning("topic_embedding_seed_failed", error=str(e))
+
+
 async def start_scheduler():
     """Start APScheduler for background tasks."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -98,8 +140,19 @@ async def start_scheduler():
     from app.services.gdelt import fetch_gdelt
     from app.services.embeddings import backfill_embeddings
     from app.services.clustering import run_clustering
+    from app.services.summarizer import backfill_summaries
+    from app.services.fetcher import backfill_topic_assignments
 
     scheduler = AsyncIOScheduler()
+    # One-shot: seed topic embeddings 10s after startup (non-blocking)
+    from datetime import datetime, timedelta, timezone as tz
+    scheduler.add_job(
+        seed_topic_embeddings,
+        "date",
+        run_date=datetime.now(tz.utc) + timedelta(seconds=10),
+        id="topic_embedding_seed",
+        replace_existing=True,
+    )
     scheduler.add_job(
         fetch_all_rss,
         "interval",
@@ -126,6 +179,20 @@ async def start_scheduler():
         "interval",
         minutes=settings.rss_fetch_interval_minutes,
         id="clustering",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        backfill_summaries,
+        "interval",
+        minutes=settings.rss_fetch_interval_minutes,
+        id="summary_backfill",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        backfill_topic_assignments,
+        "interval",
+        minutes=settings.rss_fetch_interval_minutes,
+        id="topic_assignment_backfill",
         replace_existing=True,
     )
     scheduler.start()

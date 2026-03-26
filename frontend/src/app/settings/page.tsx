@@ -11,11 +11,13 @@ import { useTheme } from "@/components/ThemeProvider";
 import {
   getSettings,
   getStats,
+  getTopics,
   updateSettings,
   testApiKey,
   type UserSettings,
   type KeyTestResult,
   type StatsResponse,
+  type Topic,
 } from "@/lib/api";
 import { relativeTime } from "@/lib/utils";
 
@@ -68,18 +70,21 @@ export default function ProfilePage() {
   });
 
   const [stats, setStats] = useState<StatsResponse | null>(null);
+  const [topics, setTopics] = useState<Topic[]>([]);
 
   const { theme, setTheme } = useTheme();
 
   const fetchSettings = useCallback(async () => {
     try {
       setState("loading");
-      const [settingsData, statsData] = await Promise.all([
+      const [settingsData, statsData, topicsData] = await Promise.all([
         getSettings(),
         getStats().catch(() => null),
+        getTopics().catch(() => null),
       ]);
       setSettings(settingsData);
       if (statsData) setStats(statsData);
+      if (topicsData) setTopics(topicsData.your_topics);
       setState("idle");
     } catch {
       setError("Failed to load settings");
@@ -255,7 +260,10 @@ export default function ProfilePage() {
                   Toggle topics to customize your briefing
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  {defaultTopics.map((topic) => (
+                  {(topics.length > 0
+                    ? topics.map((t) => t.name)
+                    : defaultTopics
+                  ).map((topic) => (
                     <Chip
                       key={topic}
                       selected={selectedTopics.has(topic)}
@@ -287,7 +295,7 @@ export default function ProfilePage() {
                       className={`flex-1 py-2.5 rounded-[var(--radius-sm)] text-small font-medium capitalize transition-colors ${
                         theme === t
                           ? "bg-[var(--accent)] text-[var(--gray-950)]"
-                          : "bg-[var(--surface-bg)] text-[var(--text-muted)] hover:bg-[var(--surface-hover)]"
+                          : "bg-[var(--surface)] text-[var(--text-muted)] hover:bg-[var(--surface-hover)]"
                       }`}
                     >
                       {t}
@@ -319,7 +327,7 @@ export default function ProfilePage() {
                 {/* Current key display */}
                 {settings?.has_openai_key && !isEditing && (
                   <div>
-                    <div className="flex items-center gap-2 py-2.5 px-3 rounded-[var(--radius-sm)] bg-[var(--surface-bg)]">
+                    <div className="flex items-center gap-2 py-2.5 px-3 rounded-[var(--radius-sm)] bg-[var(--surface)]">
                       <span className="text-small text-[var(--text-muted)] tracking-wider flex-1">
                         {"••••••••••••" +
                           (settings.openai_key_last4 || "****")}

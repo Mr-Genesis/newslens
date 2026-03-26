@@ -16,7 +16,8 @@ Next.js 16 App Router, React 19, Tailwind CSS 4, Framer Motion, Capacitor (Andro
 | `/discover` | `app/discover/page.tsx` | Discover screen — swipable card deck |
 | `/story/[clusterId]` | `app/story/[clusterId]/page.tsx` | Deep dive — web (dynamic route) |
 | `/story?id=X` | `app/story/page.tsx` + `StoryContent.tsx` | Deep dive — Capacitor (query param) |
-| `/settings` | `app/settings/page.tsx` | Settings — OpenAI API key management |
+| `/saved` | `app/saved/page.tsx` | Saved articles list with unsave |
+| `/settings` | `app/settings/page.tsx` | Profile, topics, theme, API key management |
 
 ### Why two story routes?
 

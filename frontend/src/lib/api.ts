@@ -67,6 +67,7 @@ export interface BriefingStory {
 export interface Briefing {
   stories: BriefingStory[];
   generated_at: string;
+  explore_ratio?: number;
 }
 
 export interface ClusterDetail {
@@ -116,8 +117,8 @@ export interface FeedResponse {
 
 export interface TopicsResponse {
   your_topics: Topic[];
-  explore: Topic[];
-  trending: Topic[];
+  explore_topics: Topic[];
+  trending_topics: Topic[];
 }
 
 export interface HealthResponse {
