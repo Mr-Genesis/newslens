@@ -16,7 +16,46 @@ logger = structlog.get_logger()
 
 
 async def assign_topics(session, article: Article):
-    """Assign topics to an article based on keyword matching in title/snippet."""
+    """Assign topics to an article using embedding cosine similarity.
+    Falls back to keyword matching if article has no embedding or no topic embeddings exist."""
+    from app.config import settings
+
+    # Try embedding-based assignment first
+    if article.embedding is not None:
+        result = await session.execute(
+            select(Topic).where(Topic.embedding.isnot(None))
+        )
+        topics_with_embeddings = result.scalars().all()
+
+        if topics_with_embeddings:
+            # Use pgvector cosine distance operator
+            for topic in topics_with_embeddings:
+                dist_result = await session.execute(
+                    text(
+                        "SELECT embedding <=> :topic_emb AS distance "
+                        "FROM articles WHERE id = :article_id"
+                    ),
+                    {"topic_emb": str(topic.embedding), "article_id": article.id},
+                )
+                row = dist_result.first()
+                if row and row.distance < settings.new_topic_max_similarity:
+                    existing = await session.execute(
+                        select(ArticleTopic).where(
+                            ArticleTopic.article_id == article.id,
+                            ArticleTopic.topic_id == topic.id,
+                        )
+                    )
+                    if existing.scalar_one_or_none() is None:
+                        session.add(
+                            ArticleTopic(
+                                article_id=article.id,
+                                topic_id=topic.id,
+                                relevance_score=1.0 - row.distance,
+                            )
+                        )
+            return
+
+    # Fallback: keyword matching
     text_to_match = (article.title or "").lower()
     if article.snippet:
         text_to_match += " " + article.snippet.lower()
@@ -26,7 +65,6 @@ async def assign_topics(session, article: Article):
 
     for topic in topics:
         keyword = topic.name.lower()
-        # Match whole-word-ish: check if keyword appears in text
         if keyword in text_to_match:
             existing = await session.execute(
                 select(ArticleTopic).where(
@@ -38,6 +76,47 @@ async def assign_topics(session, article: Article):
                 session.add(
                     ArticleTopic(article_id=article.id, topic_id=topic.id)
                 )
+
+
+async def backfill_topic_assignments():
+    """Batch job: assign topics to articles with embeddings but no topic assignments."""
+    async with async_session() as session:
+        # Find articles with embeddings but no topic assignments
+        from sqlalchemy import exists, and_
+        from app.models import EmbeddingStatus
+
+        result = await session.execute(
+            select(Article)
+            .where(
+                Article.embedding_status == EmbeddingStatus.complete,
+                ~exists(
+                    select(ArticleTopic.id).where(
+                        ArticleTopic.article_id == Article.id
+                    )
+                ),
+            )
+            .order_by(Article.fetched_at.desc())
+            .limit(50)
+        )
+        articles = result.scalars().all()
+
+    if not articles:
+        return
+
+    success = 0
+    async with async_session() as session:
+        for article in articles:
+            # Re-fetch to get embedding in this session
+            art_result = await session.execute(
+                select(Article).where(Article.id == article.id)
+            )
+            art = art_result.scalar_one_or_none()
+            if art:
+                await assign_topics(session, art)
+                success += 1
+        await session.commit()
+
+    logger.info("topic_assignment_backfill_complete", processed=len(articles), success=success)
 
 
 # Starter RSS feeds

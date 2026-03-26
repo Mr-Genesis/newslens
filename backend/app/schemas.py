@@ -130,6 +130,7 @@ class BriefingStory(BaseModel):
 class BriefingResponse(BaseModel):
     stories: list[BriefingStory]
     generated_at: datetime
+    explore_ratio: float = 0.3
 
 
 # --- Discover ---

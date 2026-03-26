@@ -1,10 +1,32 @@
 from pydantic_settings import BaseSettings
 
 
+def _fix_db_url(url: str, async_driver: bool = True) -> str:
+    """Normalize DATABASE_URL for SQLAlchemy.
+    Render/Fly provide postgres:// or postgresql://, we need postgresql+asyncpg://.
+    """
+    if async_driver:
+        for prefix in ("postgres://", "postgresql://"):
+            if url.startswith(prefix):
+                return url.replace(prefix, "postgresql+asyncpg://", 1)
+    else:
+        for prefix in ("postgres://", "postgresql+asyncpg://"):
+            if url.startswith(prefix):
+                return url.replace(prefix, "postgresql://", 1)
+    return url
+
+
 class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://newslens:newslens_dev@localhost:5432/newslens"
     database_url_sync: str = "postgresql://newslens:newslens_dev@localhost:5432/newslens"
+
+    def model_post_init(self, __context):
+        # Auto-fix database URLs from cloud providers
+        self.database_url = _fix_db_url(self.database_url, async_driver=True)
+        self.database_url_sync = _fix_db_url(
+            self.database_url_sync or self.database_url, async_driver=False
+        )
 
     # OpenAI
     openai_api_key: str = ""

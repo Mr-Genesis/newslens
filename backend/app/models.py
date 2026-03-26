@@ -31,6 +31,7 @@ class FeedbackType(str, enum.Enum):
     less = "less"
     save = "save"
     share = "share"
+    read = "read"
 
 
 class SourceType(str, enum.Enum):
@@ -138,6 +139,10 @@ class StoryCluster(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(1024), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text)
+    coherence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    summary_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
