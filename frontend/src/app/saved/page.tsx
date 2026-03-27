@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
+import { storyHref } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import {
@@ -133,7 +134,7 @@ export default function SavedPage() {
                     <div className="flex-1 min-w-0">
                       {article.cluster_id ? (
                         <Link
-                          href={`/story/${article.cluster_id}`}
+                          href={storyHref(article.cluster_id)}
                           className="text-heading text-[var(--text-primary)] line-clamp-2 hover:text-[var(--accent)] transition-colors"
                         >
                           {article.title}

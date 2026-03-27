@@ -4,7 +4,7 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/Badge";
 import { ConfidenceScore } from "@/components/ui/ConfidenceScore";
-import { relativeTime } from "@/lib/utils";
+import { relativeTime, storyHref } from "@/lib/utils";
 import type { BriefingStory } from "@/lib/api";
 
 interface HeroStoryCardProps {
@@ -19,7 +19,7 @@ export function HeroStoryCard({ story }: HeroStoryCardProps) {
       transition={{ duration: 0.4, ease: "easeOut" }}
     >
       <Link
-        href={`/story/${story.cluster_id}`}
+        href={storyHref(story.cluster_id)}
         className="block gradient-border rounded-[var(--radius-lg)] p-4 transition-all duration-[var(--duration-short)] hover:shadow-[var(--shadow-md)]"
       >
         <div className="flex items-center gap-2 mb-3">
