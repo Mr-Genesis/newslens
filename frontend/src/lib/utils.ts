@@ -22,6 +22,14 @@ export function relativeTime(date: string | Date): string {
   return "just now";
 }
 
+/** Return the correct story URL for web (dynamic route) vs Capacitor (query param) */
+export function storyHref(clusterId: number): string {
+  if (process.env.NEXT_PUBLIC_API_BASE_URL) {
+    return `/story?id=${clusterId}`;
+  }
+  return `/story/${clusterId}`;
+}
+
 /** Check if a briefing timestamp is stale (>4 hours old) */
 export function isStale(date: string | Date): boolean {
   const fourHours = 4 * 60 * 60 * 1000;

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/Badge";
 import { ConfidenceScore } from "@/components/ui/ConfidenceScore";
-import { relativeTime } from "@/lib/utils";
+import { relativeTime, storyHref } from "@/lib/utils";
 import type { BriefingStory } from "@/lib/api";
 
 const topicColorMap: Record<string, string> = {
@@ -37,7 +37,7 @@ export function StoryCard({ story }: StoryCardProps) {
       transition={{ duration: 0.3, ease: "easeOut" }}
     >
       <Link
-        href={`/story/${story.cluster_id}`}
+        href={storyHref(story.cluster_id)}
         className="flex gap-3 py-4 border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--accent-subtle)] -mx-4 px-4 rounded-[var(--radius-md)]"
       >
         {/* Category color indicator */}

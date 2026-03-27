@@ -95,7 +95,7 @@ export function DiscoverCard({
     <motion.div
       className={cn(
         "absolute inset-x-0 rounded-[var(--radius-lg)] overflow-hidden",
-        "glass-light",
+        "bg-[var(--surface-card)] border border-[var(--glass-border)]",
         isTop ? "cursor-grab active:cursor-grabbing" : "pointer-events-none"
       )}
       style={{
@@ -153,7 +153,7 @@ export function DiscoverCard({
 
       {/* Card content */}
       <div
-        className="p-4 flex flex-col"
+        className={cn("p-4 flex flex-col", !isTop && "invisible")}
         style={{ height: "min(340px, calc(100dvh - 260px))" }}
       >
         {/* Topic badge — top left */}
