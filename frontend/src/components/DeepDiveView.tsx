@@ -8,10 +8,9 @@ import { ImpactCard } from "@/components/ui/ImpactCard";
 import { SourceCard } from "@/components/SourceCard";
 import { SourceSpectrum } from "@/components/SourceSpectrum";
 import { IconButton } from "@/components/ui/IconButton";
-import { ConfidenceScore } from "@/components/ui/ConfidenceScore";
+import { AgreementMeter } from "@/components/ui/AgreementMeter";
 import { Button } from "@/components/ui/Button";
 import { DeepDiveSkeleton } from "@/components/ui/Skeleton";
-import { relativeTime } from "@/lib/utils";
 import { getCluster, postFeedback, type ClusterDetail } from "@/lib/api";
 
 type PageState = "loading" | "success" | "error";
@@ -149,12 +148,12 @@ export default function DeepDiveView({
             >
               {cluster.title}
             </motion.h1>
-            <div className="mt-3 flex items-center gap-1.5 flex-wrap">
-              <ConfidenceScore sourceCount={cluster.sources.length} coherence={0.85} />
-              <span className="text-mono text-[var(--text-ghost)]">&middot;</span>
-              <span className="text-mono text-[var(--text-muted)]">
-                {relativeTime(cluster.created_at)}
-              </span>
+            <div className="mt-4">
+              <AgreementMeter
+                coherence={0.85}
+                sourceCount={cluster.sources.length}
+                createdAt={cluster.created_at}
+              />
             </div>
           </div>
 
