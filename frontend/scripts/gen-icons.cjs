@@ -49,6 +49,12 @@ async function write(file, svgStr) {
   console.log("✓", path.relative(process.cwd(), file));
 }
 
+function writeSvg(file, svgStr) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, svgStr + "\n");
+  console.log("✓", path.relative(process.cwd(), file));
+}
+
 const ROOT = path.resolve(__dirname, "..");
 const RES = path.join(ROOT, "android/app/src/main/res");
 
@@ -60,6 +66,13 @@ const DENSITIES = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
   await write(path.join(ROOT, "src/app/apple-icon.png"), svg({ w: 180, frac: 0.62, ground: "square" }));
   await write(path.join(ROOT, "public/icons/icon-192.png"), svg({ w: 192, frac: 0.5, ground: "square" }));
   await write(path.join(ROOT, "public/icons/icon-512.png"), svg({ w: 512, frac: 0.5, ground: "square" }));
+  writeSvg(path.join(ROOT, "public/favicon.svg"), svg({ w: 64, frac: 0.62, ground: "rounded", radiusFrac: 0.19 }));
+
+  // ── @capacitor/assets sources (1024²) — keep on the bracket mark so a future
+  //    `npx @capacitor/assets generate` can't revert the launcher to another mark. ──
+  await write(path.join(ROOT, "assets/icon-only.png"), svg({ w: 1024, frac: 0.6, ground: "square" }));
+  await write(path.join(ROOT, "assets/icon-foreground.png"), svg({ w: 1024, frac: 0.5, ground: "none" }));
+  await write(path.join(ROOT, "assets/logo.png"), svg({ w: 1024, frac: 0.6, ground: "square" }));
 
   // ── Android launcher ──
   for (const [d, m] of Object.entries(DENSITIES)) {

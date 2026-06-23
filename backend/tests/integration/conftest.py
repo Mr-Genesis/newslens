@@ -107,16 +107,47 @@ def fake_llm(monkeypatch):
                 ],
                 "non_obvious_take": "the loud threats are a bargaining posture, not intent",
             }
-        # E6 WIIFM impact
-        if '"dimensions"' in p or "what's in it for me" in p:
+        # Wave A WIIFM impact — structured StoryImpact (clean: no advice/hype; grounded to "S")
+        if "personal_relevance" in p or "what's in it for me" in p:
             return {
-                "headline": "Modest near-term effect; worth monitoring",
-                "dimensions": [
-                    {"key": "finance", "label": "Finance", "body": "Rates may tick up."},
-                    {"key": "profession", "label": "Your field", "body": "Demand steady."},
-                    {"key": "policy", "label": "Policy", "body": "New rules expected."},
-                    {"key": "daily", "label": "Daily life", "body": "Prices stable."},
-                ],
+                "headline": "Modest near-term effect; worth monitoring.",
+                "personal_relevance": {
+                    "score": 72,
+                    "one_liner": "Touches your field this quarter.",
+                },
+                "dimensions": {
+                    "professional": {
+                        "applicable": True,
+                        "relevance": "Affects how you work day to day.",
+                        "mechanism": "Tooling and demand mix shift.",
+                        "watch_items": ["vendor moves"],
+                        "horizon": "weeks",
+                        "confidence": "medium",
+                        "confidence_rationale": "stated across sources",
+                        "evidence": [{"claim": "tooling shift", "source": "S"}],
+                    },
+                    "financial": {
+                        "applicable": True,
+                        "relevance": "Indirect exposure via the sector.",
+                        "mechanism": "Demand mix changes.",
+                        "watch_items": ["sector names"],
+                        "horizon": "quarter",
+                        "confidence": "low",
+                        "confidence_rationale": "direction only",
+                        "evidence": [],
+                    },
+                    "civic": {
+                        "applicable": False,
+                        "relevance": "",
+                        "mechanism": "",
+                        "watch_items": [],
+                        "horizon": "year_plus",
+                        "confidence": "low",
+                        "confidence_rationale": "",
+                        "evidence": [],
+                    },
+                },
+                "caveats": "Early signal.",
             }
         # E8 trivia / quiz
         if "multiple-choice" in p or '"answer_index"' in p or "quiz" in p:
@@ -162,7 +193,7 @@ def fake_llm(monkeypatch):
             }
         return {"result": "generic"}
 
-    async def _gen(prompt, *, system=None, schema=None, model=None):
+    async def _gen(prompt, *, system=None, schema=None, model=None, max_tokens=None):
         calls["generate"] += 1
         if schema is None:
             return "STUB SUMMARY"

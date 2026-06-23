@@ -1002,6 +1002,33 @@ async def _user_profession_locale(db: AsyncSession):
     return (u.profession if u else None), (u.locale if u and u.locale else "IN")
 
 
+async def _user_persona(db: AsyncSession) -> dict:
+    """Assemble the full impact persona for the default user. Interests come from the
+    user_preferences topic rows (not duplicated onto users)."""
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    interests = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(Topic.name)
+                .join(UserPreference, UserPreference.topic_id == Topic.id)
+                .where(UserPreference.user_id == DEFAULT_USER_ID)
+            )
+        ).all()
+    ]
+    return {
+        "profession": u.profession if u else None,
+        "interests": interests,
+        "watchlist": (u.watchlist if u and u.watchlist else []),
+        "country": (u.locale if u and u.locale else None),
+        "region": (u.region if u else None),
+        "depth_pref": (u.depth_pref if u and u.depth_pref else "standard"),
+        "persona_version": (u.persona_version if u and u.persona_version else 1),
+    }
+
+
 # ── E3: profile (profession + locale + interests) ──
 @router.get("/profile", response_model=ProfileOut)
 async def get_profile(db: AsyncSession = Depends(get_db)):
@@ -1019,6 +1046,9 @@ async def get_profile(db: AsyncSession = Depends(get_db)):
         profession=u.profession if u else None,
         locale=(u.locale if u and u.locale else "IN"),
         interests=[r[0] for r in prefs],
+        watchlist=(u.watchlist if u and u.watchlist else []),
+        depth_pref=(u.depth_pref if u and u.depth_pref else "standard"),
+        region=(u.region if u else None),
     )
 
 
@@ -1054,6 +1084,14 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
             db.add(
                 UserPreference(user_id=DEFAULT_USER_ID, topic_id=topic.id, weight=1.0)
             )
+    if body.watchlist is not None:
+        u.watchlist = [w.model_dump() for w in body.watchlist]
+    if body.depth_pref is not None:
+        u.depth_pref = body.depth_pref.strip() or "standard"
+    if body.region is not None:
+        u.region = body.region.strip() or None
+    # Any profile edit bumps persona_version → lazily invalidates this user's cached impacts.
+    u.persona_version = (u.persona_version or 1) + 1
     await db.commit()
     return await get_profile(db)
 
@@ -1127,11 +1165,13 @@ async def cluster_analysis(
 
 
 @router.get("/clusters/{cluster_id}/impact")
-async def cluster_impact(cluster_id: int, db: AsyncSession = Depends(get_db)):
+async def cluster_impact(
+    cluster_id: int, refresh: int = 0, db: AsyncSession = Depends(get_db)
+):
     from app.services import lenses
 
-    profession, locale = await _user_profession_locale(db)
-    return await lenses.impact(db, cluster_id, profession, locale)
+    persona = await _user_persona(db)
+    return await lenses.impact(db, cluster_id, persona, force=bool(refresh))
 
 
 _GEOPOLITICS_TOPIC_TERMS = (

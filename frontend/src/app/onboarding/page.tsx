@@ -28,6 +28,14 @@ const chipVariants = {
   animate: { opacity: 1, y: 0 },
 };
 
+/** Derive the reader's locale from the browser instead of hard-defaulting to IN.
+ *  Falls back to "global" for regions outside the curated set. (Wave Q2) */
+function detectLocale(): string {
+  if (typeof navigator === "undefined" || !navigator.language) return "global";
+  const region = (navigator.language.split("-")[1] || "").toUpperCase();
+  return ["IN", "US", "GB"].includes(region) ? region : "global";
+}
+
 export default function OnboardingPage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
@@ -62,9 +70,10 @@ export default function OnboardingPage() {
   async function finish() {
     setSaving(true);
     try {
-      // Interests-first: profession/locale are deferred to the "Personalize your
-      // impact lens" banner that appears once the user meets their first impact card.
-      await updateProfile({ interests });
+      // Interests-first: profession is deferred to the "Personalize your impact lens"
+      // banner. Locale is auto-detected from the browser (not hard-defaulted to IN —
+      // NewsLens is profession- AND region-agnostic). Wave Q2.
+      await updateProfile({ interests, locale: detectLocale() });
     } catch {
       /* proceed regardless — they can edit in Profile */
     } finally {
@@ -73,7 +82,7 @@ export default function OnboardingPage() {
     }
   }
 
-  // "X of 3 set up": locale (defaulted) + interests + profession (deferred → later).
+  // "X of 3 set up": locale (auto-detected) + interests + profession (deferred → later).
   const setupCount = 1 + (interests.length > 0 ? 1 : 0);
 
   if (!ready) {

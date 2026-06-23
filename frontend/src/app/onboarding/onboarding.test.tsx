@@ -41,7 +41,10 @@ describe("Onboarding (E3) — interests-first, skippable", () => {
     // Skippable without choosing anything.
     await userEvent.click(screen.getByRole("button", { name: /skip/i }));
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/"));
-    expect(updateProfile).toHaveBeenCalledWith({ interests: [] });
+    // interests-only here; locale is auto-detected from the browser (Wave Q2), not hardcoded.
+    expect(updateProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ interests: [] })
+    );
     expect(localStorage.getItem("newslens-onboarded")).toBe("1");
   });
 

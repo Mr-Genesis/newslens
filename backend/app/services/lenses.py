@@ -1,21 +1,36 @@
-"""LLM "lens" engine (E5 analysis · E6 WIIFM impact · E7 strategic/game-theory · E8 trivia).
+"""LLM "lens" engine (E5 analysis · E6 WIIFM impact · E7 strategic · E8 trivia).
 
-Each lens: build a prompt from a cluster's source articles -> llm.generate(schema=...) ->
-cache the parsed JSON on the cluster's JSONB column (sub-keyed by sub-lens / profession /
-difficulty), invalidated by a hash of the cluster's article set. Returns a typed dict;
-on no key returns ``{"unavailable": True}`` (never raises to the caller).
+Each lens: build a prompt from a cluster's source articles -> llm.generate -> cache the
+parsed JSON on the cluster's JSONB column, invalidated by the cluster's article-set hash and
+a 24h TTL. On no key returns ``{"unavailable": True}`` (never raises to the caller).
+
+Wave A: the impact lens is rebuilt to IMPACT_ENGINE_SPEC — a full per-persona contract
+(StoryImpact) that is Pydantic-validated, guardrail-linted (no-advice / groundedness /
+honesty / hype), and cached per persona_hash. Cache WRITES use a server-side JSONB merge so
+concurrent writes to different subkeys of the same cluster row can't clobber each other.
 """
 import hashlib
+import json
+from datetime import datetime, timedelta, timezone
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import Article, ClusterArticle, StoryCluster, User
-from app.services import llm
+from app.config import settings
+from app.models import Article, ClusterArticle, StoryCluster
+from app.schemas import FinancialDimension, StoryImpact
+from app.services import impact_guardrails, llm
 
 logger = structlog.get_logger()
+
+_LENS_COLUMNS = {"analysis_json", "impact_json", "strategic_json", "trivia_json"}
+
+
+def _utcnow() -> datetime:
+    """Injectable clock — tests monkeypatch this to exercise the TTL."""
+    return datetime.now(timezone.utc)
 
 
 def profession_hash(profession: str | None) -> str:
@@ -24,6 +39,23 @@ def profession_hash(profession: str | None) -> str:
     if not norm:
         return "default"
     return hashlib.sha1(norm.encode()).hexdigest()[:12]
+
+
+def persona_hash(persona: dict | None) -> str:
+    """Stable hash over the impact-relevant persona fields (profession normalized for
+    case/whitespace). Two readers with different interests/watchlist/region get different
+    impacts; the same reader re-cased hits the same cache entry."""
+    p = persona or {}
+    blob = {
+        "profession": (p.get("profession") or "").strip().lower(),
+        "interests": sorted(p.get("interests") or []),
+        "watchlist": p.get("watchlist") or [],
+        "country": p.get("country"),
+        "region": p.get("region"),
+        "depth_pref": p.get("depth_pref") or "standard",
+        "persona_version": p.get("persona_version") or 1,
+    }
+    return hashlib.sha256(json.dumps(blob, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def _source_hash(articles: list[Article]) -> str:
@@ -40,49 +72,34 @@ def _cluster_text(cluster: StoryCluster, articles: list[Article]) -> str:
     return "\n".join(lines)
 
 
-# ── prompt builders (each returns (prompt, schema_flag)) ──
-def _prompt_key_facts(text):
+# ── analysis / strategic / trivia prompt builders (unchanged) ──
+def _prompt_key_facts(text_):
     return (
-        f"{text}\n\nExtract the 4-6 most important, concrete facts from the above coverage. "
+        f"{text_}\n\nExtract the 4-6 most important, concrete facts from the above coverage. "
         'Respond ONLY as JSON: {"facts": ["fact 1", "fact 2", ...]}'
     )
 
 
-def _prompt_5ws(text):
+def _prompt_5ws(text_):
     return (
-        f"{text}\n\nAnswer the five Ws for this story. "
+        f"{text_}\n\nAnswer the five Ws for this story. "
         'Respond ONLY as JSON: {"who": "...", "what": "...", "when": "...", '
         '"where": "...", "why": "..."}'
     )
 
 
-def _prompt_profession(text, profession):
+def _prompt_profession(text_, profession):
     who = profession or "a curious generalist reader"
     return (
-        f"{text}\n\nExplain what this story means specifically for {who}. Be concrete and "
+        f"{text_}\n\nExplain what this story means specifically for {who}. Be concrete and "
         'practical. Respond ONLY as JSON: {"headline": "one-line takeaway for them", '
         '"points": ["point 1", "point 2", "point 3"]}'
     )
 
 
-def _prompt_impact(text, profession, locale):
-    who = profession or "a curious generalist reader"
+def _prompt_strategic(text_):
     return (
-        f"{text}\n\nReader profile: profession='{who}', locale='{locale}'. "
-        "Answer 'What's in it for me?' — how this news may affect this reader across "
-        "Finance/markets, their Profession, Policy & regulation, and Daily life. Lead with a "
-        "single sharp headline verdict (what it means + what, if anything, to consider). "
-        'Respond ONLY as JSON: {"headline": "...", "dimensions": ['
-        '{"key": "finance", "label": "Finance", "body": "..."}, '
-        '{"key": "profession", "label": "Your field", "body": "..."}, '
-        '{"key": "policy", "label": "Policy", "body": "..."}, '
-        '{"key": "daily", "label": "Daily life", "body": "..."}]}'
-    )
-
-
-def _prompt_strategic(text):
-    return (
-        f"{text}\n\nGive a game-theory / strategic read of this story. Identify the key actors "
+        f"{text_}\n\nGive a game-theory / strategic read of this story. Identify the key actors "
         "and each one's incentives and likely next move; name the type of 'game' being played "
         "(e.g. zero-sum, coordination, chicken, prisoner's dilemma, signalling); list 2-3 "
         "second-order effects; and end with one non-obvious take. "
@@ -92,12 +109,98 @@ def _prompt_strategic(text):
     )
 
 
-def _prompt_trivia(text, difficulty):
+def _prompt_trivia(text_, difficulty):
     return (
-        f"{text}\n\nWrite 3 {difficulty}-difficulty multiple-choice quiz questions testing "
+        f"{text_}\n\nWrite 3 {difficulty}-difficulty multiple-choice quiz questions testing "
         "understanding of this story. Each has exactly 4 options, one correct. "
         'Respond ONLY as JSON: {"questions": [{"question": "...", "options": ["a","b","c","d"], '
         '"answer_index": 0, "explanation": "...", "difficulty": "' + difficulty + '"}]}'
+    )
+
+
+def _prompt_impact_legacy(text_, profession, locale):
+    """Pre-Wave-A flat impact (used only when impact_v2_enabled is False)."""
+    who = profession or "a curious generalist reader"
+    return (
+        f"{text_}\n\nReader profile: profession='{who}', locale='{locale}'. "
+        "Answer 'What's in it for me?' across Finance/markets, their Profession, Policy, and "
+        'Daily life. Respond ONLY as JSON: {"headline": "...", "dimensions": ['
+        '{"key": "finance", "label": "Finance", "body": "..."}, '
+        '{"key": "profession", "label": "Your field", "body": "..."}, '
+        '{"key": "policy", "label": "Policy", "body": "..."}, '
+        '{"key": "daily", "label": "Daily life", "body": "..."}]}'
+    )
+
+
+# ── Wave A impact prompt (IMPACT_ENGINE_SPEC §5) ──
+_IMPACT_SYSTEM = (
+    "You are the Impact Analyst for NewsLens. Given a clustered news story and ONE reader's "
+    "persona, explain precisely and calmly how this story actually touches that specific "
+    "person across three dimensions: their PROFESSION, their MONEY, and their CIVIC/regional "
+    "life. Voice: an exceptionally well-briefed analyst writing for one smart reader. Plain, "
+    "concrete, declarative. No filler, no superlatives, no hype.\n"
+    "HARD RULES:\n"
+    "1. GROUND EVERYTHING in the provided story + sources. Never invent events, numbers, "
+    "dates, or entities. Cite the outlet for each non-obvious claim in 'evidence'.\n"
+    "2. HONESTY OVER COVERAGE. If a dimension does not genuinely apply to THIS reader, set "
+    "'applicable': false and leave its fields empty. Most stories have one or two strong "
+    "dimensions, not three.\n"
+    "3. NO FINANCIAL ADVICE EVER. For the financial dimension describe exposure and signals "
+    "to watch only. Never recommend buying, selling, holding, allocating, or timing any asset, "
+    "and never imply a price direction as a recommendation.\n"
+    "4. PERSONALISE via the persona — tie each impact to their role, an interest, a watchlist "
+    "entity, or their region. If you cannot tie it to the persona, it is probably not applicable.\n"
+    "5. CALIBRATE 'horizon' (now|weeks|quarter|year_plus) and 'confidence' (low|medium|high) "
+    "independently and honestly. Low confidence and far horizons are fine.\n"
+    "6. OUTPUT JSON ONLY, matching the requested shape exactly. No prose outside the JSON."
+)
+
+_IMPACT_SHAPE_HINT = (
+    'Return ONLY this JSON shape:\n'
+    '{"headline": "<one sentence>", '
+    '"personal_relevance": {"score": <0-100 integer>, "one_liner": "<why it matters to you>"}, '
+    '"dimensions": {'
+    '"professional": {"applicable": <bool>, "relevance": "", "mechanism": "", '
+    '"watch_items": [], "horizon": "now|weeks|quarter|year_plus", '
+    '"confidence": "low|medium|high", "confidence_rationale": "", '
+    '"evidence": [{"claim": "", "source": "<outlet>"}]}, '
+    '"financial": {<same fields as professional>}, '
+    '"civic": {<same fields as professional>}}, '
+    '"caveats": "<what could change this read>"}\n'
+    "Do NOT include a 'not_advice' field — it is set by the system."
+)
+
+_IMPACT_STRICTER = (
+    "\n\nIMPORTANT: your previous draft broke a rule. The financial dimension must NEVER "
+    "recommend buying/selling/holding/allocating or imply a price direction — describe "
+    "exposure and signals to watch only. Use no hype words. Re-answer."
+)
+
+
+def _impact_source_lines(articles: list[Article]) -> str:
+    out = []
+    for a in articles:
+        outlet = a.source.name if a.source else "Unknown"
+        tag = "paywall" if (a.source and a.source.is_paywalled) else "free"
+        excerpt = (a.snippet or a.title or "")[:240]
+        out.append(f"{outlet} — {excerpt} [{tag}]")
+    return "\n".join(out)
+
+
+def _impact_user(persona: dict, cluster: StoryCluster, articles: list[Article], source_lines: str) -> str:
+    today = _utcnow().date().isoformat()
+    interests = ", ".join(persona.get("interests") or []) or "—"
+    watch = json.dumps(persona.get("watchlist") or [])
+    return (
+        f"Today: {today}. Reader locale: {persona.get('country') or '—'}/"
+        f"{persona.get('region') or '—'}, depth preference: {persona.get('depth_pref') or 'standard'}.\n\n"
+        f"<persona>\nProfession: {persona.get('profession')}\nInterests: {interests}\n"
+        f"Watchlist: {watch}\n</persona>\n\n"
+        f"<story id=\"{cluster.id}\">\nHeadline: {cluster.title}\n"
+        f"Summary: {cluster.summary or ''}\n</story>\n\n"
+        f"<sources>\n{source_lines}\n</sources>\n\n"
+        f"{_IMPACT_SHAPE_HINT}\n"
+        "Omit dimensions that do not truly apply (applicable=false). Ground strictly in the above."
     )
 
 
@@ -110,11 +213,49 @@ async def _load(db: AsyncSession, cluster_id: int):
     articles = (
         await db.execute(
             select(Article)
+            .options(selectinload(Article.source))
             .join(ClusterArticle, ClusterArticle.article_id == Article.id)
             .where(ClusterArticle.cluster_id == cluster_id)
         )
     ).scalars().all()
     return cluster, list(articles)
+
+
+# ── cache helpers ──
+def _cache_read(cluster: StoryCluster, column: str, subkey: str, sh: str):
+    """Return cached lens data for (cluster, subkey) if fresh (matching source-hash + within
+    TTL), else None. Old entries without a timestamp are treated as stale."""
+    entry = (getattr(cluster, column) or {}).get(subkey)
+    if not entry or entry.get("source_hash") != sh:
+        return None
+    gen = entry.get("generated_at")
+    if not gen:
+        return None
+    try:
+        ts = datetime.fromisoformat(gen)
+    except (TypeError, ValueError):
+        return None
+    if (_utcnow() - ts) > timedelta(hours=settings.impact_cache_ttl_hours):
+        return None
+    return entry.get("data")
+
+
+async def _cache_write(db: AsyncSession, cluster: StoryCluster, column: str, subkey: str, sh: str, data: dict):
+    """Server-side JSONB merge — never a read-modify-write — so concurrent writes to different
+    subkeys of the same cluster row can't clobber each other. We then expire just this column on
+    the in-session object so a subsequent read in the same session re-fetches the merged value
+    (the raw UPDATE bypasses the ORM identity map)."""
+    assert column in _LENS_COLUMNS
+    entry = {subkey: {"source_hash": sh, "data": data, "generated_at": _utcnow().isoformat()}}
+    await db.execute(
+        text(
+            f"UPDATE story_clusters SET {column} = "
+            f"COALESCE({column}, '{{}}'::jsonb) || CAST(:entry AS jsonb) WHERE id = :cid"
+        ),
+        {"entry": json.dumps(entry), "cid": cluster.id},
+    )
+    await db.commit()
+    db.expire(cluster, [column])
 
 
 async def get_lens(
@@ -135,10 +276,10 @@ async def get_lens(
         return {"unavailable": True, "reason": "no_sources"}
 
     sh = _source_hash(articles)
-    cache = dict(getattr(cluster, column) or {})
-    entry = cache.get(subkey)
-    if entry and entry.get("source_hash") == sh and not force:
-        return {"cached": True, **entry["data"]}
+    if not force:
+        cached = _cache_read(cluster, column, subkey, sh)
+        if cached is not None:
+            return {"cached": True, **cached}
 
     try:
         data = await llm.generate(prompt, schema=schema)
@@ -150,9 +291,7 @@ async def get_lens(
     if not isinstance(data, dict):
         data = {"result": data}
 
-    cache[subkey] = {"source_hash": sh, "data": data}
-    setattr(cluster, column, cache)
-    await db.commit()
+    await _cache_write(db, cluster, column, subkey, sh, data)
     return {"cached": False, **data}
 
 
@@ -161,44 +300,109 @@ async def analysis(db, cluster_id, lens: str, profession: str | None = None):
     cluster, articles = await _load(db, cluster_id)
     if cluster is None:
         return {"error": "cluster_not_found"}
-    text = _cluster_text(cluster, articles) if articles else ""
+    text_ = _cluster_text(cluster, articles) if articles else ""
     if lens == "key_facts":
         return await get_lens(db, cluster_id, column="analysis_json", subkey="key_facts",
-                              prompt=_prompt_key_facts(text), schema={"facts": []})
+                              prompt=_prompt_key_facts(text_), schema={"facts": []})
     if lens == "5ws":
         return await get_lens(db, cluster_id, column="analysis_json", subkey="5ws",
-                              prompt=_prompt_5ws(text), schema={"who": ""})
+                              prompt=_prompt_5ws(text_), schema={"who": ""})
     if lens == "profession":
         return await get_lens(db, cluster_id, column="analysis_json",
                               subkey=f"prof:{profession_hash(profession)}",
-                              prompt=_prompt_profession(text, profession),
+                              prompt=_prompt_profession(text_, profession),
                               schema={"headline": ""})
     return {"error": "unknown_lens"}
 
 
-async def impact(db, cluster_id, profession: str | None, locale: str = "IN"):
-    # WIIFM impact is profession-specific — without a profession there is no
-    # meaningful answer, so surface that explicitly instead of defaulting to a
-    # generalist read (and before any LLM/get_lens call).
-    if not (profession or "").strip():
-        return {"unavailable": True, "reason": "profession_unset"}
-    cluster, articles = await _load(db, cluster_id)
-    text = _cluster_text(cluster, articles) if cluster and articles else ""
-    return await get_lens(db, cluster_id, column="impact_json",
-                          subkey=f"prof:{profession_hash(profession)}",
-                          prompt=_prompt_impact(text, profession, locale),
-                          schema={"headline": "", "dimensions": []})
-
-
 async def strategic(db, cluster_id):
     cluster, articles = await _load(db, cluster_id)
-    text = _cluster_text(cluster, articles) if cluster and articles else ""
+    text_ = _cluster_text(cluster, articles) if cluster and articles else ""
     return await get_lens(db, cluster_id, column="strategic_json", subkey="default",
-                          prompt=_prompt_strategic(text), schema={"actors": []})
+                          prompt=_prompt_strategic(text_), schema={"actors": []})
 
 
 async def trivia(db, cluster_id, difficulty: str = "medium"):
     cluster, articles = await _load(db, cluster_id)
-    text = _cluster_text(cluster, articles) if cluster and articles else ""
+    text_ = _cluster_text(cluster, articles) if cluster and articles else ""
     return await get_lens(db, cluster_id, column="trivia_json", subkey=difficulty,
-                          prompt=_prompt_trivia(text, difficulty), schema={"questions": []})
+                          prompt=_prompt_trivia(text_, difficulty), schema={"questions": []})
+
+
+async def impact(db, cluster_id, persona: dict, *, force: bool = False):
+    """WIIFM impact (Wave A): per-persona, structured, validated, guardrail-linted.
+
+    Flow (≤2 generations): generate -> StoryImpact.model_validate (regen on failure) ->
+    stamp not_advice -> enforce_honesty + groundedness lint -> no-advice/hype lint (regen,
+    else fail-safe drop the money dimension) -> JSONB-merge cache -> return.
+    """
+    profession = (persona.get("profession") or "").strip()
+    # WIIFM is profession-specific — without one there is no meaningful answer.
+    if not profession:
+        return {"unavailable": True, "reason": "profession_unset"}
+
+    if not settings.impact_v2_enabled:  # legacy flat lens
+        cluster, articles = await _load(db, cluster_id)
+        text_ = _cluster_text(cluster, articles) if cluster and articles else ""
+        return await get_lens(db, cluster_id, column="impact_json",
+                              subkey=f"prof:{profession_hash(profession)}",
+                              prompt=_prompt_impact_legacy(text_, profession, persona.get("country") or "IN"),
+                              schema={"headline": "", "dimensions": []})
+
+    cluster, articles = await _load(db, cluster_id)
+    if cluster is None:
+        return {"error": "cluster_not_found"}
+    if not articles:
+        return {"unavailable": True, "reason": "no_sources"}
+
+    sh = _source_hash(articles)
+    subkey = f"persona:{persona_hash(persona)}"
+    if not force:
+        cached = _cache_read(cluster, "impact_json", subkey, sh)
+        if cached is not None:
+            return {"cached": True, **cached}
+
+    outlets = [a.source.name for a in articles if a.source]
+    user_prompt = _impact_user(persona, cluster, articles, _impact_source_lines(articles))
+
+    MAX_GENS = 2
+    payload: dict | None = None
+    for attempt in range(1, MAX_GENS + 1):
+        try:
+            raw = await llm.generate(
+                user_prompt, system=_IMPACT_SYSTEM, schema={"story_impact": True},
+                max_tokens=settings.impact_max_tokens,
+            )
+        except llm.LLMUnavailable:
+            return {"unavailable": True, "reason": "no_llm_key"}
+        except Exception as e:  # noqa: BLE001 — transient; retry within budget
+            logger.warning("impact_generate_failed", attempt=attempt, error=str(e))
+            continue
+
+        try:
+            obj = StoryImpact.model_validate(raw if isinstance(raw, dict) else {})
+        except Exception as e:  # noqa: BLE001 — invalid shape; regenerate within budget
+            logger.info("impact_invalid", attempt=attempt, error=str(e)[:200])
+            continue
+
+        p = obj.model_dump(mode="json")
+        p["cluster_id"] = str(cluster_id)
+        p["dimensions"]["financial"]["not_advice"] = True  # stamped server-side
+        impact_guardrails.enforce_honesty(p)
+        impact_guardrails.lint_groundedness(p, outlets)
+        advice = impact_guardrails.lint_no_advice(p["dimensions"]["financial"])
+        hype = impact_guardrails.detect_hype(p)
+
+        if (advice or hype) and attempt < MAX_GENS:
+            user_prompt = user_prompt + _IMPACT_STRICTER
+            continue
+        if advice:  # budget exhausted but advice survives → fail safe: drop the money dimension
+            p["dimensions"]["financial"] = FinancialDimension(applicable=False).model_dump(mode="json")
+        payload = p
+        break
+
+    if payload is None:
+        return {"unavailable": True, "reason": "impact_invalid"}
+
+    await _cache_write(db, cluster, "impact_json", subkey, sh, payload)
+    return {"cached": False, **payload}

@@ -1,7 +1,8 @@
 from datetime import datetime
-from typing import Optional
+from enum import Enum
+from typing import Annotated, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models import EmbeddingStatus, FeedbackType, SourceType
 
@@ -178,17 +179,28 @@ class KeyTestResult(BaseModel):
     models_available: int = 0
 
 
-# --- Profile (E3) ---
+# --- Profile (E3 + Wave A persona) ---
+class WatchlistItem(BaseModel):
+    type: str  # "ticker" | "entity" | "region" | "topic"
+    value: str
+
+
 class ProfileOut(BaseModel):
     profession: str | None = None
     locale: str = "IN"
     interests: list[str] = []
+    watchlist: list[WatchlistItem] = []
+    depth_pref: str = "standard"  # brief|standard|expert
+    region: str | None = None
 
 
 class ProfileUpdate(BaseModel):
     profession: str | None = None
     locale: str | None = None
     interests: list[str] | None = None  # topic names; replaces the user's preferences
+    watchlist: list[WatchlistItem] | None = None
+    depth_pref: str | None = None
+    region: str | None = None
 
 
 # --- Gemini key (E1) ---
@@ -219,3 +231,62 @@ class StatsResponse(BaseModel):
     articles_read: int
     stories_saved: int
     topics_explored: int
+
+
+# --- Impact engine v2 (Wave A) ---
+# Pydantic IS the contract (provider structured-output is best-effort; see lenses.impact).
+# `not_advice` is stamped server-side, never model-generated.
+class Horizon(str, Enum):
+    now = "now"
+    weeks = "weeks"
+    quarter = "quarter"
+    year_plus = "year_plus"
+
+
+class Confidence(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+
+
+class Evidence(BaseModel):
+    claim: str
+    source: str  # outlet name; must match a provided source (groundedness lint)
+
+
+class Dimension(BaseModel):
+    applicable: bool = False
+    relevance: str = ""
+    mechanism: str = ""
+    watch_items: list[str] = Field(default_factory=list)
+    horizon: Horizon = Horizon.year_plus
+    confidence: Confidence = Confidence.low
+    confidence_rationale: str = ""
+    evidence: list[Evidence] = Field(default_factory=list)
+
+
+class FinancialDimension(Dimension):
+    not_advice: bool = True  # stamped server-side after validation
+
+
+class PersonalRelevance(BaseModel):
+    score: Annotated[int, Field(ge=0, le=100)]  # range enforced here, not by the provider
+    one_liner: str = ""
+
+
+class Dimensions(BaseModel):
+    professional: Dimension = Field(default_factory=Dimension)
+    financial: FinancialDimension = Field(default_factory=FinancialDimension)
+    civic: Dimension = Field(default_factory=Dimension)
+
+
+class StoryImpact(BaseModel):
+    cluster_id: str = ""
+    headline: str = ""
+    personal_relevance: PersonalRelevance       # required → missing raises
+    dimensions: Dimensions                      # required → missing raises
+    caveats: str = ""
+
+    def relevance_band(self) -> str:
+        s = self.personal_relevance.score
+        return "high" if s >= 70 else ("notable" if s >= 40 else "low")

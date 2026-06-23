@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     summary_model: str = "gpt-4o-mini"
     summary_batch_size: int = 5
 
+    # Impact engine v2 (Wave A): structured + validated + guarded WIIFM.
+    # Flip off to fall back to the legacy free-text impact lens.
+    impact_v2_enabled: bool = True
+    impact_max_tokens: int = 900          # spec §8 (vs the 800 default for other lenses)
+    impact_cache_ttl_hours: int = 24      # spec §4
+
     # Clustering
     cluster_similarity_threshold: float = 0.15  # cosine distance (1 - similarity)
     new_topic_max_similarity: float = 0.6
