@@ -536,3 +536,63 @@ async def frameworks(db, cluster_id):
             for f in selected
         ],
     }
+
+
+# ── Consensus / divergence (Wave B3): the real "where they diverge" metric ──
+_CONSENSUS_SYSTEM = (
+    "You assess whether a story's sources AGREE or DIVERGE. Read the sources and report how many "
+    "concur on the core claim and which outlets dissent and on what specific point. Ground strictly "
+    "in the provided sources and use only their outlet names. No hype."
+)
+
+
+def _consensus_prompt(cluster: StoryCluster, source_lines: str) -> str:
+    return (
+        f"<story>\nHeadline: {cluster.title}\nSummary: {cluster.summary or ''}\n</story>\n\n"
+        f"<sources>\n{source_lines}\n</sources>\n\n"
+        'Respond ONLY as JSON: {"agree_count": <int>, '
+        '"dissent": [{"outlet": "<name>", "point": "what they dispute"}], '
+        '"summary": "<one line, e.g. 6 of 7 align>"}. Use only outlets from the sources.'
+    )
+
+
+async def consensus(db, cluster_id):
+    """One grounded LLM pass → agree/dissent split + the disputed point. Cached; dissent whose
+    outlet isn't a cluster source is dropped (groundedness)."""
+    cluster, articles = await _load(db, cluster_id)
+    if cluster is None:
+        return {"error": "cluster_not_found"}
+    if not articles:
+        return {"unavailable": True, "reason": "no_sources"}
+    outlets = {(a.source.name or "").strip().lower() for a in articles if a.source}
+    sh = _source_hash(articles)
+    cached = _cache_read(cluster, "extra_json", "consensus", sh)
+    if cached is None:
+        try:
+            raw = await llm.generate(
+                _consensus_prompt(cluster, _impact_source_lines(articles)),
+                system=_CONSENSUS_SYSTEM, schema={"summary": ""}, max_tokens=400,
+            )
+        except llm.LLMUnavailable:
+            return {"unavailable": True, "reason": "no_llm_key"}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("consensus_failed", error=str(e))
+            return {"unavailable": True, "reason": "llm_error"}
+        d = raw if isinstance(raw, dict) else {}
+        dissent = [
+            x for x in (d.get("dissent") or [])
+            if isinstance(x, dict) and (x.get("outlet", "").strip().lower() in outlets)
+        ]
+        try:
+            agree = int(d.get("agree_count") or 0)
+        except (TypeError, ValueError):
+            agree = 0
+        data = {
+            "agree_count": agree,
+            "total": len(articles),
+            "dissent": dissent,
+            "summary": str(d.get("summary") or ""),
+        }
+        await _cache_write(db, cluster, "extra_json", "consensus", sh, data)
+        cached = data
+    return cached
