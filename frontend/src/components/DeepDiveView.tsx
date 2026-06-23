@@ -13,9 +13,24 @@ import { IconButton } from "@/components/ui/IconButton";
 import { AgreementMeter } from "@/components/ui/AgreementMeter";
 import { Button } from "@/components/ui/Button";
 import { DeepDiveSkeleton } from "@/components/ui/Skeleton";
-import { getCluster, postFeedback, type ClusterDetail } from "@/lib/api";
+import {
+  getCluster,
+  getClusterImpact,
+  isStoryImpact,
+  postFeedback,
+  type ClusterDetail,
+  type ImpactResult,
+} from "@/lib/api";
 
 type PageState = "loading" | "success" | "error";
+
+/** First sentence of the summary — the lead falls back to this when the impact
+ *  engine has no one-liner yet (no profession / no key / still generating). */
+function firstSentence(s: string | null): string {
+  if (!s) return "";
+  const m = s.match(/^[\s\S]*?[.!?](\s|$)/);
+  return (m ? m[0] : s).trim();
+}
 
 const ShareIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -41,6 +56,19 @@ export default function DeepDiveView({
   const [cluster, setCluster] = useState<ClusterDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [impact, setImpact] = useState<ImpactResult | null>(null);
+
+  // One impact fetch shared by the lead sentence + the ImpactCard.
+  useEffect(() => {
+    if (!clusterId || isNaN(clusterId)) return;
+    let alive = true;
+    getClusterImpact(clusterId)
+      .then((r) => alive && setImpact(r))
+      .catch(() => alive && setImpact({ unavailable: true }));
+    return () => {
+      alive = false;
+    };
+  }, [clusterId]);
 
   const fetchCluster = useCallback(async () => {
     if (!clusterId || isNaN(clusterId)) {
@@ -150,6 +178,40 @@ export default function DeepDiveView({
             >
               {cluster.title}
             </motion.h1>
+
+            {/* The "so what" lead — impact one-liner, else the summary's first sentence */}
+            {(() => {
+              const lead =
+                isStoryImpact(impact) && impact.personal_relevance.one_liner
+                  ? impact.personal_relevance.one_liner
+                  : firstSentence(cluster.summary);
+              return lead ? (
+                <p className="text-title italic text-[var(--text-primary)] mt-3 pl-3 border-l-2 border-[var(--accent)]">
+                  {lead}
+                </p>
+              ) : null;
+            })()}
+
+            {/* Relevance band chip — value shown as text, not colour alone (a11y) */}
+            {isStoryImpact(impact) && (
+              <div className="mt-2">
+                {(() => {
+                  const s = impact.personal_relevance.score;
+                  const color =
+                    s >= 70 ? "var(--accent)" : s >= 40 ? "var(--text-secondary)" : "var(--text-ghost)";
+                  const lbl = s >= 70 ? "HIGH" : s >= 40 ? "NOTABLE" : "LOW";
+                  return (
+                    <span
+                      className="text-mono px-2 py-0.5 rounded-[var(--radius-sm)] bg-[var(--surface-raised)]"
+                      style={{ color }}
+                    >
+                      {s} · {lbl} FOR YOU
+                    </span>
+                  );
+                })()}
+              </div>
+            )}
+
             <div className="mt-4">
               <AgreementMeter
                 coherence={cluster.coherence}
@@ -163,7 +225,7 @@ export default function DeepDiveView({
           <AISummaryBox summary={cluster.summary} coherence={cluster.coherence} clusterId={clusterId} />
 
           {/* What's in it for me */}
-          <ImpactCard clusterId={clusterId} />
+          <ImpactCard clusterId={clusterId} data={impact} />
 
           {/* Source access */}
           <SourceSpectrum freeCount={freeCount} paywallCount={paywallCount} />

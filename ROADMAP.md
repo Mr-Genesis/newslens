@@ -1,19 +1,27 @@
 # Roadmap — NewsLens
 
-## Current Status (MVP)
+> **Active plan:** the post-handover differentiation work lives in [`docs/moat/00-PLAN.md`](docs/moat/00-PLAN.md)
+> (Waves Q–D) with the Wave A engineering spec in [`docs/moat/01-wave-a-eng-plan.md`](docs/moat/01-wave-a-eng-plan.md).
+> This file tracks the older MVP→v2 backlog.
+
+## Current Status
 
 **Working:**
 - Data pipeline: RSS + GDELT fetching, dedup, embedding, clustering (all on APScheduler)
-- API: 12 of 15 planned endpoints implemented
-- Frontend: All 4 screens (Briefing, Discover, Deep Dive, Settings)
+- API: ~27 endpoints (feed, briefing, discover, cluster lenses, profile, settings, search, admin, stats)
+- Frontend: Briefing, Discover, Deep Dive, Search, Saved, Settings, Onboarding
+- Real LLM features shipped (E1–E8): provider abstraction (OpenAI + Gemini), real AI summaries,
+  analysis/5Ws/profession lenses, **per-persona Impact engine v2 (structured + guarded, Wave A)**,
+  strategic lens, trivia/daily quiz
+- Feedback-driven explore/exploit (0.3 is now only a cold-start fallback; swipes move weights)
 - Design system: Full spec + CSS token implementation
-- Mobile: Capacitor Android APK builds (4.75 MB debug APK)
-- Per-user OpenAI API key management with Fernet encryption
+- Mobile: Capacitor Android APK builds
+- Per-user OpenAI + Gemini API key management with Fernet encryption
 
-**Stubbed / Hardcoded:**
-- AI summaries use hardcoded `coherence=0.85` and stub text (no real GPT calls yet)
-- Explore/exploit ratio is hardcoded at 0.3 (feedback-driven adjustment not implemented)
-- Tension lines on discover cards use article titles instead of AI-generated lines
+**Still stubbed / heuristic:**
+- Cluster `coherence` is still a source-count heuristic (0.95/0.85/0.75/0.65), not a learned score —
+  the UI now labels it honestly ("Source overlap"), and a real consensus/divergence metric is Wave B
+- Tension lines on discover cards still fall back to article titles when no AI line exists
 
 ---
 
