@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { getClusterImpact, type LensResult } from "@/lib/api";
+import { IMPACT_SEEN_KEY } from "@/components/ui/PersonalizeBanner";
 
 interface Dimension {
   key: string;
@@ -32,6 +33,14 @@ export function ImpactCard({ clusterId }: { clusterId: number }) {
       alive = false;
     };
   }, [clusterId]);
+
+  // Mark that the user has met an impact card needing a profession — this is what
+  // unlocks the "Personalize your impact lens" banner on the Today screen (E3).
+  useEffect(() => {
+    if (data !== "loading" && data.reason === "profession_unset" && typeof window !== "undefined") {
+      localStorage.setItem(IMPACT_SEEN_KEY, "1");
+    }
+  }, [data]);
 
   if (data === "loading") {
     return <div className="skeleton h-24 rounded-[var(--radius-lg)]" />;
