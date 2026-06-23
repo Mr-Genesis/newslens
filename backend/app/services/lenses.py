@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.models import Article, ClusterArticle, StoryCluster
-from app.schemas import FinancialDimension, StoryImpact
+from app.schemas import AskAnswer, FinancialDimension, StoryImpact
 from app.services import impact_guardrails, llm
 
 logger = structlog.get_logger()
@@ -406,3 +406,61 @@ async def impact(db, cluster_id, persona: dict, *, force: bool = False):
 
     await _cache_write(db, cluster, "impact_json", subkey, sh, payload)
     return {"cached": False, **payload}
+
+
+# ── Ask this story (Wave B1) ──
+_ASK_SYSTEM = (
+    "You answer a reader's question about ONE news story using ONLY the provided sources. "
+    "Ground every claim in those sources and cite the outlet for each. If the sources do not "
+    "answer the question, do NOT guess — set refused=true and leave the answer empty. Never give "
+    "financial or medical advice. Plain, concrete, no hype."
+)
+
+
+def _ask_user(question: str, cluster: StoryCluster, source_lines: str) -> str:
+    return (
+        f"<story>\nHeadline: {cluster.title}\nSummary: {cluster.summary or ''}\n</story>\n\n"
+        f"<sources>\n{source_lines}\n</sources>\n\n"
+        f'Reader question: "{question}"\n\n'
+        'Answer ONLY from the sources. Respond ONLY as JSON: '
+        '{"answer": "...", "citations": [{"claim": "...", "source": "<outlet>"}], '
+        '"refused": false}. If the sources do not answer it, set refused=true and answer to "".'
+    )
+
+
+async def ask(db, cluster_id, question: str):
+    """Grounded, cited Q&A over a single cluster's sources. Refuses (never fabricates) when the
+    answer isn't supported; drops citations whose outlet isn't in the cluster."""
+    cluster, articles = await _load(db, cluster_id)
+    if cluster is None:
+        return {"error": "cluster_not_found"}
+    if not articles:
+        return {"unavailable": True, "reason": "no_sources"}
+    outlets = {(a.source.name or "").strip().lower() for a in articles if a.source}
+
+    try:
+        raw = await llm.generate(
+            _ask_user(question, cluster, _impact_source_lines(articles)),
+            system=_ASK_SYSTEM, schema={"answer": ""}, max_tokens=600,
+        )
+    except llm.LLMUnavailable:
+        return {"unavailable": True, "reason": "no_llm_key"}
+    except Exception as e:  # noqa: BLE001 — never 500 on an LLM/API failure
+        logger.warning("ask_failed", error=str(e))
+        return {"unavailable": True, "reason": "llm_error"}
+
+    try:
+        obj = AskAnswer.model_validate(raw if isinstance(raw, dict) else {})
+    except Exception as e:  # noqa: BLE001
+        logger.info("ask_invalid", error=str(e)[:200])
+        return {"unavailable": True, "reason": "ask_invalid"}
+
+    p = obj.model_dump(mode="json")
+    # Groundedness: keep only citations whose outlet is one of the cluster's sources.
+    p["citations"] = [
+        c for c in p["citations"] if (c.get("source", "").strip().lower() in outlets)
+    ]
+    # No grounded answer text → treat as a refusal rather than an empty assertion.
+    if not (p.get("answer") or "").strip():
+        p["refused"] = True
+    return p

@@ -21,6 +21,7 @@ from app.models import (
 )
 from app.schemas import (
     ArticleOut,
+    AskRequest,
     BriefingResponse,
     BriefingStory,
     ClusterDetailOut,
@@ -1172,6 +1173,20 @@ async def cluster_impact(
 
     persona = await _user_persona(db)
     return await lenses.impact(db, cluster_id, persona, force=bool(refresh))
+
+
+@router.post("/clusters/{cluster_id}/ask")
+async def cluster_ask(
+    cluster_id: int, body: AskRequest, db: AsyncSession = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    from app.services import lenses
+
+    q = (body.question or "").strip()
+    if not q or len(q) > 500:
+        raise HTTPException(status_code=400, detail="question must be 1-500 characters")
+    return await lenses.ask(db, cluster_id, q)
 
 
 _GEOPOLITICS_TOPIC_TERMS = (

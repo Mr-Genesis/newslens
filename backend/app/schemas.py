@@ -290,3 +290,19 @@ class StoryImpact(BaseModel):
     def relevance_band(self) -> str:
         s = self.personal_relevance.score
         return "high" if s >= 70 else ("notable" if s >= 40 else "low")
+
+
+# --- Ask this story (Wave B1) ---
+class AskRequest(BaseModel):
+    question: str
+
+
+class AskCitation(BaseModel):
+    claim: str = ""
+    source: str = ""  # outlet; must match a cluster source (groundedness)
+
+
+class AskAnswer(BaseModel):
+    answer: str = ""
+    citations: list[AskCitation] = Field(default_factory=list)
+    refused: bool = False
