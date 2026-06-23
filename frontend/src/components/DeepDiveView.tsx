@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { AISummaryBox } from "@/components/ui/AISummaryBox";
 import { ImpactCard } from "@/components/ui/ImpactCard";
+import { AskBox } from "@/components/ui/AskBox";
 import { StrategicCard } from "@/components/ui/StrategicCard";
 import { TriviaCard } from "@/components/ui/TriviaCard";
 import { SourceCard } from "@/components/SourceCard";
@@ -250,6 +251,9 @@ export default function DeepDiveView({
 
           {/* Quiz */}
           <TriviaCard clusterId={clusterId} />
+
+          {/* Ask this story (Wave B1) */}
+          <AskBox clusterId={clusterId} />
         </motion.div>
       )}
     </div>

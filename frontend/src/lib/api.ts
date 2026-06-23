@@ -366,6 +366,29 @@ export async function getClusterImpact(clusterId: number): Promise<ImpactResult>
   return fetchJSON(`/clusters/${clusterId}/impact`);
 }
 
+/* Ask this story (Wave B1) */
+export interface AskCitation {
+  claim: string;
+  source: string;
+}
+export interface AskAnswer {
+  answer: string;
+  citations: AskCitation[];
+  refused: boolean;
+}
+export type AskResult = AskAnswer | Unavailable;
+
+export function isAskAnswer(r: AskResult): r is AskAnswer {
+  return !("unavailable" in r);
+}
+
+export async function askStory(clusterId: number, question: string): Promise<AskResult> {
+  return fetchJSON(`/clusters/${clusterId}/ask`, {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
+}
+
 export async function getClusterStrategic(clusterId: number): Promise<LensResult> {
   return fetchJSON(`/clusters/${clusterId}/strategic`);
 }
