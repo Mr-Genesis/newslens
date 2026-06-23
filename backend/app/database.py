@@ -10,9 +10,11 @@ from app.config import settings
 # sslmode as a URL query param through SQLAlchemy.
 _connect_args = {}
 if "neon.tech" in settings.database_url or "supabase" in settings.database_url:
+    # Verified TLS by default (Neon/Supabase present valid public CA certs).
     _ssl_context = ssl_module.create_default_context()
-    _ssl_context.check_hostname = False
-    _ssl_context.verify_mode = ssl_module.CERT_NONE
+    if settings.db_ssl_insecure:
+        _ssl_context.check_hostname = False
+        _ssl_context.verify_mode = ssl_module.CERT_NONE
     _connect_args["ssl"] = _ssl_context
 
 engine = create_async_engine(
