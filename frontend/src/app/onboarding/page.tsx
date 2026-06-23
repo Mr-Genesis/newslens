@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
-import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { getProfile, updateProfile } from "@/lib/api";
 
@@ -19,7 +18,6 @@ export default function OnboardingPage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [interests, setInterests] = useState<string[]>([]);
-  const [profession, setProfession] = useState("");
   const [saving, setSaving] = useState(false);
 
   // Returning users (profile already set) skip onboarding.
@@ -50,10 +48,9 @@ export default function OnboardingPage() {
   async function finish() {
     setSaving(true);
     try {
-      await updateProfile({
-        profession: profession.trim() || null,
-        interests,
-      });
+      // Interests-first: profession/locale are deferred to the "Personalize your
+      // impact lens" banner that appears once the user meets their first impact card.
+      await updateProfile({ interests });
     } catch {
       /* proceed regardless — they can edit in Profile */
     } finally {
@@ -61,6 +58,9 @@ export default function OnboardingPage() {
       router.replace("/");
     }
   }
+
+  // "X of 3 set up": locale (defaulted) + interests + profession (deferred → later).
+  const setupCount = 1 + (interests.length > 0 ? 1 : 0);
 
   if (!ready) {
     return (
@@ -105,19 +105,9 @@ export default function OnboardingPage() {
         })}
       </div>
 
-      <div className="mt-[var(--space-xl)]">
-        <label className="text-small text-[var(--text-secondary)] block mb-1">
-          What&apos;s your field? <span className="text-[var(--text-ghost)]">(optional)</span>
-        </label>
-        <Input
-          value={profession}
-          onChange={(e) => setProfession(e.target.value)}
-          placeholder="e.g. Product Engineer, Doctor, Trader"
-        />
-        <p className="text-mono text-[var(--text-ghost)] mt-2">
-          Powers the &ldquo;What&apos;s in it for me&rdquo; lens on each story.
-        </p>
-      </div>
+      <p className="text-mono text-[var(--text-ghost)] mt-[var(--space-lg)]">
+        {setupCount} of 3 set up &middot; add your profession later for the &ldquo;what&apos;s in it for me&rdquo; lens.
+      </p>
 
       <div className="mt-[var(--space-xl)] flex items-center gap-3">
         <Button variant="primary" onClick={finish} loading={saving} disabled={interests.length === 0}>
