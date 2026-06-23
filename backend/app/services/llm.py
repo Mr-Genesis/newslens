@@ -96,7 +96,8 @@ async def _resolve_gemini_key() -> str | None:
 
 
 async def _generate_openai(prompt: str, *, system: str | None = None,
-                           schema=None, model: str | None = None):
+                           schema=None, model: str | None = None,
+                           max_tokens: int | None = None):
     # Module ref (not a bound import) so tests can patch embeddings._get_client_async.
     from app.services import embeddings
     client = await embeddings._get_client_async()
@@ -110,7 +111,7 @@ async def _generate_openai(prompt: str, *, system: str | None = None,
         "model": model or settings.summary_model,
         "messages": messages,
         "temperature": 0.3,
-        "max_tokens": 800,
+        "max_tokens": max_tokens or 800,
     }
     if schema is not None:
         kwargs["response_format"] = {"type": "json_object"}
@@ -120,13 +121,16 @@ async def _generate_openai(prompt: str, *, system: str | None = None,
 
 
 async def _generate_gemini(prompt: str, *, system: str | None = None,
-                           schema=None, model: str | None = None):
+                           schema=None, model: str | None = None,
+                           max_tokens: int | None = None):
     key = await _resolve_gemini_key()
     if not key:
         raise LLMUnavailable("no Gemini key configured")
     import google.generativeai as genai  # lazy import — only needed on the gemini path
     genai.configure(api_key=key)
     gen_config = {"temperature": 0.3}
+    if max_tokens:
+        gen_config["max_output_tokens"] = max_tokens
     if schema is not None:
         gen_config["response_mime_type"] = "application/json"
     gmodel = genai.GenerativeModel(
@@ -139,12 +143,17 @@ async def _generate_gemini(prompt: str, *, system: str | None = None,
 
 
 async def generate(prompt: str, *, system: str | None = None,
-                   schema=None, model: str | None = None):
+                   schema=None, model: str | None = None,
+                   max_tokens: int | None = None):
     """Generate text (or parsed JSON when ``schema`` is given) via the configured provider.
 
     Raises ``LLMUnavailable`` when no key is configured.
     """
     provider = (settings.generation_provider or "openai").lower()
     if provider == "gemini":
-        return await _generate_gemini(prompt, system=system, schema=schema, model=model)
-    return await _generate_openai(prompt, system=system, schema=schema, model=model)
+        return await _generate_gemini(
+            prompt, system=system, schema=schema, model=model, max_tokens=max_tokens
+        )
+    return await _generate_openai(
+        prompt, system=system, schema=schema, model=model, max_tokens=max_tokens
+    )
