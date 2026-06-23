@@ -77,9 +77,96 @@ def fake_llm(monkeypatch):
     """Patch the generation + embedding seams to deterministic values (no network)."""
     calls = {"generate": 0, "embed": 0}
 
+    def _schema_shape(prompt: str) -> dict:
+        """Return realistic lens-shaped JSON keyed off cues in the prompt.
+
+        The real prompt builders (see app/services/lenses.py) embed distinctive
+        instructions per lens; we sniff those so tests see the true response shape
+        rather than an opaque ``{"stub": true}``.
+        """
+        p = (prompt or "").lower()
+        # E7 strategic / game-theory
+        if "game-theory" in p or "game type" in p or '"game_type"' in p:
+            return {
+                "actors": [
+                    {
+                        "name": "Country A",
+                        "incentive": "secure borders",
+                        "likely_move": "escalate pressure",
+                    },
+                    {
+                        "name": "Country B",
+                        "incentive": "preserve status quo",
+                        "likely_move": "seek allies",
+                    },
+                ],
+                "game_type": "chicken",
+                "second_order": [
+                    "regional alignment shifts",
+                    "commodity price volatility",
+                ],
+                "non_obvious_take": "the loud threats are a bargaining posture, not intent",
+            }
+        # E6 WIIFM impact
+        if '"dimensions"' in p or "what's in it for me" in p:
+            return {
+                "headline": "Modest near-term effect; worth monitoring",
+                "dimensions": [
+                    {"key": "finance", "label": "Finance", "body": "Rates may tick up."},
+                    {"key": "profession", "label": "Your field", "body": "Demand steady."},
+                    {"key": "policy", "label": "Policy", "body": "New rules expected."},
+                    {"key": "daily", "label": "Daily life", "body": "Prices stable."},
+                ],
+            }
+        # E8 trivia / quiz
+        if "multiple-choice" in p or '"answer_index"' in p or "quiz" in p:
+            return {
+                "questions": [
+                    {
+                        "question": "What is the main event?",
+                        "options": ["a", "b", "c", "d"],
+                        "answer_index": 1,
+                        "explanation": "Because b is described in the coverage.",
+                    },
+                    {
+                        "question": "Who is involved?",
+                        "options": ["w", "x", "y", "z"],
+                        "answer_index": 0,
+                        "explanation": "w is named as the key actor.",
+                    },
+                    {
+                        "question": "When did it happen?",
+                        "options": ["1", "2", "3", "4"],
+                        "answer_index": 2,
+                        "explanation": "The third option matches the reported date.",
+                    },
+                ]
+            }
+        # E5 analysis: key_facts
+        if '"facts"' in p or "concrete facts" in p:
+            return {"facts": ["First key fact.", "Second key fact.", "Third key fact."]}
+        # E5 analysis: 5 Ws
+        if "five ws" in p or ('"who"' in p and '"why"' in p):
+            return {
+                "who": "Key parties",
+                "what": "An agreement was reached",
+                "when": "This week",
+                "where": "Geneva",
+                "why": "To de-escalate tensions",
+            }
+        # E5 analysis: profession lens
+        if '"points"' in p or "means specifically for" in p:
+            return {
+                "headline": "Here's the one-line takeaway for you",
+                "points": ["Point one.", "Point two.", "Point three."],
+            }
+        return {"result": "generic"}
+
     async def _gen(prompt, *, system=None, schema=None, model=None):
         calls["generate"] += 1
-        return {"stub": True} if schema is not None else "STUB SUMMARY"
+        if schema is None:
+            return "STUB SUMMARY"
+        return _schema_shape(prompt)
 
     async def _embed(_text):
         calls["embed"] += 1

@@ -52,14 +52,20 @@ def encrypt_value(plaintext: str) -> str:
 
 
 def decrypt_value(stored: str) -> str:
-    """Decrypt a stored value. Handles both encrypted (hex) and plaintext fallback."""
+    """Decrypt a stored value.
+
+    With no ENCRYPTION_KEY configured: the value was stored as plaintext, so return
+    it as-is. With a Fernet configured: decryption MUST succeed — on any failure we
+    raise rather than leak the raw stored ciphertext back to the caller.
+    """
     f = _get_fernet()
     if f is None:
         return stored
 
     try:
         return f.decrypt(bytes.fromhex(stored)).decode()
-    except Exception:
-        # Might be plaintext from before encryption was enabled
-        logger.warning("decrypt_fallback_plaintext")
-        return stored
+    except Exception as e:
+        # A Fernet is configured but the stored value could not be decrypted.
+        # Never return the raw ciphertext — fail loudly instead.
+        logger.error("decrypt_failed", error=str(e))
+        raise ValueError("Failed to decrypt stored value") from e

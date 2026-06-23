@@ -14,6 +14,7 @@ import {
   getStats,
   getTopics,
   updateSettings,
+  updateProfile,
   testApiKey,
   type UserSettings,
   type KeyTestResult,
@@ -97,7 +98,7 @@ export default function ProfilePage() {
     fetchSettings();
   }, [fetchSettings]);
 
-  // Persist topic changes
+  // Persist topic changes — locally (instant) and to the backend (so the feed reflects them)
   const toggleTopic = (topic: string) => {
     setSelectedTopics((prev) => {
       const next = new Set(prev);
@@ -106,7 +107,12 @@ export default function ProfilePage() {
       } else {
         next.add(topic);
       }
-      localStorage.setItem("newslens-topics", JSON.stringify([...next]));
+      const interests = [...next];
+      localStorage.setItem("newslens-topics", JSON.stringify(interests));
+      // Fire-and-forget: persist to profile so topic changes affect the feed.
+      updateProfile({ interests }).catch(() => {
+        /* offline / transient — local state already updated */
+      });
       return next;
     });
   };

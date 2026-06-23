@@ -17,6 +17,55 @@ function todayKey(): string {
   return `newslens-daily-quiz-${new Date().toISOString().slice(0, 10)}`;
 }
 
+const STREAK_KEY = "newslens-daily-quiz-streak";
+
+function ymd(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+interface Streak {
+  lastDate: string;
+  count: number;
+}
+
+function readStreak(): Streak {
+  if (typeof window === "undefined") return { lastDate: "", count: 0 };
+  try {
+    const raw = localStorage.getItem(STREAK_KEY);
+    if (!raw) return { lastDate: "", count: 0 };
+    const parsed = JSON.parse(raw) as Partial<Streak>;
+    return {
+      lastDate: typeof parsed.lastDate === "string" ? parsed.lastDate : "",
+      count: typeof parsed.count === "number" ? parsed.count : 0,
+    };
+  } catch {
+    return { lastDate: "", count: 0 };
+  }
+}
+
+/** Advance the streak on a correct daily answer.
+ *  yesterday → increment, today → unchanged, otherwise → reset to 1. */
+function bumpStreak(): Streak {
+  const today = new Date();
+  const todayStr = ymd(today);
+  const yesterdayStr = ymd(new Date(today.getTime() - 86_400_000));
+  const prev = readStreak();
+
+  let next: Streak;
+  if (prev.lastDate === todayStr) {
+    next = prev;
+  } else if (prev.lastDate === yesterdayStr) {
+    next = { lastDate: todayStr, count: prev.count + 1 };
+  } else {
+    next = { lastDate: todayStr, count: 1 };
+  }
+
+  if (typeof window !== "undefined") {
+    localStorage.setItem(STREAK_KEY, JSON.stringify(next));
+  }
+  return next;
+}
+
 /** E8 — daily quiz as a dismissible Today card (not a tab).
  *  Data: GET /trivia/daily. Tap an option to reveal correct/incorrect + why.
  *  Hides itself when unavailable, empty, or already dismissed today. */
@@ -24,6 +73,11 @@ export function DailyTriviaCard() {
   const [data, setData] = useState<LensResult | "loading">("loading");
   const [pick, setPick] = useState<number | null>(null);
   const [dismissed, setDismissed] = useState(true);
+  const [streak, setStreak] = useState(0);
+
+  useEffect(() => {
+    setStreak(readStreak().count);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -54,6 +108,15 @@ export function DailyTriviaCard() {
   const q = questions[0];
   const answered = pick !== null;
 
+  function answer(oi: number) {
+    if (pick !== null) return;
+    setPick(oi);
+    // Correct daily answer advances the streak; a wrong answer leaves it untouched.
+    if (q && oi === q.answer_index) {
+      setStreak(bumpStreak().count);
+    }
+  }
+
   return (
     <AnimatePresence>
       <motion.div
@@ -64,7 +127,14 @@ export function DailyTriviaCard() {
         className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface)] p-[var(--space-md)] mb-4"
       >
         <div className="flex items-center justify-between mb-3 gap-2">
-          <span className="text-mono text-[var(--accent)]">DAILY QUIZ</span>
+          <div className="flex items-center gap-2">
+            <span className="text-mono text-[var(--accent)]">DAILY QUIZ</span>
+            {streak > 0 && (
+              <span className="text-mono text-[10px] text-[var(--accent)]">
+                STREAK &middot; {streak}
+              </span>
+            )}
+          </div>
           <button
             onClick={dismiss}
             aria-label="Dismiss daily quiz"
@@ -87,7 +157,7 @@ export function DailyTriviaCard() {
                   <button
                     key={oi}
                     disabled={answered}
-                    onClick={() => setPick(oi)}
+                    onClick={() => answer(oi)}
                     className={cn(
                       "text-left text-small px-3 py-2 rounded-[var(--radius-md)] border transition-colors",
                       !answered &&

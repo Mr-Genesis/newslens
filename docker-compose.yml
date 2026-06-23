@@ -16,6 +16,25 @@ services:
       timeout: 3s
       retries: 5
 
+  # Test-only Postgres+pgvector. Launch with: docker-compose --profile test up db-test
+  db-test:
+    image: pgvector/pgvector:pg16
+    profiles: ["test"]
+    restart: "no"
+    environment:
+      POSTGRES_DB: newslens_test
+      POSTGRES_USER: newslens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-newslens_dev}
+    ports:
+      - "${DB_TEST_PORT:-5433}:5432"
+    volumes:
+      - pgdata_test:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U newslens"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -47,3 +66,5 @@ services:
 volumes:
   pgdata:
     name: newslens_pgdata
+  pgdata_test:
+    name: newslens_pgdata_test

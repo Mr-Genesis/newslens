@@ -235,7 +235,7 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
             title=article.title,
             summary=article.snippet,
             created_at=article.published_at or article.fetched_at or datetime.now(timezone.utc),
-            coherence=0.70,
+            coherence=None,  # single-article synthetic cluster has no real coherence
             sources=[
                 ClusterSourceCard(
                     article=ArticleOut(
@@ -306,7 +306,7 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
         title=cluster.title,
         summary=cluster.summary,
         created_at=cluster.created_at,
-        coherence=cluster.coherence if cluster.coherence is not None else 0.85,
+        coherence=getattr(cluster, "coherence", None),  # real coherence; None when not yet computed
         sources=source_cards,
     )
 
@@ -359,6 +359,26 @@ async def create_feedback(
 
 
 # ── Briefing ──────────────────────────────────────────────
+
+
+def _extract_impact_headline(impact_json: dict | None) -> str | None:
+    """Best-effort headline from a cluster's cached impact_json (E6).
+
+    impact_json is keyed by sub-lens (e.g. ``prof:<hash>``) -> {"source_hash", "data"}
+    where ``data`` holds {"headline": ..., "dimensions": [...]}. Returns the first
+    non-empty cached headline found, or None. Makes NO LLM calls.
+    """
+    if not isinstance(impact_json, dict):
+        return None
+    for entry in impact_json.values():
+        if not isinstance(entry, dict):
+            continue
+        data = entry.get("data")
+        if isinstance(data, dict):
+            headline = data.get("headline")
+            if isinstance(headline, str) and headline.strip():
+                return headline.strip()
+    return None
 
 
 @router.get("/briefing", response_model=BriefingResponse)
@@ -462,6 +482,9 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
         pref_weight = prefs.get(topic_id, 0.0) if topic_id else 0.0
         story_weights[cluster.id] = pref_weight
 
+        # E6: best-effort WIIFM headline from ALREADY-cached impact_json (no LLM calls).
+        impact_headline = _extract_impact_headline(cluster.impact_json)
+
         stories.append(
             BriefingStory(
                 title=cluster.title,
@@ -471,6 +494,7 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
                 source_count=len(source_names),
                 coherence=coherence,
                 is_read=is_read,
+                impact_headline=impact_headline,
             )
         )
 
@@ -739,19 +763,30 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     )
     setting = result.scalar_one_or_none()
 
-    if not setting or not setting.openai_api_key_encrypted:
-        return UserSettingsOut(has_openai_key=False)
+    if not setting:
+        return UserSettingsOut(has_openai_key=False, has_gemini_key=False)
 
     from app.services.encryption import decrypt_value
 
-    raw_key = decrypt_value(setting.openai_api_key_encrypted)
-    last4 = raw_key[-4:] if len(raw_key) >= 4 else "****"
+    openai_last4 = None
+    if setting.openai_api_key_encrypted:
+        raw_openai = decrypt_value(setting.openai_api_key_encrypted)
+        openai_last4 = raw_openai[-4:] if len(raw_openai) >= 4 else "****"
+
+    gemini_last4 = None
+    if setting.gemini_api_key_encrypted:
+        raw_gemini = decrypt_value(setting.gemini_api_key_encrypted)
+        gemini_last4 = raw_gemini[-4:] if len(raw_gemini) >= 4 else "****"
 
     return UserSettingsOut(
-        has_openai_key=True,
+        has_openai_key=bool(setting.openai_api_key_encrypted),
         openai_key_verified=setting.openai_key_verified,
-        openai_key_last4=last4,
+        openai_key_last4=openai_last4,
         openai_key_verified_at=setting.openai_key_verified_at,
+        has_gemini_key=bool(setting.gemini_api_key_encrypted),
+        gemini_key_verified=setting.gemini_key_verified,
+        gemini_key_last4=gemini_last4,
+        gemini_key_verified_at=setting.gemini_key_verified_at,
     )
 
 
@@ -1099,9 +1134,31 @@ async def cluster_impact(cluster_id: int, db: AsyncSession = Depends(get_db)):
     return await lenses.impact(db, cluster_id, profession, locale)
 
 
+_GEOPOLITICS_TOPIC_TERMS = (
+    "world", "geopolitics", "international", "politics", "conflict", "defense",
+)
+
+
 @router.get("/clusters/{cluster_id}/strategic")
 async def cluster_strategic(cluster_id: int, db: AsyncSession = Depends(get_db)):
     from app.services import lenses
+
+    # E7: topic-gate. Only offer the strategic/game-theory lens for geopolitics-ish
+    # stories. Load the cluster's topic names (articles -> ArticleTopic -> Topic).
+    topic_rows = (
+        await db.execute(
+            select(Topic.name)
+            .join(ArticleTopic, ArticleTopic.topic_id == Topic.id)
+            .join(ClusterArticle, ClusterArticle.article_id == ArticleTopic.article_id)
+            .where(ClusterArticle.cluster_id == cluster_id)
+        )
+    ).all()
+    topic_names = [r[0].lower() for r in topic_rows if r[0]]
+    is_geopolitical = any(
+        term in name for name in topic_names for term in _GEOPOLITICS_TOPIC_TERMS
+    )
+    if not is_geopolitical:
+        return {"unavailable": True, "reason": "not_offered_for_topic"}
 
     return await lenses.strategic(db, cluster_id)
 
@@ -1163,25 +1220,37 @@ async def list_sources(db: AsyncSession = Depends(get_db)):
 @router.post("/admin/sources")
 async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
     from fastapi import HTTPException
+    from sqlalchemy import or_
 
     name = (body.get("name") or "").strip()
     url = (body.get("url") or "").strip()
     if not name or not url:
         raise HTTPException(status_code=400, detail="name and url are required")
+    rss_url = (body.get("rss_url") or "").strip() or None
+
+    # UPSERT: if a source with the same url OR rss_url exists, update it in place.
+    match_clauses = [Source.url == url]
+    if rss_url:
+        match_clauses.append(Source.rss_url == rss_url)
     existing = (
-        await db.execute(select(Source).where(Source.url == url))
+        await db.execute(select(Source).where(or_(*match_clauses)))
     ).scalar_one_or_none()
     if existing is not None:
-        raise HTTPException(status_code=409, detail="source url already exists")
+        existing.name = name
+        existing.region = body.get("region", existing.region)
+        existing.category = body.get("category", existing.category)
+        await db.commit()
+        return {"id": existing.id, "name": existing.name, "updated": True}
+
     s = Source(
-        name=name, url=url, rss_url=(body.get("rss_url") or "").strip() or None,
+        name=name, url=url, rss_url=rss_url,
         is_paywalled=bool(body.get("is_paywalled", False)),
         source_type=body.get("source_type", "other"),
         region=body.get("region", "global"), category=body.get("category"),
     )
     db.add(s)
     await db.commit()
-    return {"id": s.id, "name": s.name}
+    return {"id": s.id, "name": s.name, "updated": False}
 
 
 # ── E4: hybrid search (semantic + keyword; keyword ranks above semantic-only) ──
@@ -1200,10 +1269,11 @@ async def search(
     results: dict[int, dict] = {}
 
     # Semantic (pgvector NN) — lower priority than exact keyword.
-    from app.services.embeddings import generate_embedding
+    # Use the cached query-embedding helper to avoid re-embedding repeated queries.
+    from app.services.embeddings import embed_query_cached
 
     try:
-        emb = await generate_embedding(query_str)
+        emb = await embed_query_cached(query_str)
     except Exception:  # noqa: BLE001
         emb = None
     if emb is not None:
@@ -1251,15 +1321,23 @@ async def search(
     ).all()
     art_to_cluster = {aid: cid for aid, cid in ca}
 
+    # Group/dedup by cluster: keep only the highest-ranked (lowest rank value)
+    # article per cluster_id. Articles with no cluster stay as individual results.
     out = []
+    seen_clusters: set[int] = set()
     for aid, meta in sorted(results.items(), key=lambda kv: kv[1]["rank"]):
         a = art_map.get(aid)
         if not a:
             continue
+        cluster_id = art_to_cluster.get(a.id)
+        if cluster_id is not None:
+            if cluster_id in seen_clusters:
+                continue
+            seen_clusters.add(cluster_id)
         out.append({
             "id": a.id, "title": a.title, "snippet": a.snippet, "url": a.url,
             "source": SourceOut.model_validate(a.source).model_dump(),
-            "cluster_id": art_to_cluster.get(a.id),
+            "cluster_id": cluster_id,
             "matched_on": meta["matched_on"],
         })
     return {"query": query_str, "results": out}

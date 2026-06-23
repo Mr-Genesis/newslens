@@ -149,11 +149,15 @@ async def _get_or_create_source(domain: str, article_url: str) -> Source | None:
         }
         is_paywalled = any(d in domain for d in paywalled_domains)
 
+        # Infer region from the GDELT query scope.
+        region = "in" if "sourcecountry:IN" in (settings.gdelt_query or "") else "global"
+
         source = Source(
             name=domain.replace("www.", "").split(".")[0].title(),
             url=base_url,
             source_type="other",
             is_paywalled=is_paywalled,
+            region=region,
         )
         session.add(source)
         await session.commit()
