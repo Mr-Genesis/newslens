@@ -34,7 +34,11 @@ class TestHealth:
 
     async def test_health_degraded_when_db_unreachable(self, client: AsyncClient):
         """Health returns degraded when database is down."""
-        with patch("app.api.routes.async_session") as mock_session_maker:
+        # Patch BOTH the session and the raw asyncpg fallback so the result is
+        # deterministic even when a real DB is reachable (e.g. CI/Docker).
+        with patch("app.api.routes.async_session") as mock_session_maker, patch(
+            "asyncpg.connect", side_effect=Exception("Connection refused")
+        ):
             mock_session_maker.return_value.__aenter__ = AsyncMock(
                 side_effect=Exception("Connection refused")
             )
@@ -67,6 +71,10 @@ class TestFeed:
         assert data["per_page"] == 20
         assert "explore_ratio" in data
 
+    @pytest.mark.skip(
+        reason="Superseded by tests/integration/test_feed.py — the /feed cluster "
+        "aggregate uses real SQL the MockSession can't simulate (per eng review)."
+    )
     async def test_feed_returns_articles(self, client: AsyncClient, mock_session: MockSession):
         """Feed includes articles with source information."""
         source = make_source(id=1, name="Reuters", is_paywalled=False)

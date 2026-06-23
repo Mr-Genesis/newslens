@@ -14,6 +14,7 @@ from app.models import (
     Source,
     StoryCluster,
     Topic,
+    User,
     UserFeedback,
     UserPreference,
     UserSetting,
@@ -28,8 +29,11 @@ from app.schemas import (
     FeedbackCreate,
     FeedbackOut,
     FeedResponse,
+    GeminiKeyUpdate,
     HealthResponse,
     KeyTestResult,
+    ProfileOut,
+    ProfileUpdate,
     SavedArticleOut,
     SavedListResponse,
     SourceOut,
@@ -948,3 +952,192 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
         stories_saved=stories_saved,
         topics_explored=topics_explored,
     )
+
+
+# ════════════════════════════════════════════════════════════════════
+# Enhancement program endpoints (E1 / E3 / E5 / E6 / E7 / E8)
+# ════════════════════════════════════════════════════════════════════
+
+async def _user_profession_locale(db: AsyncSession):
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    return (u.profession if u else None), (u.locale if u and u.locale else "IN")
+
+
+# ── E3: profile (profession + locale + interests) ──
+@router.get("/profile", response_model=ProfileOut)
+async def get_profile(db: AsyncSession = Depends(get_db)):
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    prefs = (
+        await db.execute(
+            select(Topic.name)
+            .join(UserPreference, UserPreference.topic_id == Topic.id)
+            .where(UserPreference.user_id == DEFAULT_USER_ID)
+        )
+    ).all()
+    return ProfileOut(
+        profession=u.profession if u else None,
+        locale=(u.locale if u and u.locale else "IN"),
+        interests=[r[0] for r in prefs],
+    )
+
+
+@router.put("/profile", response_model=ProfileOut)
+async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)):
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    if not u:
+        u = User(id=DEFAULT_USER_ID)
+        db.add(u)
+    if body.profession is not None:
+        u.profession = body.profession.strip() or None
+    if body.locale is not None:
+        u.locale = body.locale.strip() or "IN"
+    if body.interests is not None:
+        await db.execute(
+            UserPreference.__table__.delete().where(
+                UserPreference.user_id == DEFAULT_USER_ID
+            )
+        )
+        for raw in body.interests:
+            name = raw.strip()
+            if not name:
+                continue
+            topic = (
+                await db.execute(select(Topic).where(Topic.name == name))
+            ).scalar_one_or_none()
+            if not topic:
+                topic = Topic(name=name)
+                db.add(topic)
+                await db.flush()
+            db.add(
+                UserPreference(user_id=DEFAULT_USER_ID, topic_id=topic.id, weight=1.0)
+            )
+    await db.commit()
+    return await get_profile(db)
+
+
+# ── E1: per-user Gemini key ──
+@router.put("/settings/gemini-key")
+async def set_gemini_key(body: GeminiKeyUpdate, db: AsyncSession = Depends(get_db)):
+    from app.services.encryption import encrypt_value
+
+    # ensure the (single) user row exists (prod seeds it; tests use create_all only)
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    if not u:
+        db.add(User(id=DEFAULT_USER_ID))
+        await db.flush()
+
+    setting = (
+        await db.execute(select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    if not setting:
+        setting = UserSetting(user_id=DEFAULT_USER_ID)
+        db.add(setting)
+    if body.gemini_api_key:
+        setting.gemini_api_key_encrypted = encrypt_value(body.gemini_api_key.strip())
+        setting.gemini_key_verified = False
+        setting.gemini_key_verified_at = None
+    else:
+        setting.gemini_api_key_encrypted = None
+        setting.gemini_key_verified = False
+    await db.commit()
+    return {"has_gemini_key": bool(setting.gemini_api_key_encrypted)}
+
+
+@router.post("/settings/test-gemini-key", response_model=KeyTestResult)
+async def test_gemini_key(db: AsyncSession = Depends(get_db)):
+    from app.services.encryption import decrypt_value
+
+    setting = (
+        await db.execute(select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    if not setting or not setting.gemini_api_key_encrypted:
+        return KeyTestResult(success=False, error="No Gemini key saved")
+    try:
+        key = decrypt_value(setting.gemini_api_key_encrypted)
+        import google.generativeai as genai
+
+        genai.configure(api_key=key)
+        models = list(genai.list_models())
+        setting.gemini_key_verified = True
+        setting.gemini_key_verified_at = datetime.now(timezone.utc)
+        await db.commit()
+        return KeyTestResult(success=True, models_available=len(models))
+    except Exception as e:  # noqa: BLE001
+        return KeyTestResult(success=False, error=str(e)[:200])
+
+
+# ── E5/E6/E7/E8: cluster lenses ──
+@router.get("/clusters/{cluster_id}/analysis")
+async def cluster_analysis(
+    cluster_id: int, lens: str = "key_facts", db: AsyncSession = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    from app.services import lenses
+
+    if lens not in ("key_facts", "5ws", "profession"):
+        raise HTTPException(status_code=400, detail="invalid lens")
+    profession, _ = await _user_profession_locale(db)
+    return await lenses.analysis(db, cluster_id, lens, profession=profession)
+
+
+@router.get("/clusters/{cluster_id}/impact")
+async def cluster_impact(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services import lenses
+
+    profession, locale = await _user_profession_locale(db)
+    return await lenses.impact(db, cluster_id, profession, locale)
+
+
+@router.get("/clusters/{cluster_id}/strategic")
+async def cluster_strategic(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services import lenses
+
+    return await lenses.strategic(db, cluster_id)
+
+
+@router.get("/clusters/{cluster_id}/trivia")
+async def cluster_trivia(
+    cluster_id: int, difficulty: str = "medium", db: AsyncSession = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    from app.services import lenses
+
+    if difficulty not in ("easy", "medium", "hard"):
+        raise HTTPException(status_code=400, detail="invalid difficulty")
+    return await lenses.trivia(db, cluster_id, difficulty)
+
+
+@router.get("/trivia/daily")
+async def trivia_daily(
+    topic: str = "world news", difficulty: str = "medium",
+    db: AsyncSession = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    from app.services import llm
+
+    if difficulty not in ("easy", "medium", "hard"):
+        raise HTTPException(status_code=400, detail="invalid difficulty")
+    prompt = (
+        f"Write 3 {difficulty}-difficulty multiple-choice quiz questions about recent "
+        f"developments in {topic}. Each has exactly 4 options, one correct. "
+        'Respond ONLY as JSON: {"questions": [{"question": "...", '
+        '"options": ["a","b","c","d"], "answer_index": 0, "explanation": "...", '
+        '"difficulty": "' + difficulty + '"}]}'
+    )
+    try:
+        return await llm.generate(prompt, schema={"questions": []})
+    except llm.LLMUnavailable:
+        return {"unavailable": True, "reason": "no_llm_key"}
+    except Exception:  # noqa: BLE001 — graceful degradation, never 500
+        return {"unavailable": True, "reason": "llm_error"}

@@ -68,7 +68,29 @@ async def _resolve_gemini_key() -> str | None:
     now = time.time()
     if _gem_key_cache is not None and (now - _gem_key_ts) < _GEM_TTL:
         return _gem_key_cache
-    key = settings.gemini_api_key or None
+    key = None
+    try:
+        from sqlalchemy import select
+        from app.database import async_session
+        from app.models import UserSetting
+        from app.services.encryption import decrypt_value
+
+        async with async_session() as s:
+            row = (
+                await s.execute(
+                    select(UserSetting).where(
+                        UserSetting.user_id == 1,
+                        UserSetting.gemini_api_key_encrypted.isnot(None),
+                        UserSetting.gemini_key_verified.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+            if row and row.gemini_api_key_encrypted:
+                key = decrypt_value(row.gemini_api_key_encrypted)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("gemini_key_lookup_failed", error=str(e))
+    if not key:
+        key = settings.gemini_api_key or None
     _gem_key_cache, _gem_key_ts = key, now
     return key
 
