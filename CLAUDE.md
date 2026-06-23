@@ -9,8 +9,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cd backend && pip install -r requirements.txt   # Install backend deps
 cd backend && uvicorn app.main:app --reload     # Start backend dev server (port 8000)
 cd backend && pytest                            # Run backend tests
-cd backend && alembic upgrade head              # Run database migrations
+cd backend && alembic upgrade head              # Run database migrations (fresh DB → applies baseline f76aec9da324)
+cd backend && alembic stamp head                # Existing DB built by init_db: mark it at baseline without re-creating
 cd backend && alembic revision --autogenerate -m "description"  # Create new migration
+# Note: alembic env runs via the sync driver (psycopg2). On native Windows-ARM use Docker;
+# autogenerate against an EMPTY DB so it emits CREATE TABLEs (set DATABASE_URL_SYNC + PYTHONPATH=/app).
 
 # Frontend (Next.js)
 cd frontend && npm install                      # Install frontend deps

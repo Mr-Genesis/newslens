@@ -6,6 +6,7 @@ sse-starlette==2.2.1
 # Database
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
+psycopg2-binary==2.9.10  # sync driver for Alembic migrations
 alembic==1.14.1
 pgvector==0.3.6
 
