@@ -169,6 +169,24 @@ class KeyTestResult(BaseModel):
     models_available: int = 0
 
 
+# --- Profile (E3) ---
+class ProfileOut(BaseModel):
+    profession: str | None = None
+    locale: str = "IN"
+    interests: list[str] = []
+
+
+class ProfileUpdate(BaseModel):
+    profession: str | None = None
+    locale: str | None = None
+    interests: list[str] | None = None  # topic names; replaces the user's preferences
+
+
+# --- Gemini key (E1) ---
+class GeminiKeyUpdate(BaseModel):
+    gemini_api_key: str | None = None  # raw key to save, or None to remove
+
+
 # --- Saved ---
 class SavedArticleOut(BaseModel):
     article_id: int

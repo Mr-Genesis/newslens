@@ -110,12 +110,10 @@ export default function SavedPage() {
       {/* Saved articles list */}
       {state === "success" && (
         <div className="pt-3">
-          <div className="flex items-center justify-between mb-3">
-            <h1 className="text-heading text-[var(--text-primary)]">
-              Saved Stories
-            </h1>
+          <div className="flex items-baseline justify-between mb-3">
+            <h1 className="text-hero text-[var(--text-primary)]">Saved</h1>
             <span className="text-mono text-[var(--text-ghost)]">
-              {articles.length} saved
+              {articles.length} {articles.length === 1 ? "story" : "stories"}
             </span>
           </div>
 
@@ -135,7 +133,7 @@ export default function SavedPage() {
                       {article.cluster_id ? (
                         <Link
                           href={storyHref(article.cluster_id)}
-                          className="text-heading text-[var(--text-primary)] line-clamp-2 hover:text-[var(--accent)] transition-colors"
+                          className="text-title text-[var(--text-primary)] line-clamp-2 hover:text-[var(--accent)] transition-colors"
                         >
                           {article.title}
                         </Link>
@@ -144,7 +142,7 @@ export default function SavedPage() {
                           href={article.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-heading text-[var(--text-primary)] line-clamp-2 hover:text-[var(--accent)] transition-colors"
+                          className="text-title text-[var(--text-primary)] line-clamp-2 hover:text-[var(--accent)] transition-colors"
                         >
                           {article.title}
                         </a>

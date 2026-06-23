@@ -14,6 +14,7 @@ from app.models import (
     Source,
     StoryCluster,
     Topic,
+    User,
     UserFeedback,
     UserPreference,
     UserSetting,
@@ -28,8 +29,11 @@ from app.schemas import (
     FeedbackCreate,
     FeedbackOut,
     FeedResponse,
+    GeminiKeyUpdate,
     HealthResponse,
     KeyTestResult,
+    ProfileOut,
+    ProfileUpdate,
     SavedArticleOut,
     SavedListResponse,
     SourceOut,
@@ -104,19 +108,44 @@ async def get_feed(
     results = await db.execute(query.offset(offset).limit(per_page))
     articles = results.scalars().all()
 
+    # Resolve cluster membership + per-cluster source count in aggregate (no N+1).
+    article_ids = [a.id for a in articles]
+    art_to_cluster: dict[int, int] = {}
+    cluster_source_count: dict[int, int] = {}
+    clusters_with_summary: set[int] = set()
+    if article_ids:
+        ca_rows = (
+            await db.execute(
+                select(ClusterArticle.article_id, ClusterArticle.cluster_id).where(
+                    ClusterArticle.article_id.in_(article_ids)
+                )
+            )
+        ).all()
+        for art_id, cl_id in ca_rows:
+            art_to_cluster[art_id] = cl_id
+        cluster_ids = list(set(art_to_cluster.values()))
+        if cluster_ids:
+            cnt_rows = (
+                await db.execute(
+                    select(ClusterArticle.cluster_id, func.count(ClusterArticle.id))
+                    .where(ClusterArticle.cluster_id.in_(cluster_ids))
+                    .group_by(ClusterArticle.cluster_id)
+                )
+            ).all()
+            cluster_source_count = {cl_id: cnt for cl_id, cnt in cnt_rows}
+            sum_rows = (
+                await db.execute(
+                    select(StoryCluster.id).where(
+                        StoryCluster.id.in_(cluster_ids),
+                        StoryCluster.summary.isnot(None),
+                    )
+                )
+            ).all()
+            clusters_with_summary = {row[0] for row in sum_rows}
+
     article_outs = []
     for a in articles:
-        # Count how many sources cover this story (via clusters)
-        cluster_count_q = (
-            select(func.count(ClusterArticle.id))
-            .join(ClusterArticle.cluster)
-            .join(
-                ClusterArticle,
-                ClusterArticle.cluster_id == StoryCluster.id,
-            )
-            .where(ClusterArticle.article_id == a.id)
-        )
-
+        cl_id = art_to_cluster.get(a.id)
         article_outs.append(
             ArticleOut(
                 id=a.id,
@@ -126,9 +155,9 @@ async def get_feed(
                 source=SourceOut.model_validate(a.source),
                 published_at=a.published_at,
                 embedding_status=a.embedding_status,
-                source_count=1,
-                cluster_id=None,
-                has_ai_summary=False,
+                source_count=cluster_source_count.get(cl_id, 1) if cl_id else 1,
+                cluster_id=cl_id,
+                has_ai_summary=cl_id in clusters_with_summary,
             )
         )
 
@@ -923,3 +952,312 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
         stories_saved=stories_saved,
         topics_explored=topics_explored,
     )
+
+
+# ════════════════════════════════════════════════════════════════════
+# Enhancement program endpoints (E1 / E3 / E5 / E6 / E7 / E8)
+# ════════════════════════════════════════════════════════════════════
+
+async def _user_profession_locale(db: AsyncSession):
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    return (u.profession if u else None), (u.locale if u and u.locale else "IN")
+
+
+# ── E3: profile (profession + locale + interests) ──
+@router.get("/profile", response_model=ProfileOut)
+async def get_profile(db: AsyncSession = Depends(get_db)):
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    prefs = (
+        await db.execute(
+            select(Topic.name)
+            .join(UserPreference, UserPreference.topic_id == Topic.id)
+            .where(UserPreference.user_id == DEFAULT_USER_ID)
+        )
+    ).all()
+    return ProfileOut(
+        profession=u.profession if u else None,
+        locale=(u.locale if u and u.locale else "IN"),
+        interests=[r[0] for r in prefs],
+    )
+
+
+@router.put("/profile", response_model=ProfileOut)
+async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)):
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    if not u:
+        u = User(id=DEFAULT_USER_ID)
+        db.add(u)
+    if body.profession is not None:
+        u.profession = body.profession.strip() or None
+    if body.locale is not None:
+        u.locale = body.locale.strip() or "IN"
+    if body.interests is not None:
+        await db.execute(
+            UserPreference.__table__.delete().where(
+                UserPreference.user_id == DEFAULT_USER_ID
+            )
+        )
+        for raw in body.interests:
+            name = raw.strip()
+            if not name:
+                continue
+            topic = (
+                await db.execute(select(Topic).where(Topic.name == name))
+            ).scalar_one_or_none()
+            if not topic:
+                topic = Topic(name=name)
+                db.add(topic)
+                await db.flush()
+            db.add(
+                UserPreference(user_id=DEFAULT_USER_ID, topic_id=topic.id, weight=1.0)
+            )
+    await db.commit()
+    return await get_profile(db)
+
+
+# ── E1: per-user Gemini key ──
+@router.put("/settings/gemini-key")
+async def set_gemini_key(body: GeminiKeyUpdate, db: AsyncSession = Depends(get_db)):
+    from app.services.encryption import encrypt_value
+
+    # ensure the (single) user row exists (prod seeds it; tests use create_all only)
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    if not u:
+        db.add(User(id=DEFAULT_USER_ID))
+        await db.flush()
+
+    setting = (
+        await db.execute(select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    if not setting:
+        setting = UserSetting(user_id=DEFAULT_USER_ID)
+        db.add(setting)
+    if body.gemini_api_key:
+        setting.gemini_api_key_encrypted = encrypt_value(body.gemini_api_key.strip())
+        setting.gemini_key_verified = False
+        setting.gemini_key_verified_at = None
+    else:
+        setting.gemini_api_key_encrypted = None
+        setting.gemini_key_verified = False
+    await db.commit()
+    return {"has_gemini_key": bool(setting.gemini_api_key_encrypted)}
+
+
+@router.post("/settings/test-gemini-key", response_model=KeyTestResult)
+async def test_gemini_key(db: AsyncSession = Depends(get_db)):
+    from app.services.encryption import decrypt_value
+
+    setting = (
+        await db.execute(select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    if not setting or not setting.gemini_api_key_encrypted:
+        return KeyTestResult(success=False, error="No Gemini key saved")
+    try:
+        key = decrypt_value(setting.gemini_api_key_encrypted)
+        import google.generativeai as genai
+
+        genai.configure(api_key=key)
+        models = list(genai.list_models())
+        setting.gemini_key_verified = True
+        setting.gemini_key_verified_at = datetime.now(timezone.utc)
+        await db.commit()
+        return KeyTestResult(success=True, models_available=len(models))
+    except Exception as e:  # noqa: BLE001
+        return KeyTestResult(success=False, error=str(e)[:200])
+
+
+# ── E5/E6/E7/E8: cluster lenses ──
+@router.get("/clusters/{cluster_id}/analysis")
+async def cluster_analysis(
+    cluster_id: int, lens: str = "key_facts", db: AsyncSession = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    from app.services import lenses
+
+    if lens not in ("key_facts", "5ws", "profession"):
+        raise HTTPException(status_code=400, detail="invalid lens")
+    profession, _ = await _user_profession_locale(db)
+    return await lenses.analysis(db, cluster_id, lens, profession=profession)
+
+
+@router.get("/clusters/{cluster_id}/impact")
+async def cluster_impact(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services import lenses
+
+    profession, locale = await _user_profession_locale(db)
+    return await lenses.impact(db, cluster_id, profession, locale)
+
+
+@router.get("/clusters/{cluster_id}/strategic")
+async def cluster_strategic(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services import lenses
+
+    return await lenses.strategic(db, cluster_id)
+
+
+@router.get("/clusters/{cluster_id}/trivia")
+async def cluster_trivia(
+    cluster_id: int, difficulty: str = "medium", db: AsyncSession = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    from app.services import lenses
+
+    if difficulty not in ("easy", "medium", "hard"):
+        raise HTTPException(status_code=400, detail="invalid difficulty")
+    return await lenses.trivia(db, cluster_id, difficulty)
+
+
+@router.get("/trivia/daily")
+async def trivia_daily(
+    topic: str = "world news", difficulty: str = "medium",
+    db: AsyncSession = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    from app.services import llm
+
+    if difficulty not in ("easy", "medium", "hard"):
+        raise HTTPException(status_code=400, detail="invalid difficulty")
+    prompt = (
+        f"Write 3 {difficulty}-difficulty multiple-choice quiz questions about recent "
+        f"developments in {topic}. Each has exactly 4 options, one correct. "
+        'Respond ONLY as JSON: {"questions": [{"question": "...", '
+        '"options": ["a","b","c","d"], "answer_index": 0, "explanation": "...", '
+        '"difficulty": "' + difficulty + '"}]}'
+    )
+    try:
+        return await llm.generate(prompt, schema={"questions": []})
+    except llm.LLMUnavailable:
+        return {"unavailable": True, "reason": "no_llm_key"}
+    except Exception:  # noqa: BLE001 — graceful degradation, never 500
+        return {"unavailable": True, "reason": "llm_error"}
+
+
+# ── E2: admin sources ──
+@router.get("/admin/sources")
+async def list_sources(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Source).order_by(Source.name))).scalars().all()
+    return [
+        {
+            "id": s.id, "name": s.name, "url": s.url, "rss_url": s.rss_url,
+            "region": s.region, "category": s.category,
+            "is_paywalled": s.is_paywalled,
+            "source_type": s.source_type.value if s.source_type else None,
+        }
+        for s in rows
+    ]
+
+
+@router.post("/admin/sources")
+async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
+    from fastapi import HTTPException
+
+    name = (body.get("name") or "").strip()
+    url = (body.get("url") or "").strip()
+    if not name or not url:
+        raise HTTPException(status_code=400, detail="name and url are required")
+    existing = (
+        await db.execute(select(Source).where(Source.url == url))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="source url already exists")
+    s = Source(
+        name=name, url=url, rss_url=(body.get("rss_url") or "").strip() or None,
+        is_paywalled=bool(body.get("is_paywalled", False)),
+        source_type=body.get("source_type", "other"),
+        region=body.get("region", "global"), category=body.get("category"),
+    )
+    db.add(s)
+    await db.commit()
+    return {"id": s.id, "name": s.name}
+
+
+# ── E4: hybrid search (semantic + keyword; keyword ranks above semantic-only) ──
+@router.get("/search")
+async def search(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    query_str = q.strip()
+    if not query_str:
+        raise HTTPException(status_code=400, detail="empty query")
+
+    results: dict[int, dict] = {}
+
+    # Semantic (pgvector NN) — lower priority than exact keyword.
+    from app.services.embeddings import generate_embedding
+
+    try:
+        emb = await generate_embedding(query_str)
+    except Exception:  # noqa: BLE001
+        emb = None
+    if emb is not None:
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT id FROM articles WHERE embedding IS NOT NULL "
+                    "ORDER BY embedding <=> :v LIMIT :k"
+                ),
+                {"v": str(emb), "k": limit},
+            )
+        ).all()
+        for i, (aid,) in enumerate(rows):
+            results[aid] = {"id": aid, "matched_on": "meaning", "rank": 100 + i}
+
+    # Keyword (exact substring) — promote to the top.
+    kw_rows = (
+        await db.execute(
+            select(Article.id).where(Article.title.ilike(f"%{query_str}%")).limit(limit)
+        )
+    ).all()
+    for (aid,) in kw_rows:
+        if aid in results:
+            results[aid]["matched_on"] = "topic+meaning"
+            results[aid]["rank"] = 0
+        else:
+            results[aid] = {"id": aid, "matched_on": "topic", "rank": 0}
+
+    ids = list(results.keys())
+    if not ids:
+        return {"query": query_str, "results": []}
+
+    arts = (
+        await db.execute(
+            select(Article).options(selectinload(Article.source)).where(Article.id.in_(ids))
+        )
+    ).scalars().all()
+    art_map = {a.id: a for a in arts}
+    ca = (
+        await db.execute(
+            select(ClusterArticle.article_id, ClusterArticle.cluster_id).where(
+                ClusterArticle.article_id.in_(ids)
+            )
+        )
+    ).all()
+    art_to_cluster = {aid: cid for aid, cid in ca}
+
+    out = []
+    for aid, meta in sorted(results.items(), key=lambda kv: kv[1]["rank"]):
+        a = art_map.get(aid)
+        if not a:
+            continue
+        out.append({
+            "id": a.id, "title": a.title, "snippet": a.snippet, "url": a.url,
+            "source": SourceOut.model_validate(a.source).model_dump(),
+            "cluster_id": art_to_cluster.get(a.id),
+            "matched_on": meta["matched_on"],
+        })
+    return {"query": query_str, "results": out}

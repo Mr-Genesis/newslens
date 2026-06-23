@@ -6,39 +6,29 @@ interface ConfidenceScoreProps {
   className?: string;
 }
 
-function getConfidenceLabel(coherence: number): {
-  label: string;
-  filled: number;
-} {
-  if (coherence >= 0.8) return { label: "High confidence", filled: 3 };
-  if (coherence >= 0.6) return { label: "Moderate", filled: 2 };
-  return { label: "Low confidence", filled: 1 };
+/** Plain-language trust signal (v2): "N sources · NN% agreement ●●●●".
+ *  Colour-coded by tier; "coherence" is never shown to users.
+ *  See docs/content/COPY-GUIDELINES.md §4. */
+function tier(coherence: number): { pct: number; color: string; filled: number } {
+  const pct = Math.round(coherence * 100);
+  const filled = Math.max(1, Math.min(4, Math.round(coherence * 4)));
+  if (coherence >= 0.8) return { pct, color: "var(--agree)", filled };
+  if (coherence >= 0.6) return { pct, color: "var(--warning)", filled };
+  return { pct, color: "var(--text-muted)", filled };
 }
 
-function ConfidenceDots({ filled }: { filled: number }) {
-  const total = 4;
+function Dots({ filled, color }: { filled: number; color: string }) {
   return (
-    <span className="inline-flex items-center gap-[2px]">
-      {Array.from({ length: total }, (_, i) => (
-        <svg
+    <span className="inline-flex items-center gap-[2px]" aria-hidden="true">
+      {Array.from({ length: 4 }, (_, i) => (
+        <span
           key={i}
-          width="6"
-          height="6"
-          viewBox="0 0 6 6"
-          className="inline-block"
-        >
-          <circle
-            cx="3"
-            cy="3"
-            r="2.5"
-            fill={
-              i < filled
-                ? "currentColor"
-                : "var(--text-ghost)"
-            }
-            opacity={i < filled ? 1 : 0.3}
-          />
-        </svg>
+          className="inline-block w-1 h-1 rounded-full"
+          style={{
+            backgroundColor: i < filled ? color : "var(--text-ghost)",
+            opacity: i < filled ? 1 : 0.4,
+          }}
+        />
       ))}
     </span>
   );
@@ -49,25 +39,17 @@ export function ConfidenceScore({
   coherence,
   className,
 }: ConfidenceScoreProps) {
-  const isLow = coherence < 0.6;
-  const { label, filled } = getConfidenceLabel(coherence);
+  const { pct, color, filled } = tier(coherence);
 
   return (
-    <span
-      className={cn("text-mono inline-flex items-center gap-1.5", className)}
-    >
-      <span className="text-[var(--accent)]">
+    <span className={cn("text-mono inline-flex items-center gap-1.5", className)}>
+      <span className="text-[var(--text-secondary)]">
         {sourceCount} {sourceCount === 1 ? "source" : "sources"}
       </span>
       <span className="text-[var(--text-ghost)]">&middot;</span>
-      <span
-        className={cn(
-          "inline-flex items-center gap-1",
-          isLow ? "text-[var(--warning)]" : "text-[var(--text-muted)]"
-        )}
-      >
-        {label}
-        <ConfidenceDots filled={filled} />
+      <span className="inline-flex items-center gap-1.5" style={{ color }}>
+        <span>{pct}% agreement</span>
+        <Dots filled={filled} color={color} />
       </span>
     </span>
   );

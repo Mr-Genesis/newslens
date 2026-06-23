@@ -1,0 +1,25 @@
+[
+  {"name": "The Guardian - World", "url": "https://www.theguardian.com", "rss_url": "https://www.theguardian.com/world/rss", "is_paywalled": false, "source_type": "newspaper", "region": "global", "category": "world"},
+  {"name": "BBC News", "url": "https://www.bbc.com/news", "rss_url": "http://feeds.bbci.co.uk/news/rss.xml", "is_paywalled": false, "source_type": "newspaper", "region": "global", "category": "world"},
+  {"name": "NPR News", "url": "https://www.npr.org", "rss_url": "https://feeds.npr.org/1001/rss.xml", "is_paywalled": false, "source_type": "channel", "region": "global", "category": "world"},
+  {"name": "Al Jazeera", "url": "https://www.aljazeera.com", "rss_url": "https://www.aljazeera.com/xml/rss/all.xml", "is_paywalled": false, "source_type": "channel", "region": "global", "category": "world"},
+  {"name": "Ars Technica", "url": "https://arstechnica.com", "rss_url": "https://feeds.arstechnica.com/arstechnica/index", "is_paywalled": false, "source_type": "blog", "region": "global", "category": "technology"},
+  {"name": "TechCrunch", "url": "https://techcrunch.com", "rss_url": "https://techcrunch.com/feed/", "is_paywalled": false, "source_type": "blog", "region": "global", "category": "technology"},
+  {"name": "The Verge", "url": "https://www.theverge.com", "rss_url": "https://www.theverge.com/rss/index.xml", "is_paywalled": false, "source_type": "blog", "region": "global", "category": "technology"},
+  {"name": "Hacker News", "url": "https://news.ycombinator.com", "rss_url": "https://hnrss.org/frontpage", "is_paywalled": false, "source_type": "other", "region": "global", "category": "technology"},
+  {"name": "Nature News", "url": "https://www.nature.com", "rss_url": "https://www.nature.com/nature.rss", "is_paywalled": true, "source_type": "newspaper", "region": "global", "category": "science"},
+  {"name": "Wall Street Journal", "url": "https://www.wsj.com", "rss_url": "https://feeds.a.dj.com/rss/RSSWorldNews.xml", "is_paywalled": true, "source_type": "newspaper", "region": "global", "category": "business"},
+
+  {"name": "The Hindu - National", "url": "https://www.thehindu.com", "rss_url": "https://www.thehindu.com/news/national/feeder/default.rss", "is_paywalled": false, "source_type": "newspaper", "region": "in", "category": "national"},
+  {"name": "Times of India - Top", "url": "https://timesofindia.indiatimes.com", "rss_url": "https://timesofindia.indiatimes.com/rssfeedstopstories.cms", "is_paywalled": false, "source_type": "newspaper", "region": "in", "category": "national"},
+  {"name": "The Indian Express", "url": "https://indianexpress.com", "rss_url": "https://indianexpress.com/feed/", "is_paywalled": false, "source_type": "newspaper", "region": "in", "category": "national"},
+  {"name": "Hindustan Times - India", "url": "https://www.hindustantimes.com", "rss_url": "https://www.hindustantimes.com/feeds/rss/india-news/rssfeed.xml", "is_paywalled": false, "source_type": "newspaper", "region": "in", "category": "national"},
+  {"name": "NDTV - India", "url": "https://www.ndtv.com", "rss_url": "https://feeds.feedburner.com/ndtvnews-india-news", "is_paywalled": false, "source_type": "channel", "region": "in", "category": "national"},
+  {"name": "The Print", "url": "https://theprint.in", "rss_url": "https://theprint.in/feed/", "is_paywalled": false, "source_type": "blog", "region": "in", "category": "national"},
+  {"name": "Scroll.in", "url": "https://scroll.in", "rss_url": "https://feeds.feedburner.com/ScrollinArticles.rss", "is_paywalled": false, "source_type": "blog", "region": "in", "category": "national"},
+  {"name": "LiveMint", "url": "https://www.livemint.com", "rss_url": "https://www.livemint.com/rss/news", "is_paywalled": false, "source_type": "newspaper", "region": "in", "category": "business"},
+  {"name": "Moneycontrol", "url": "https://www.moneycontrol.com", "rss_url": "https://www.moneycontrol.com/rss/latestnews.xml", "is_paywalled": false, "source_type": "newspaper", "region": "in", "category": "business"},
+  {"name": "Economic Times - Markets", "url": "https://economictimes.indiatimes.com", "rss_url": "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms", "is_paywalled": false, "source_type": "newspaper", "region": "in", "category": "business"},
+  {"name": "Business Standard", "url": "https://www.business-standard.com", "rss_url": "https://www.business-standard.com/rss/latest.rss", "is_paywalled": false, "source_type": "newspaper", "region": "in", "category": "business"},
+  {"name": "PIB India", "url": "https://pib.gov.in", "rss_url": "https://pib.gov.in/RssMain.aspx?ModId=6&Lang=1&Regid=3", "is_paywalled": false, "source_type": "wire", "region": "in", "category": "policy"}
+]

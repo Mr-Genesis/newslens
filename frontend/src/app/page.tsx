@@ -99,6 +99,7 @@ export default function BriefingPage() {
   );
 
   return (
+    <PullToRefresh onRefresh={() => fetchBriefing(true)}>
     <div className="mx-auto max-w-[640px] w-full px-[var(--space-md)]">
       {/* Greeting + Date */}
       {(state === "success" || state === "refreshing") && (
@@ -107,19 +108,16 @@ export default function BriefingPage() {
           animate={{ opacity: 1 }}
           className="pt-4 pb-2"
         >
-          <div className="flex items-baseline justify-between">
-            <h1 className="text-title text-[var(--text-primary)]">
-              {getGreeting()}
-            </h1>
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="text-mono text-[var(--accent)] uppercase">
+              {getGreeting()} &middot; {formatDate()}
+            </p>
             {briefing && isStale(briefing.generated_at) && (
               <Badge variant="accent" size="md">
                 Stale
               </Badge>
             )}
           </div>
-          <p className="text-small text-[var(--text-muted)] mt-0.5">
-            {formatDate()}
-          </p>
         </motion.div>
       )}
 
@@ -231,6 +229,9 @@ export default function BriefingPage() {
           {/* Hero story */}
           {heroStory && (
             <div className="mb-4">
+              <h2 className="text-category text-[var(--text-muted)] mb-2">
+                TOP STORY
+              </h2>
               <HeroStoryCard story={heroStory} />
             </div>
           )}
@@ -265,8 +266,10 @@ export default function BriefingPage() {
         </motion.div>
       )}
     </div>
+    </PullToRefresh>
   );
 }
 
 // Need Badge import for stale indicator
 import { Badge } from "@/components/ui/Badge";
+import { PullToRefresh } from "@/components/PullToRefresh";

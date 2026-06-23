@@ -39,6 +39,25 @@ async def init_db():
         for stmt in [
             "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS coherence FLOAT",
             "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS summary_generated_at TIMESTAMPTZ",
+            # E5/E6/E7/E8: cached LLM lens outputs + source-set hash for invalidation
+            "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS analysis_json JSONB",
+            "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS impact_json JSONB",
+            "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS strategic_json JSONB",
+            "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS trivia_json JSONB",
+            "ALTER TABLE story_clusters ADD COLUMN IF NOT EXISTS source_hash VARCHAR(64)",
+            # E3: profession-agnostic personalization
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS profession VARCHAR(255)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS locale VARCHAR(16) DEFAULT 'IN'",
+            # E1: per-user Gemini key
+            "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS gemini_api_key_encrypted TEXT",
+            "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS gemini_key_verified BOOLEAN DEFAULT FALSE",
+            "ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS gemini_key_verified_at TIMESTAMPTZ",
+            # E2: source region + category
+            "ALTER TABLE sources ADD COLUMN IF NOT EXISTS region VARCHAR(16) DEFAULT 'global'",
+            "ALTER TABLE sources ADD COLUMN IF NOT EXISTS category VARCHAR(64)",
+            # E4: HNSW index for fast vector search (clustering + /search)
+            "CREATE INDEX IF NOT EXISTS ix_articles_embedding_hnsw "
+            "ON articles USING hnsw (embedding vector_cosine_ops)",
             # Add 'read' to feedback_type enum if not present
             "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'read' AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'feedbacktype')) THEN ALTER TYPE feedbacktype ADD VALUE 'read'; END IF; END $$",
         ]:

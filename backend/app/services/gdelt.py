@@ -35,7 +35,7 @@ async def fetch_gdelt():
             response = await client.get(
                 GDELT_DOC_API,
                 params={
-                    "query": "sourcecountry:US",
+                    "query": settings.gdelt_query,
                     "mode": "artlist",
                     "maxrecords": "50",
                     "format": "json",

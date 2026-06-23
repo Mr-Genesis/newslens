@@ -1,0 +1,31 @@
+{
+  "_comment": "Source of truth for NewsLens user-facing copy. The check-copy guard reads `banned`. Humans read `glossary`. Update both together. See COPY-GUIDELINES.md.",
+  "version": 1,
+  "banned": [
+    { "term": "src:", "kind": "pattern", "severity": "error", "scope": "any", "why": "Internal abbreviation for source count.", "useInstead": "\"N sources\"" },
+    { "term": "coh:", "kind": "pattern", "severity": "error", "scope": "any", "why": "Internal abbreviation for the coherence score.", "useInstead": "\"NN% agreement\"" },
+    { "term": "embeddings", "kind": "word", "severity": "error", "scope": "string", "why": "ML implementation detail. Users don't know or care what an embedding is.", "useInstead": "Describe the benefit, e.g. \"to find related stories\"." },
+    { "term": "pgvector", "kind": "word", "severity": "error", "scope": "string", "why": "Database extension name. Pure plumbing.", "useInstead": "(never surface)" },
+    { "term": "GDELT", "kind": "word", "severity": "error", "scope": "string", "why": "Internal data-pipeline source name.", "useInstead": "(never surface)" },
+    { "term": "trafilatura", "kind": "word", "severity": "error", "scope": "string", "why": "Internal extraction library.", "useInstead": "(never surface)" },
+    { "term": "rapidfuzz", "kind": "word", "severity": "error", "scope": "string", "why": "Internal dedup library.", "useInstead": "(never surface)" },
+    { "term": "asyncpg", "kind": "word", "severity": "error", "scope": "string", "why": "Internal DB driver.", "useInstead": "(never surface)" },
+    { "term": "Fernet", "kind": "word", "severity": "error", "scope": "string", "why": "Internal encryption scheme.", "useInstead": "\"encrypted\" / \"stored securely\"" },
+    { "term": "dedup", "kind": "word", "severity": "error", "scope": "string", "why": "Engineering shorthand for deduplication.", "useInstead": "(hidden) / \"removed duplicates\"" },
+    { "term": "backfill", "kind": "word", "severity": "error", "scope": "string", "why": "Pipeline-job jargon.", "useInstead": "(hidden)" },
+    { "term": "coherence", "kind": "word", "severity": "warn", "scope": "jsx-text", "why": "ML clustering term; meaningless to readers.", "useInstead": "\"agreement\" / \"consensus\"" },
+    { "term": "cluster", "kind": "word", "severity": "warn", "scope": "jsx-text", "why": "Internal term for a grouped story.", "useInstead": "\"story\"" },
+    { "term": "exploit", "kind": "word", "severity": "warn", "scope": "jsx-text", "why": "Half of \"explore/exploit\" recommender jargon.", "useInstead": "\"Your topics\"" }
+  ],
+  "glossary": [
+    { "internal": "story_cluster / cluster", "user": "story", "note": "A story groups multiple source articles covering the same event." },
+    { "internal": "source_count / src", "user": "N sources", "note": "How many outlets reported it. Breadth of corroboration." },
+    { "internal": "coherence / coh (0–1)", "user": "NN% agreement", "note": "How aligned the sources are. Tiers: ≥80% high (green), 60–79% moderate (amber), <60% mixed (grey). Say \"agreement\"/\"consensus\", never \"coherence\"." },
+    { "internal": "confidence label", "user": "agreement", "note": "Legacy label said \"High confidence\". Standardise on \"agreement\" to match the meter + pills." },
+    { "internal": "embedding / pgvector NN", "user": "(don't expose)", "note": "Describe the outcome instead: \"find related stories\", \"AI summaries\"." },
+    { "internal": "explore / exploit mix", "user": "Your topics / Discover new", "note": "Never show the ratio or the word \"exploit\"." },
+    { "internal": "is_paywalled", "user": "Paywall / Free", "note": "Always pair: lead with \"Free\" sources, tag the rest \"Paywall\"." },
+    { "internal": "GDELT / RSS / fetcher / trafilatura", "user": "(hidden)", "note": "Never name the ingestion pipeline in the UI." },
+    { "internal": "embedding_status (pending/complete/failed)", "user": "(hidden)", "note": "If a summary isn't ready, show the snippet — don't expose the status enum." }
+  ]
+}

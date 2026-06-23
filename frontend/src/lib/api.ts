@@ -255,3 +255,118 @@ export interface StatsResponse {
 export async function getStats(): Promise<StatsResponse> {
   return fetchJSON("/stats");
 }
+
+/* ── Profile (E3) ── */
+
+export interface Profile {
+  profession: string | null;
+  locale: string;
+  interests: string[];
+}
+
+export async function getProfile(): Promise<Profile> {
+  return fetchJSON("/profile");
+}
+
+export async function updateProfile(
+  data: Partial<{ profession: string | null; locale: string; interests: string[] }>
+): Promise<Profile> {
+  return fetchJSON("/profile", { method: "PUT", body: JSON.stringify(data) });
+}
+
+/* ── Gemini key (E1) ── */
+
+export async function setGeminiKey(
+  gemini_api_key: string | null
+): Promise<{ has_gemini_key: boolean }> {
+  return fetchJSON("/settings/gemini-key", {
+    method: "PUT",
+    body: JSON.stringify({ gemini_api_key }),
+  });
+}
+
+export async function testGeminiKey(): Promise<KeyTestResult> {
+  return fetchJSON("/settings/test-gemini-key", { method: "POST" });
+}
+
+/* ── Cluster lenses (E5/E6/E7/E8) ── */
+
+export interface LensResult {
+  cached?: boolean;
+  unavailable?: boolean;
+  reason?: string;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export type AnalysisLens = "key_facts" | "5ws" | "profession";
+export type Difficulty = "easy" | "medium" | "hard";
+
+export async function getClusterAnalysis(
+  clusterId: number,
+  lens: AnalysisLens
+): Promise<LensResult> {
+  return fetchJSON(`/clusters/${clusterId}/analysis?lens=${lens}`);
+}
+
+export async function getClusterImpact(clusterId: number): Promise<LensResult> {
+  return fetchJSON(`/clusters/${clusterId}/impact`);
+}
+
+export async function getClusterStrategic(clusterId: number): Promise<LensResult> {
+  return fetchJSON(`/clusters/${clusterId}/strategic`);
+}
+
+export async function getClusterTrivia(
+  clusterId: number,
+  difficulty: Difficulty = "medium"
+): Promise<LensResult> {
+  return fetchJSON(`/clusters/${clusterId}/trivia?difficulty=${difficulty}`);
+}
+
+export async function getDailyTrivia(
+  topic = "world news",
+  difficulty: Difficulty = "medium"
+): Promise<LensResult> {
+  return fetchJSON(
+    `/trivia/daily?topic=${encodeURIComponent(topic)}&difficulty=${difficulty}`
+  );
+}
+
+/* ── Search (E4) ── */
+
+export interface SearchResultItem {
+  id: number;
+  title: string;
+  snippet: string | null;
+  url: string;
+  source: Source;
+  cluster_id: number | null;
+  matched_on: string;
+}
+
+export interface SearchResponse {
+  query: string;
+  results: SearchResultItem[];
+}
+
+export async function search(q: string): Promise<SearchResponse> {
+  return fetchJSON(`/search?q=${encodeURIComponent(q)}`);
+}
+
+/* ── Admin sources (E2) ── */
+
+export interface AdminSource {
+  id: number;
+  name: string;
+  url: string;
+  rss_url: string | null;
+  region: string | null;
+  category: string | null;
+  is_paywalled: boolean;
+  source_type: string | null;
+}
+
+export async function getAdminSources(): Promise<AdminSource[]> {
+  return fetchJSON("/admin/sources");
+}

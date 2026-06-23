@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = ""
 
+    # LLM generation provider (embeddings stay on OpenAI — see embeddings.py)
+    generation_provider: str = "openai"  # "openai" | "gemini"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
+
     # Encryption (for storing API keys in DB)
     encryption_key: str = ""
 
@@ -51,6 +56,9 @@ class Settings(BaseSettings):
     rss_fetch_interval_minutes: int = 10
     gdelt_fetch_interval_minutes: int = 15
     embedding_backfill_interval_minutes: int = 5
+
+    # GDELT query (parametrized for region/language; default India + English)
+    gdelt_query: str = "sourcecountry:IN"
 
     # Embedding config
     embedding_model: str = "text-embedding-3-small"

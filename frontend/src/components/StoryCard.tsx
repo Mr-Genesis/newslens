@@ -34,6 +34,7 @@ export function StoryCard({ story }: StoryCardProps) {
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
+      whileHover={{ y: -2 }}
       transition={{ duration: 0.3, ease: "easeOut" }}
     >
       <Link
@@ -65,14 +66,16 @@ export function StoryCard({ story }: StoryCardProps) {
           </p>
 
           {/* Meta row */}
-          <div className="flex items-center gap-3 mt-2">
+          <div className="flex items-center justify-between gap-3 mt-2">
             <ConfidenceScore
               sourceCount={story.source_count}
               coherence={story.coherence}
             />
-            <span className="text-mono text-[var(--text-ghost)]">
-              {story.category}
-            </span>
+            {story.category && (
+              <Badge variant="topic" size="sm" color={topicColor}>
+                {story.category.toUpperCase()}
+              </Badge>
+            )}
           </div>
         </div>
       </Link>
