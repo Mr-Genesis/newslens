@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -26,6 +24,9 @@ services:
     restart: unless-stopped
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      # Live source for local dev + in-container test runs (deps live in site-packages, unaffected)
+      - ./backend:/app
     environment:
       DATABASE_URL: postgresql+asyncpg://newslens:${POSTGRES_PASSWORD:-newslens_dev}@db:5432/newslens
       DATABASE_URL_SYNC: postgresql://newslens:${POSTGRES_PASSWORD:-newslens_dev}@db:5432/newslens
