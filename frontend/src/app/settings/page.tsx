@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { Badge } from "@/components/ui/Badge";
 import { useTheme } from "@/components/ThemeProvider";
+import { ProfileFields } from "@/components/ProfileFields";
 import {
   getSettings,
   getStats,
@@ -248,6 +249,11 @@ export default function ProfilePage() {
               </Card>
             </motion.div>
           )}
+
+          {/* Profile + Gemini key (v2) */}
+          <motion.div variants={fadeUp} className="flex flex-col gap-4 mb-4">
+            <ProfileFields />
+          </motion.div>
 
           {/* Your Topics */}
           <motion.div variants={fadeUp} className="mb-4">

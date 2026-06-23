@@ -8,7 +8,6 @@ import {
 } from "framer-motion";
 import { useCallback } from "react";
 import { Badge } from "@/components/ui/Badge";
-import { ConfidenceScore } from "@/components/ui/ConfidenceScore";
 import { cn } from "@/lib/utils";
 import type { DiscoverCard as DiscoverCardType } from "@/lib/api";
 
@@ -35,8 +34,13 @@ const topicColorMap: Record<string, string> = {
 };
 
 function getTopicColor(topicName: string): string {
-  const lower = topicName.toLowerCase();
-  return topicColorMap[lower] || "var(--topic-default)";
+  return topicColorMap[topicName.toLowerCase()] || "var(--topic-default)";
+}
+
+function agreementColor(coherence: number): string {
+  if (coherence >= 0.8) return "var(--agree)";
+  if (coherence >= 0.6) return "var(--warning)";
+  return "var(--text-muted)";
 }
 
 export function DiscoverCard({
@@ -48,45 +52,25 @@ export function DiscoverCard({
   const x = useMotionValue(0);
   const y = useMotionValue(0);
 
-  const rotate = useTransform(
-    x,
-    [-300, 0, 300],
-    [-MAX_ROTATION, 0, MAX_ROTATION]
-  );
-
-  const glowRightOpacity = useTransform(
-    x,
-    [0, COMMIT_THRESHOLD_X],
-    [0, 0.8]
-  );
-  const glowLeftOpacity = useTransform(
-    x,
-    [-COMMIT_THRESHOLD_X, 0],
-    [0.8, 0]
-  );
+  const rotate = useTransform(x, [-300, 0, 300], [-MAX_ROTATION, 0, MAX_ROTATION]);
+  const glowRightOpacity = useTransform(x, [0, COMMIT_THRESHOLD_X], [0, 0.9]);
+  const glowLeftOpacity = useTransform(x, [-COMMIT_THRESHOLD_X, 0], [0.9, 0]);
   const glowUpOpacity = useTransform(y, [COMMIT_THRESHOLD_Y, 0], [0.8, 0]);
 
   const scale = 1 - stackIndex * 0.03;
   const translateY = stackIndex * 8;
   const opacity = 1 - stackIndex * 0.35;
   const topicColor = getTopicColor(card.topic_name);
+  const pct = Math.round(card.coherence * 100);
+  const aColor = agreementColor(card.coherence);
+  const filled = Math.max(1, Math.min(4, Math.round(card.coherence * 4)));
 
   const handleDragEnd = useCallback(
     (_: unknown, info: PanInfo) => {
       const { offset, velocity } = info;
-
-      if (offset.y < COMMIT_THRESHOLD_Y || velocity.y < -500) {
-        onSwipe("up");
-        return;
-      }
-      if (offset.x > COMMIT_THRESHOLD_X || velocity.x > 500) {
-        onSwipe("right");
-        return;
-      }
-      if (offset.x < -COMMIT_THRESHOLD_X || velocity.x < -500) {
-        onSwipe("left");
-        return;
-      }
+      if (offset.y < COMMIT_THRESHOLD_Y || velocity.y < -500) return onSwipe("up");
+      if (offset.x > COMMIT_THRESHOLD_X || velocity.x > 500) return onSwipe("right");
+      if (offset.x < -COMMIT_THRESHOLD_X || velocity.x < -500) return onSwipe("left");
     },
     [onSwipe]
   );
@@ -113,86 +97,84 @@ export function DiscoverCard({
       dragElastic={0.7}
       onDragEnd={isTop ? handleDragEnd : undefined}
       whileDrag={{ boxShadow: "var(--shadow-lg)" }}
-      exit={{
-        opacity: 0,
-        scale: 0.9,
-        transition: { duration: 0.2 },
-      }}
-      transition={{
-        type: "spring",
-        stiffness: 300,
-        damping: 25,
-      }}
+      exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+      transition={{ type: "spring", stiffness: 300, damping: 25 }}
     >
       {/* Edge glow overlays */}
       {isTop && (
         <>
-          <motion.div
-            className="absolute inset-0 pointer-events-none rounded-[var(--radius-lg)]"
-            style={{
-              opacity: glowRightOpacity,
-              boxShadow: "inset -4px 0 20px var(--swipe-glow-right)",
-            }}
-          />
-          <motion.div
-            className="absolute inset-0 pointer-events-none rounded-[var(--radius-lg)]"
-            style={{
-              opacity: glowLeftOpacity,
-              boxShadow: "inset 4px 0 20px var(--swipe-glow-left)",
-            }}
-          />
-          <motion.div
-            className="absolute inset-0 pointer-events-none rounded-[var(--radius-lg)]"
-            style={{
-              opacity: glowUpOpacity,
-              boxShadow: "inset 0 4px 20px var(--swipe-glow-up)",
-            }}
-          />
+          <motion.div className="absolute inset-0 pointer-events-none rounded-[var(--radius-lg)]" style={{ opacity: glowRightOpacity, boxShadow: "inset -4px 0 20px var(--swipe-glow-right)" }} />
+          <motion.div className="absolute inset-0 pointer-events-none rounded-[var(--radius-lg)]" style={{ opacity: glowLeftOpacity, boxShadow: "inset 4px 0 20px var(--swipe-glow-left)" }} />
+          <motion.div className="absolute inset-0 pointer-events-none rounded-[var(--radius-lg)]" style={{ opacity: glowUpOpacity, boxShadow: "inset 0 4px 20px var(--swipe-glow-up)" }} />
+          {/* Swipe stamps */}
+          <motion.div style={{ opacity: glowRightOpacity }} className="absolute top-5 right-5 z-10 rotate-12 pointer-events-none text-mono font-bold border-2 rounded-[var(--radius-md)] px-2.5 py-1 border-[var(--agree)] text-[var(--agree)]">
+            SAVE
+          </motion.div>
+          <motion.div style={{ opacity: glowLeftOpacity }} className="absolute top-5 left-5 z-10 -rotate-12 pointer-events-none text-mono font-bold border-2 rounded-[var(--radius-md)] px-2.5 py-1 border-[var(--dismiss)] text-[var(--dismiss)]">
+            SKIP
+          </motion.div>
         </>
       )}
 
       {/* Card content */}
       <div
         className={cn("p-4 flex flex-col", !isTop && "invisible")}
-        style={{ height: "min(340px, calc(100dvh - 260px))" }}
+        style={{ height: "min(420px, calc(100dvh - 240px))" }}
       >
-        {/* Topic badge — top left */}
-        <div className="flex items-center gap-2">
+        {/* Header: topic badge + agreement */}
+        <div className="flex items-center justify-between gap-2">
           <Badge variant="topic" size="md" color={topicColor}>
             {card.topic_name}
           </Badge>
+          <span className="text-mono inline-flex items-center gap-1.5" style={{ color: aColor }}>
+            {pct}%
+            <span className="inline-flex items-center gap-[2px]" aria-hidden="true">
+              {Array.from({ length: 4 }, (_, i) => (
+                <span
+                  key={i}
+                  className="inline-block w-1 h-1 rounded-full"
+                  style={{ backgroundColor: i < filled ? aColor : "var(--text-ghost)", opacity: i < filled ? 1 : 0.4 }}
+                />
+              ))}
+            </span>
+          </span>
         </div>
 
-        {/* Tension line — italic emphasis (the ONE place italic lives) */}
-        <h2 className="text-title text-emphasis text-[var(--text-primary)] mt-4 flex-shrink-0">
-          {card.tension_line || card.title}
+        {/* Headline */}
+        <h2 className="text-title text-[var(--text-primary)] mt-3 flex-shrink-0">
+          {card.title}
         </h2>
+
+        {/* Tension box — amber */}
+        {card.tension_line && card.tension_line !== card.title && (
+          <div className="mt-3 rounded-[var(--radius-md)] border border-[var(--accent-muted)] bg-[var(--accent-subtle)] px-3 py-2.5 flex items-start gap-2">
+            <span className="text-[var(--accent)] shrink-0 mt-[2px]" aria-hidden="true">&#9888;</span>
+            <p className="text-small text-emphasis text-[var(--accent)]">{card.tension_line}</p>
+          </div>
+        )}
 
         {/* Facts */}
         <ul className="mt-4 space-y-2.5 flex-1 overflow-hidden">
           {card.facts.map((fact, i) => (
-            <li
-              key={i}
-              className="text-small text-[var(--text-secondary)] flex items-start gap-2.5"
-            >
-              <span
-                className="w-1.5 h-1.5 rounded-full shrink-0 mt-[7px]"
-                style={{ backgroundColor: topicColor }}
-              />
+            <li key={i} className="text-small text-[var(--text-secondary)] flex items-start gap-2.5">
+              <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-[7px]" style={{ backgroundColor: topicColor }} />
               <span className="line-clamp-2">{fact}</span>
             </li>
           ))}
         </ul>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between mt-4 pt-3 border-t border-[var(--glass-border)]">
-          <span className="text-mono text-[var(--text-ghost)] truncate max-w-[60%]">
-            {card.sources.join(" · ")}
-          </span>
-          <ConfidenceScore
-            sourceCount={card.sources.length}
-            coherence={card.coherence}
-          />
+        {/* Source chips */}
+        <div className="flex items-center gap-1.5 flex-wrap mt-4 pt-3 border-t border-[var(--glass-border)]">
+          {card.sources.slice(0, 3).map((s) => (
+            <span key={s} className="text-mono text-[10px] px-2 py-0.5 rounded-full bg-[var(--surface-raised)] text-[var(--text-secondary)]">
+              {s}
+            </span>
+          ))}
+          {card.sources.length > 3 && (
+            <span className="text-mono text-[10px] px-2 py-0.5 rounded-full bg-[var(--surface-raised)] text-[var(--text-muted)]">
+              +{card.sources.length - 3}
+            </span>
+          )}
         </div>
       </div>
     </motion.div>

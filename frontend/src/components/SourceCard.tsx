@@ -48,6 +48,7 @@ export function SourceCard({
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
+      whileHover={{ y: -2 }}
       transition={{ duration: 0.25, delay: index * 0.04 }}
     >
       <div
@@ -71,7 +72,7 @@ export function SourceCard({
                 {sourceName}
               </span>
               <Badge variant={isFree ? "free" : "paywall"} size="sm">
-                {isFree ? "Free" : "Paywall"}
+                {isFree ? "FREE" : "PAYWALL"}
               </Badge>
             </div>
             {publishedAt && (

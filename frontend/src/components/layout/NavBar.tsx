@@ -56,8 +56,9 @@ export function NavBar() {
           {/* Right action — contextual */}
           {!isDeepDive && (
             <div className="flex items-center gap-1">
-              {/* Search icon placeholder */}
-              <button
+              {/* Search → /search */}
+              <Link
+                href="/search"
                 className="flex items-center justify-center w-10 h-10 rounded-full text-[var(--text-muted)] hover:text-[var(--text-secondary)] hover:bg-[var(--surface-raised)] transition-colors"
                 aria-label="Search"
               >
@@ -74,7 +75,7 @@ export function NavBar() {
                   <circle cx="11" cy="11" r="8" />
                   <path d="M21 21l-4.35-4.35" />
                 </svg>
-              </button>
+              </Link>
             </div>
           )}
         </div>

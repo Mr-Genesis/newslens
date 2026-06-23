@@ -20,6 +20,7 @@ export default function DiscoverPage() {
   const [state, setState] = useState<PageState>("loading");
   const [deck, setDeck] = useState<DiscoverCardType[]>([]);
   const [totalSwiped, setTotalSwiped] = useState(0);
+  const [history, setHistory] = useState<DiscoverCardType[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isFetching, setIsFetching] = useState(false);
 
@@ -72,6 +73,7 @@ export default function DiscoverPage() {
       const card = deck[0];
       if (!card) return;
 
+      setHistory((prev) => [...prev, card]);
       setDeck((prev) => prev.slice(1));
       setTotalSwiped((prev) => prev + 1);
 
@@ -106,6 +108,17 @@ export default function DiscoverPage() {
     [deck]
   );
 
+  const handleUndo = useCallback(() => {
+    setHistory((h) => {
+      if (h.length === 0) return h;
+      const last = h[h.length - 1];
+      setDeck((d) => [last, ...d]);
+      setTotalSwiped((n) => Math.max(0, n - 1));
+      setState("swiping");
+      return h.slice(0, -1);
+    });
+  }, []);
+
   // Keyboard support
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
@@ -127,7 +140,6 @@ export default function DiscoverPage() {
   }, [state, deck.length, handleSwipe]);
 
   const visibleCards = deck.slice(0, 3);
-  const showAffordance = totalSwiped < 3;
 
   return (
     <div className="mx-auto max-w-[640px] w-full px-[var(--space-md)]">
@@ -184,6 +196,14 @@ export default function DiscoverPage() {
       {/* Swiping: card stack */}
       {state === "swiping" && (
         <div className="flex flex-col items-center pt-2">
+          {/* Header */}
+          <div className="w-full mb-3">
+            <h1 className="text-hero text-[var(--text-primary)]">Discover</h1>
+            <p className="text-mono text-[var(--text-muted)] mt-1">
+              SWIPE TO TRIAGE &middot; {totalSwiped + 1} OF {deck.length + totalSwiped}
+            </p>
+          </div>
+
           {/* Card stack */}
           <div
             className="relative w-full"
@@ -204,59 +224,43 @@ export default function DiscoverPage() {
             </AnimatePresence>
           </div>
 
-          {/* Progress bar */}
-          <div className="w-full max-w-[180px] mt-3">
-            <div className="h-[2px] bg-[var(--surface-raised)] rounded-full overflow-hidden">
-              <motion.div
-                className="h-full bg-[var(--accent)] rounded-full"
-                initial={{ width: "100%" }}
-                animate={{
-                  width: `${Math.max(5, (deck.length / (deck.length + totalSwiped)) * 100)}%`,
-                }}
-                transition={{ duration: 0.3 }}
-              />
-            </div>
-            <p className="text-mono text-[var(--text-ghost)] text-center mt-2">
-              {deck.length} stories left
-            </p>
-          </div>
-
-          {/* Swipe affordance hints — fade after 3 swipes */}
-          <AnimatePresence>
-            {showAffordance && (
-              <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="flex items-center justify-center gap-5 mt-2"
+          {/* Action buttons — Skip / Undo / Save */}
+          <div className="flex items-center justify-center gap-6 mt-6">
+            <div className="flex flex-col items-center gap-1.5">
+              <motion.button
+                whileTap={{ scale: 0.92 }}
+                onClick={() => handleSwipe("left")}
+                aria-label="Skip"
+                className="w-12 h-12 rounded-full bg-[var(--surface-raised)] border border-[var(--border)] flex items-center justify-center text-[var(--text-secondary)]"
               >
-                <div className="flex flex-col items-center gap-1">
-                  <div className="w-8 h-8 rounded-full bg-[var(--dismiss-muted)] flex items-center justify-center">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--dismiss)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </div>
-                  <span className="text-[10px] text-[var(--text-ghost)]">Not interested</span>
-                </div>
-                <div className="flex flex-col items-center gap-1">
-                  <div className="w-8 h-8 rounded-full bg-[var(--drill-muted)] flex items-center justify-center">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--drill)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" />
-                    </svg>
-                  </div>
-                  <span className="text-[10px] text-[var(--text-ghost)]">Deep dive</span>
-                </div>
-                <div className="flex flex-col items-center gap-1">
-                  <div className="w-8 h-8 rounded-full bg-[var(--agree-muted)] flex items-center justify-center">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--agree)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="20 6 9 17 4 12" />
-                    </svg>
-                  </div>
-                  <span className="text-[10px] text-[var(--text-ghost)]">More like this</span>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+              </motion.button>
+              <span className="text-mono text-[10px] text-[var(--text-ghost)]">SKIP</span>
+            </div>
+            <div className="flex flex-col items-center gap-1.5">
+              <motion.button
+                whileTap={{ scale: 0.92 }}
+                onClick={handleUndo}
+                disabled={history.length === 0}
+                aria-label="Undo last"
+                className="w-11 h-11 rounded-full bg-[var(--surface-raised)] border border-[var(--border)] flex items-center justify-center text-[var(--text-muted)] disabled:opacity-40"
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" /></svg>
+              </motion.button>
+              <span className="text-mono text-[10px] text-[var(--text-ghost)]">UNDO</span>
+            </div>
+            <div className="flex flex-col items-center gap-1.5">
+              <motion.button
+                whileTap={{ scale: 0.92 }}
+                onClick={() => handleSwipe("right")}
+                aria-label="Save"
+                className="w-16 h-16 rounded-full bg-[var(--accent)] text-[var(--bg)] flex items-center justify-center shadow-[var(--shadow-md)]"
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" /></svg>
+              </motion.button>
+              <span className="text-mono text-[10px] text-[var(--accent)]">SAVE</span>
+            </div>
+          </div>
         </div>
       )}
     </div>
