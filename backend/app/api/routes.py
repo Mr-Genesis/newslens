@@ -235,6 +235,7 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
             title=article.title,
             summary=article.snippet,
             created_at=article.published_at or article.fetched_at or datetime.now(timezone.utc),
+            coherence=0.70,
             sources=[
                 ClusterSourceCard(
                     article=ArticleOut(
@@ -305,6 +306,7 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
         title=cluster.title,
         summary=cluster.summary,
         created_at=cluster.created_at,
+        coherence=cluster.coherence if cluster.coherence is not None else 0.85,
         sources=source_cards,
     )
 

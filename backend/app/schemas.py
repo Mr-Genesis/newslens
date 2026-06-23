@@ -55,6 +55,7 @@ class ClusterDetailOut(BaseModel):
     title: str
     summary: str | None
     created_at: datetime
+    coherence: float = 0.0
     sources: list[ClusterSourceCard]  # sorted: free first, then paywalled
 
     model_config = {"from_attributes": True}

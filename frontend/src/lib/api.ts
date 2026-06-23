@@ -75,6 +75,7 @@ export interface ClusterDetail {
   title: string;
   summary: string | null;
   created_at: string;
+  coherence: number;
   sources: ClusterSourceCard[];
 }
 

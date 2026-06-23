@@ -5,6 +5,8 @@ import { useParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { AISummaryBox } from "@/components/ui/AISummaryBox";
 import { ImpactCard } from "@/components/ui/ImpactCard";
+import { StrategicCard } from "@/components/ui/StrategicCard";
+import { TriviaCard } from "@/components/ui/TriviaCard";
 import { SourceCard } from "@/components/SourceCard";
 import { SourceSpectrum } from "@/components/SourceSpectrum";
 import { IconButton } from "@/components/ui/IconButton";
@@ -150,7 +152,7 @@ export default function DeepDiveView({
             </motion.h1>
             <div className="mt-4">
               <AgreementMeter
-                coherence={0.85}
+                coherence={cluster.coherence}
                 sourceCount={cluster.sources.length}
                 createdAt={cluster.created_at}
               />
@@ -158,7 +160,7 @@ export default function DeepDiveView({
           </div>
 
           {/* AI Summary */}
-          <AISummaryBox summary={cluster.summary} coherence={0.85} clusterId={clusterId} />
+          <AISummaryBox summary={cluster.summary} coherence={cluster.coherence} clusterId={clusterId} />
 
           {/* What's in it for me */}
           <ImpactCard clusterId={clusterId} />
@@ -180,6 +182,12 @@ export default function DeepDiveView({
               />
             ))}
           </div>
+
+          {/* Strategic (game-theory) lens */}
+          <StrategicCard clusterId={clusterId} />
+
+          {/* Quiz */}
+          <TriviaCard clusterId={clusterId} />
         </motion.div>
       )}
     </div>
