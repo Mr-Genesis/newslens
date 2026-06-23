@@ -104,19 +104,44 @@ async def get_feed(
     results = await db.execute(query.offset(offset).limit(per_page))
     articles = results.scalars().all()
 
+    # Resolve cluster membership + per-cluster source count in aggregate (no N+1).
+    article_ids = [a.id for a in articles]
+    art_to_cluster: dict[int, int] = {}
+    cluster_source_count: dict[int, int] = {}
+    clusters_with_summary: set[int] = set()
+    if article_ids:
+        ca_rows = (
+            await db.execute(
+                select(ClusterArticle.article_id, ClusterArticle.cluster_id).where(
+                    ClusterArticle.article_id.in_(article_ids)
+                )
+            )
+        ).all()
+        for art_id, cl_id in ca_rows:
+            art_to_cluster[art_id] = cl_id
+        cluster_ids = list(set(art_to_cluster.values()))
+        if cluster_ids:
+            cnt_rows = (
+                await db.execute(
+                    select(ClusterArticle.cluster_id, func.count(ClusterArticle.id))
+                    .where(ClusterArticle.cluster_id.in_(cluster_ids))
+                    .group_by(ClusterArticle.cluster_id)
+                )
+            ).all()
+            cluster_source_count = {cl_id: cnt for cl_id, cnt in cnt_rows}
+            sum_rows = (
+                await db.execute(
+                    select(StoryCluster.id).where(
+                        StoryCluster.id.in_(cluster_ids),
+                        StoryCluster.summary.isnot(None),
+                    )
+                )
+            ).all()
+            clusters_with_summary = {row[0] for row in sum_rows}
+
     article_outs = []
     for a in articles:
-        # Count how many sources cover this story (via clusters)
-        cluster_count_q = (
-            select(func.count(ClusterArticle.id))
-            .join(ClusterArticle.cluster)
-            .join(
-                ClusterArticle,
-                ClusterArticle.cluster_id == StoryCluster.id,
-            )
-            .where(ClusterArticle.article_id == a.id)
-        )
-
+        cl_id = art_to_cluster.get(a.id)
         article_outs.append(
             ArticleOut(
                 id=a.id,
@@ -126,9 +151,9 @@ async def get_feed(
                 source=SourceOut.model_validate(a.source),
                 published_at=a.published_at,
                 embedding_status=a.embedding_status,
-                source_count=1,
-                cluster_id=None,
-                has_ai_summary=False,
+                source_count=cluster_source_count.get(cl_id, 1) if cl_id else 1,
+                cluster_id=cl_id,
+                has_ai_summary=cl_id in clusters_with_summary,
             )
         )
 
