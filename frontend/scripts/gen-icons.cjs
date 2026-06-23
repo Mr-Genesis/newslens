@@ -11,12 +11,11 @@ const fs = require("fs");
 const path = require("path");
 const sharp = require("sharp");
 
-const FG = "#E4E4E7"; // brackets
-const LINE_DIM = "#3F3F46"; // top/bottom story lines
-const LINE_MID = "#52525B"; // brighter middle story line
+const FG = "#E4E4E7"; // "bar" — brackets + bright middle line
+const GHOST = "#3F3F46"; // "ghost" — dim top/bottom lines
 const DOT = "#F97316"; // lens
 const BG = "#0C0C0E"; // ground
-const MARK_W = 193; // intrinsic painted mark width (bracket outer span incl. stroke)
+const MARK_W = 61; // intrinsic painted mark width (bracket outer span incl. stroke, units of 100)
 
 /** Build an SVG string of the mark on a chosen ground. */
 function svg({ w, h = w, frac = 0.62, ground = "rounded", radiusFrac = 0.16 }) {
@@ -32,12 +31,12 @@ function svg({ w, h = w, frac = 0.62, ground = "rounded", radiusFrac = 0.16 }) {
   return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
   ${bg}
   <g transform="translate(${w / 2},${h / 2}) scale(${k})">
-    <path d="M-54 -77 H-89 V77 H-54" fill="none" stroke="${FG}" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M54 -77 H89 V77 H54" fill="none" stroke="${FG}" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M-55 -29 H-19" stroke="${LINE_DIM}" stroke-width="11" stroke-linecap="round"/>
-    <path d="M-68 0 H-29" stroke="${LINE_MID}" stroke-width="11" stroke-linecap="round"/>
-    <path d="M-55 29 H-19" stroke="${LINE_DIM}" stroke-width="11" stroke-linecap="round"/>
-    <circle cx="0" cy="0" r="21.5" fill="${DOT}"/>
+    <path d="M-15 -24 H-28 V24 H-15" fill="none" stroke="${FG}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M15 -24 H28 V24 H15" fill="none" stroke="${FG}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <line x1="-17" y1="-9" x2="-6" y2="-9" stroke="${GHOST}" stroke-width="4" stroke-linecap="round"/>
+    <line x1="-21" y1="0" x2="-7" y2="0" stroke="${FG}" stroke-width="4" stroke-linecap="round"/>
+    <line x1="-17" y1="9" x2="-6" y2="9" stroke="${GHOST}" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="0" cy="0" r="7" fill="${DOT}"/>
   </g>
 </svg>`;
 }
