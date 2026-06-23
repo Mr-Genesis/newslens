@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
+import { LoadingScreen } from "@/components/ui/LoadingScreen";
+import { Logo } from "@/components/ui/BrandMark";
 import { getProfile, updateProfile } from "@/lib/api";
 
 const TOPICS = [
@@ -12,7 +14,19 @@ const TOPICS = [
   "Politics", "Business", "Sports", "Climate", "Geopolitics",
 ];
 
+// The promise we make on the way in — reinforces why breadth matters.
+const VALUE_PROPS = [
+  "Every story, drawn from multiple sources",
+  "See where reporting agrees — and where it splits",
+  "Free sources first, always",
+];
+
 const ONBOARDED_KEY = "newslens-onboarded";
+
+const chipVariants = {
+  initial: { opacity: 0, y: 6 },
+  animate: { opacity: 1, y: 0 },
+};
 
 /** Derive the reader's locale from the browser instead of hard-defaulting to IN.
  *  Falls back to "global" for regions outside the curated set. (Wave Q2) */
@@ -72,12 +86,7 @@ export default function OnboardingPage() {
   const setupCount = 1 + (interests.length > 0 ? 1 : 0);
 
   if (!ready) {
-    return (
-      <div className="mx-auto max-w-[640px] w-full px-[var(--space-lg)] pt-[var(--space-2xl)]">
-        <div className="skeleton h-8 w-48 rounded mb-4" />
-        <div className="skeleton h-40 w-full rounded" />
-      </div>
-    );
+    return <LoadingScreen label="Setting things up" />;
   }
 
   return (
@@ -86,7 +95,10 @@ export default function OnboardingPage() {
       animate={{ opacity: 1, y: 0 }}
       className="mx-auto max-w-[640px] w-full px-[var(--space-lg)] pt-[var(--space-2xl)] pb-[var(--space-2xl)]"
     >
-      <p className="text-mono text-[var(--accent)] mb-2">WELCOME TO NEWSLENS</p>
+      {/* Brand mark */}
+      <Logo markSize={22} textClassName="text-[22px]" className="mb-[var(--space-lg)]" />
+
+      <p className="text-mono uppercase text-[var(--accent)] mb-2">Welcome</p>
       <h1 className="text-hero text-[var(--text-primary)]">
         What do you want to follow?
       </h1>
@@ -94,25 +106,34 @@ export default function OnboardingPage() {
         Pick a few topics — your briefing adapts as you read.
       </p>
 
-      <div className="flex flex-wrap gap-2 mt-[var(--space-lg)]">
+      {/* Topic chips */}
+      <motion.div
+        className="flex flex-wrap gap-2 mt-[var(--space-lg)]"
+        initial="initial"
+        animate="animate"
+        transition={{ staggerChildren: 0.03 }}
+      >
         {TOPICS.map((t) => {
           const on = interests.includes(t);
           return (
-            <button
+            <motion.button
               key={t}
+              variants={chipVariants}
               onClick={() => toggle(t)}
+              aria-pressed={on}
+              whileTap={{ scale: 0.96 }}
               className={cn(
                 "px-3.5 py-2 rounded-full text-small transition-colors",
                 on
-                  ? "bg-[var(--accent)] text-[var(--bg)]"
+                  ? "bg-[var(--accent)] text-[var(--bg)] font-medium"
                   : "bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
               )}
             >
               {t}
-            </button>
+            </motion.button>
           );
         })}
-      </div>
+      </motion.div>
 
       <p className="text-mono text-[var(--text-ghost)] mt-[var(--space-lg)]">
         {setupCount} of 3 set up &middot; add your profession later for the &ldquo;what&apos;s in it for me&rdquo; lens.
@@ -126,6 +147,19 @@ export default function OnboardingPage() {
           Skip
         </Button>
       </div>
+
+      {/* What you're signing up for */}
+      <ul className="mt-[var(--space-2xl)] space-y-3 border-t border-[var(--border-subtle)] pt-[var(--space-lg)]">
+        {VALUE_PROPS.map((v) => (
+          <li key={v} className="flex items-start gap-3">
+            <span
+              aria-hidden
+              className="mt-[7px] h-1.5 w-1.5 rounded-full bg-[var(--accent)] shrink-0"
+            />
+            <span className="text-small text-[var(--text-secondary)]">{v}</span>
+          </li>
+        ))}
+      </ul>
     </motion.div>
   );
 }

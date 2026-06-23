@@ -1,9 +1,10 @@
 import { Suspense } from "react";
 import StoryContent from "./StoryContent";
+import { LoadingScreen } from "@/components/ui/LoadingScreen";
 
 export default function StoryPage() {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><p className="text-body text-[var(--text-muted)]">Loading...</p></div>}>
+    <Suspense fallback={<LoadingScreen label="Loading story" />}>
       <StoryContent />
     </Suspense>
   );

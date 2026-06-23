@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { Logo } from "@/components/ui/BrandMark";
 
 export function NavBar() {
   const pathname = usePathname();
@@ -43,13 +44,8 @@ export function NavBar() {
             </button>
           ) : (
             /* Default: Logo */
-            <Link href="/" className="flex items-baseline shrink-0">
-              <span className="text-[20px] font-semibold text-[var(--text-primary)] font-[family-name:var(--font-fraunces)]">
-                News
-              </span>
-              <span className="text-[20px] font-semibold text-[var(--accent)] font-[family-name:var(--font-fraunces)]">
-                Lens
-              </span>
+            <Link href="/" className="shrink-0" aria-label="NewsLens home">
+              <Logo markSize={22} textClassName="text-[20px]" />
             </Link>
           )}
 
