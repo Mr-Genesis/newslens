@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { Input } from "@/components/ui/Input";
@@ -29,18 +29,52 @@ function matchedLabel(matchedOn: string): string {
   return "matched: meaning";
 }
 
+const RECENT_KEY = "newslens-recent-searches";
+const RECENT_MAX = 5;
+
+function readRecent(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function SearchPage() {
   const [query, setQuery] = useState("");
   const [submitted, setSubmitted] = useState("");
   const [filter, setFilter] = useState<FilterKey>("all");
   const [results, setResults] = useState<SearchResultItem[]>([]);
   const [state, setState] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [recent, setRecent] = useState<string[]>([]);
+
+  useEffect(() => {
+    setRecent(readRecent());
+  }, []);
+
+  function rememberQuery(q: string) {
+    setRecent((prev) => {
+      const next = [q, ...prev.filter((x) => x.toLowerCase() !== q.toLowerCase())].slice(
+        0,
+        RECENT_MAX
+      );
+      if (typeof window !== "undefined") {
+        localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+      }
+      return next;
+    });
+  }
 
   async function runSearch(q: string) {
     const trimmed = q.trim();
     if (!trimmed) return;
     setState("loading");
     setSubmitted(trimmed);
+    setQuery(trimmed);
+    rememberQuery(trimmed);
     try {
       const res = await search(trimmed);
       setResults(res.results);
@@ -96,9 +130,25 @@ export default function SearchPage() {
           </p>
         )}
         {state === "idle" && (
-          <p className="text-small text-[var(--text-muted)]">
-            Search across every source — by topic or by meaning.
-          </p>
+          <div className="flex flex-col gap-[var(--space-lg)]">
+            {recent.length > 0 && (
+              <div>
+                <p className="text-mono text-[var(--text-ghost)] mb-[var(--space-sm)]">
+                  RECENT
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {recent.map((q) => (
+                    <Chip key={q} onClick={() => runSearch(q)}>
+                      {q}
+                    </Chip>
+                  ))}
+                </div>
+              </div>
+            )}
+            <p className="text-small text-[var(--text-muted)]">
+              Search across every source — by topic or by meaning.
+            </p>
+          </div>
         )}
         {state === "done" && (
           <>

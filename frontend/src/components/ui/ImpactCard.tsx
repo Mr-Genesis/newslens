@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { getClusterImpact, type LensResult } from "@/lib/api";
 
@@ -35,6 +36,25 @@ export function ImpactCard({ clusterId }: { clusterId: number }) {
   if (data === "loading") {
     return <div className="skeleton h-24 rounded-[var(--radius-lg)]" />;
   }
+  // When the only thing missing is the user's profession, invite them to set it
+  // instead of silently hiding — this lens is the payoff for filling it in.
+  if (data.reason === "profession_unset") {
+    return (
+      <Link
+        href="/settings"
+        className="block rounded-[var(--radius-lg)] border border-[var(--accent-muted)] bg-[var(--accent-subtle)] p-[var(--space-md)] transition-colors hover:bg-[var(--accent-muted)]"
+      >
+        <div className="flex items-center gap-1.5 text-mono text-[var(--accent)] mb-2">
+          <ClockIcon />
+          WHAT&apos;S IN IT FOR ME
+        </div>
+        <p className="text-small text-[var(--text-primary)] leading-relaxed">
+          Personalize this — set your profession &rarr;
+        </p>
+      </Link>
+    );
+  }
+  // Any other unavailable reason degrades gracefully (hidden).
   if (data.unavailable) return null;
 
   const headline = typeof data.headline === "string" ? data.headline : null;

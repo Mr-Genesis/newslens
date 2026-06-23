@@ -28,7 +28,8 @@ export function StrategicCard({ clusterId }: { clusterId: number }) {
   if (data === "loading") {
     return <div className="skeleton h-24 rounded-[var(--radius-lg)]" />;
   }
-  if (data.unavailable) return null;
+  // Backend gates this lens by topic; hide for non-geopolitics or any unavailable reason.
+  if (data.unavailable || data.reason === "not_offered_for_topic") return null;
 
   const actors = Array.isArray(data.actors) ? (data.actors as Actor[]) : [];
   const gameType = typeof data.game_type === "string" ? data.game_type : null;

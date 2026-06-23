@@ -195,6 +195,10 @@ export interface UserSettings {
   openai_key_verified: boolean;
   openai_key_last4: string | null;
   openai_key_verified_at: string | null;
+  has_gemini_key: boolean;
+  gemini_key_verified: boolean;
+  gemini_key_last4: string | null;
+  gemini_key_verified_at: string | null;
 }
 
 export interface KeyTestResult {

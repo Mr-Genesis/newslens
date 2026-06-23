@@ -177,6 +177,11 @@ async def analysis(db, cluster_id, lens: str, profession: str | None = None):
 
 
 async def impact(db, cluster_id, profession: str | None, locale: str = "IN"):
+    # WIIFM impact is profession-specific — without a profession there is no
+    # meaningful answer, so surface that explicitly instead of defaulting to a
+    # generalist read (and before any LLM/get_lens call).
+    if not (profession or "").strip():
+        return {"unavailable": True, "reason": "profession_unset"}
     cluster, articles = await _load(db, cluster_id)
     text = _cluster_text(cluster, articles) if cluster and articles else ""
     return await get_lens(db, cluster_id, column="impact_json",

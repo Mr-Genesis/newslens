@@ -26,12 +26,18 @@ class FakeUserSetting:
         openai_api_key_encrypted=None,
         openai_key_verified=False,
         openai_key_verified_at=None,
+        gemini_api_key_encrypted=None,
+        gemini_key_verified=False,
+        gemini_key_verified_at=None,
     ):
         self.id = id
         self.user_id = user_id
         self.openai_api_key_encrypted = openai_api_key_encrypted
         self.openai_key_verified = openai_key_verified
         self.openai_key_verified_at = openai_key_verified_at
+        self.gemini_api_key_encrypted = gemini_api_key_encrypted
+        self.gemini_key_verified = gemini_key_verified
+        self.gemini_key_verified_at = gemini_key_verified_at
         self.updated_at = datetime.now(timezone.utc)
 
 
@@ -145,6 +151,34 @@ class TestGetSettings:
         assert response.status_code == 200
         data = response.json()
         assert data["has_openai_key"] is False
+        # No Gemini key configured either.
+        assert data["has_gemini_key"] is False
+        assert data["gemini_key_last4"] is None
+
+    async def test_get_settings_includes_gemini_info(
+        self, settings_client: AsyncClient, settings_session: SettingsMockSession
+    ):
+        """GET /settings surfaces the Gemini key trio mirroring the OpenAI one."""
+        settings_session.setting = FakeUserSetting(
+            openai_api_key_encrypted=None,
+            gemini_api_key_encrypted="gem-encrypted-9876",
+            gemini_key_verified=True,
+            gemini_key_verified_at=datetime.now(timezone.utc),
+        )
+
+        with patch(
+            "app.services.encryption.decrypt_value", return_value="gem-secret-9876"
+        ):
+            response = await settings_client.get("/settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        # OpenAI absent, Gemini present + masked + verified.
+        assert data["has_openai_key"] is False
+        assert data["has_gemini_key"] is True
+        assert data["gemini_key_last4"] == "9876"
+        assert data["gemini_key_verified"] is True
+        assert data["gemini_key_verified_at"] is not None
 
 
 # ─── PUT /settings ───

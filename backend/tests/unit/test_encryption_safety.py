@@ -34,3 +34,21 @@ def test_roundtrip_with_key(monkeypatch):
     enc = encryption.encrypt_value("sk-secret")
     assert enc != "sk-secret"
     assert encryption.decrypt_value(enc) == "sk-secret"
+
+
+def test_decrypt_failure_does_not_leak_ciphertext(monkeypatch):
+    # With a real Fernet configured, a corrupted/invalid token must RAISE — never
+    # return the raw stored value back to the caller (would leak ciphertext).
+    monkeypatch.setattr(settings, "encryption_key", Fernet.generate_key().decode())
+    monkeypatch.setattr(settings, "require_encryption", True)
+
+    corrupted = "deadbeef" * 8  # valid hex, but not a real Fernet token
+    with pytest.raises(ValueError) as exc:
+        encryption.decrypt_value(corrupted)
+
+    # The raised error must not echo the ciphertext back.
+    assert corrupted not in str(exc.value)
+
+    # Also covers a non-hex token (bytes.fromhex itself fails) — still raises, no leak.
+    with pytest.raises(ValueError):
+        encryption.decrypt_value("not-hex-zzzz")

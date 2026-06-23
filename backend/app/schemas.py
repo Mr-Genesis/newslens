@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -55,7 +56,7 @@ class ClusterDetailOut(BaseModel):
     title: str
     summary: str | None
     created_at: datetime
-    coherence: float = 0.0
+    coherence: Optional[float] = None  # real cluster coherence; None when unknown
     sources: list[ClusterSourceCard]  # sorted: free first, then paywalled
 
     model_config = {"from_attributes": True}
@@ -126,6 +127,8 @@ class BriefingStory(BaseModel):
     source_count: int
     coherence: float
     is_read: bool = False
+    # E6: best-effort WIIFM headline from already-cached impact_json (no new LLM calls)
+    impact_headline: str | None = None
 
 
 class BriefingResponse(BaseModel):
@@ -158,6 +161,11 @@ class UserSettingsOut(BaseModel):
     openai_key_verified: bool = False
     openai_key_last4: str | None = None
     openai_key_verified_at: datetime | None = None
+    # E1: mirror the OpenAI key trio for Gemini
+    has_gemini_key: bool = False
+    gemini_key_verified: bool = False
+    gemini_key_last4: str | None = None
+    gemini_key_verified_at: datetime | None = None
 
 
 class UserSettingsUpdate(BaseModel):

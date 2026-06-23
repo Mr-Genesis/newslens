@@ -95,6 +95,35 @@ async def generate_embedding(text: str) -> list[float] | None:
         return None
 
 
+# Cache of query string -> embedding, so repeated searches for the same query
+# reuse one OpenAI call. Bounded to avoid unbounded growth from arbitrary queries.
+_query_embedding_cache: dict[str, list[float]] = {}
+_QUERY_CACHE_MAX = 512
+
+
+async def embed_query_cached(text: str) -> list[float] | None:
+    """Embed a search query, memoized by the exact query string.
+
+    Uses the same embedding path as generate_embedding so search vectors match
+    article vectors. Failures are not cached (so a transient error can retry).
+    """
+    key = (text or "").strip()
+    if not key:
+        return None
+
+    cached = _query_embedding_cache.get(key)
+    if cached is not None:
+        return cached
+
+    embedding = await generate_embedding(key)
+    if embedding is not None:
+        if len(_query_embedding_cache) >= _QUERY_CACHE_MAX:
+            # Simple bound: drop the oldest inserted entry.
+            _query_embedding_cache.pop(next(iter(_query_embedding_cache)), None)
+        _query_embedding_cache[key] = embedding
+    return embedding
+
+
 async def embed_article(article_id: int):
     """Generate and store embedding for a single article."""
     async with async_session() as session:
