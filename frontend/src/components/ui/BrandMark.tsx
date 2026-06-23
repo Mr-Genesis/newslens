@@ -1,10 +1,11 @@
 import { cn } from "@/lib/utils";
 
 /**
- * NewsLens mark — square brackets framing three "story lines" that flow into the
- * amber "lens" dot. Brackets use currentColor (set the parent's text color); the
- * lines are a muted gray; the lens dot is the single amber accent and sits on top
- * of the lines. Geometry matches the master mark animation.
+ * NewsLens mark — square brackets framing three left-aligned "story lines" and a
+ * centered amber "lens" dot. Geometry + colors are traced directly from the master
+ * mark asset (NewsLens Mark.png): brackets #E4E4E7 (here currentColor so the lockup
+ * adapts to theme), top/bottom lines #3F3F46, the brighter middle line #52525B, and
+ * the lens in the amber accent.
  */
 export function BrandMark({
   size = 24,
@@ -17,7 +18,7 @@ export function BrandMark({
     <svg
       width={size}
       height={size}
-      viewBox="-320 -320 640 640"
+      viewBox="-120 -120 240 240"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
@@ -26,29 +27,27 @@ export function BrandMark({
     >
       {/* Brackets */}
       <path
-        d="M-180 -156 H-264 V156 H-180"
+        d="M-54 -77 H-89 V77 H-54"
         fill="none"
         stroke="currentColor"
-        strokeWidth="30"
+        strokeWidth="15"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
       <path
-        d="M180 -156 H264 V156 H180"
+        d="M54 -77 H89 V77 H54"
         fill="none"
         stroke="currentColor"
-        strokeWidth="30"
+        strokeWidth="15"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      {/* Story lines */}
-      <g stroke="#52525B" strokeWidth="28" strokeLinecap="round">
-        <path d="M-175 -60 H-42" />
-        <path d="M-175 0 H18" />
-        <path d="M-175 60 H-52" />
-      </g>
-      {/* Lens dot (on top of the lines) */}
-      <circle cx="28" cy="0" r="62" fill="var(--accent)" />
+      {/* Story lines (left-aligned; middle is brighter) */}
+      <path d="M-55 -29 H-19" stroke="#3F3F46" strokeWidth="11" strokeLinecap="round" />
+      <path d="M-68 0 H-29" stroke="#52525B" strokeWidth="11" strokeLinecap="round" />
+      <path d="M-55 29 H-19" stroke="#3F3F46" strokeWidth="11" strokeLinecap="round" />
+      {/* Lens dot (centered, on top of the lines) */}
+      <circle cx="0" cy="0" r="21.5" fill="var(--accent)" />
     </svg>
   );
 }

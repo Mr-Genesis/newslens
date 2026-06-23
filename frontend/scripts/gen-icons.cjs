@@ -12,10 +12,11 @@ const path = require("path");
 const sharp = require("sharp");
 
 const FG = "#E4E4E7"; // brackets
-const LINE = "#52525B"; // story lines
+const LINE_DIM = "#3F3F46"; // top/bottom story lines
+const LINE_MID = "#52525B"; // brighter middle story line
 const DOT = "#F97316"; // lens
 const BG = "#0C0C0E"; // ground
-const MARK_W = 558; // intrinsic mark width (outer bracket span + stroke)
+const MARK_W = 193; // intrinsic painted mark width (bracket outer span incl. stroke)
 
 /** Build an SVG string of the mark on a chosen ground. */
 function svg({ w, h = w, frac = 0.62, ground = "rounded", radiusFrac = 0.16 }) {
@@ -31,14 +32,12 @@ function svg({ w, h = w, frac = 0.62, ground = "rounded", radiusFrac = 0.16 }) {
   return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">
   ${bg}
   <g transform="translate(${w / 2},${h / 2}) scale(${k})">
-    <path d="M-180 -156 H-264 V156 H-180" fill="none" stroke="${FG}" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M180 -156 H264 V156 H180" fill="none" stroke="${FG}" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
-    <g stroke="${LINE}" stroke-width="28" stroke-linecap="round">
-      <path d="M-175 -60 H-42"/>
-      <path d="M-175 0 H18"/>
-      <path d="M-175 60 H-52"/>
-    </g>
-    <circle cx="28" cy="0" r="62" fill="${DOT}"/>
+    <path d="M-54 -77 H-89 V77 H-54" fill="none" stroke="${FG}" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M54 -77 H89 V77 H54" fill="none" stroke="${FG}" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M-55 -29 H-19" stroke="${LINE_DIM}" stroke-width="11" stroke-linecap="round"/>
+    <path d="M-68 0 H-29" stroke="${LINE_MID}" stroke-width="11" stroke-linecap="round"/>
+    <path d="M-55 29 H-19" stroke="${LINE_DIM}" stroke-width="11" stroke-linecap="round"/>
+    <circle cx="0" cy="0" r="21.5" fill="${DOT}"/>
   </g>
 </svg>`;
 }
