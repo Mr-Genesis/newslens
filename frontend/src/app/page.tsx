@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { StoryCard } from "@/components/StoryCard";
 import { HeroStoryCard } from "@/components/HeroStoryCard";
@@ -39,6 +40,14 @@ export default function BriefingPage() {
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string>("All");
+  const router = useRouter();
+
+  // First-run: send new users to onboarding (once per browser).
+  useEffect(() => {
+    if (typeof window !== "undefined" && !localStorage.getItem("newslens-onboarded")) {
+      router.replace("/onboarding");
+    }
+  }, [router]);
 
   const fetchBriefing = useCallback(async (isRefresh = false) => {
     try {

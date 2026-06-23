@@ -75,6 +75,7 @@ export interface ClusterDetail {
   title: string;
   summary: string | null;
   created_at: string;
+  coherence: number;
   sources: ClusterSourceCard[];
 }
 
@@ -369,4 +370,17 @@ export interface AdminSource {
 
 export async function getAdminSources(): Promise<AdminSource[]> {
   return fetchJSON("/admin/sources");
+}
+
+export async function createAdminSource(data: {
+  name: string;
+  url: string;
+  rss_url?: string;
+  region?: string;
+  category?: string;
+}): Promise<{ id: number; name: string }> {
+  return fetchJSON("/admin/sources", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
 }

@@ -53,6 +53,7 @@ class TestEncryption:
         """Without ENCRYPTION_KEY, values are stored as plaintext."""
         with patch("app.services.encryption.settings") as mock_settings:
             mock_settings.encryption_key = ""
+            mock_settings.require_encryption = False  # dev/test fallback to plaintext
             import app.services.encryption as enc
             enc._fernet = None
             enc._warned = False

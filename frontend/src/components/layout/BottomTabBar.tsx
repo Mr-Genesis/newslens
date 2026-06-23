@@ -108,10 +108,9 @@ const tabs = [
 
 export function BottomTabBar() {
   const pathname = usePathname();
-  const isDeepDive = pathname.startsWith("/story");
 
-  // Hide tab bar on deep dive pages
-  if (isDeepDive) return null;
+  // Hide tab bar on deep dive + onboarding (full-screen flows)
+  if (pathname.startsWith("/story") || pathname.startsWith("/onboarding")) return null;
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/";

@@ -51,6 +51,12 @@ class Settings(BaseSettings):
 
     # Encryption (for storing API keys in DB)
     encryption_key: str = ""
+    # When true, refuse to store secrets without an ENCRYPTION_KEY (set in production).
+    require_encryption: bool = False
+
+    # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
+    # chain genuinely can't be verified in your environment.
+    db_ssl_insecure: bool = False
 
     # Fetch intervals (minutes)
     rss_fetch_interval_minutes: int = 10

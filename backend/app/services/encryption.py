@@ -35,9 +35,18 @@ def _get_fernet():
 
 
 def encrypt_value(plaintext: str) -> str:
-    """Encrypt a string. Returns hex-encoded ciphertext, or plaintext if no key configured."""
+    """Encrypt a string → hex ciphertext.
+
+    With no ENCRYPTION_KEY: raises if require_encryption is set (production safety),
+    otherwise falls back to plaintext with a warning (dev/test).
+    """
     f = _get_fernet()
     if f is None:
+        if settings.require_encryption:
+            raise RuntimeError(
+                "ENCRYPTION_KEY is required (REQUIRE_ENCRYPTION=true) but not set — "
+                "refusing to store a secret as plaintext."
+            )
         return plaintext
     return f.encrypt(plaintext.encode()).hex()
 
