@@ -144,8 +144,18 @@ news-app/
 | GET | /saved | User's saved articles list |
 | DELETE | /saved/{article_id} | Remove a saved article |
 | GET | /stats | Reading stats (articles read, saved, topics explored) |
+| GET/PUT | /profile | Persona: profession, locale, interests, watchlist, depth_pref, region |
+| PUT | /settings/gemini-key | Save/remove per-user Gemini key (Fernet) |
+| POST | /settings/test-gemini-key | Validate Gemini key |
+| GET | /clusters/{id}/analysis | Key Facts / 5Ws / profession lens |
+| GET | /clusters/{id}/impact | Per-persona "what's in it for me" (Impact engine v2, `?refresh=1`) |
+| GET | /clusters/{id}/strategic | Game-theory lens (geopolitics-gated) |
+| GET | /clusters/{id}/trivia | Story quiz (easy/medium/hard) |
+| GET | /trivia/daily | Daily quiz by topic |
+| GET/POST | /admin/sources | List / upsert sources |
+| GET | /search | Hybrid semantic + keyword search |
 
-**Not yet implemented:** `GET /events` (SSE stream), `GET /admin/sources`, `GET /admin/breadth`
+**Not yet implemented:** `GET /events` (SSE stream), `GET /admin/breadth`
 
 ## Data Pipeline
 
