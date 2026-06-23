@@ -19,13 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.models import Article, ClusterArticle, StoryCluster
+from app.models import Article, ArticleTopic, ClusterArticle, StoryCluster, Topic
 from app.schemas import AskAnswer, FinancialDimension, StoryImpact
+from app.services import frameworks as fw
 from app.services import impact_guardrails, llm
 
 logger = structlog.get_logger()
 
-_LENS_COLUMNS = {"analysis_json", "impact_json", "strategic_json", "trivia_json"}
+_LENS_COLUMNS = {"analysis_json", "impact_json", "strategic_json", "trivia_json", "extra_json"}
 
 
 def _utcnow() -> datetime:
@@ -464,3 +465,74 @@ async def ask(db, cluster_id, question: str):
     if not (p.get("answer") or "").strip():
         p["refused"] = True
     return p
+
+
+# ── Frameworks (Wave B2): show-the-working, auto-selected, ≤20-word lines ──
+_FRAMEWORKS_SYSTEM = (
+    "You apply named analytical frameworks to a news story. For each requested framework, write "
+    "ONE insight line of at most 20 words, grounded in the story. Forecast/game-theory lines must "
+    "include a falsifiable condition; analogy/precedent lines must include the disanalogy. No hype, "
+    "no financial or medical advice. Output JSON only."
+)
+
+
+def _frameworks_prompt(cluster: StoryCluster, selected: list[dict]) -> str:
+    rows = "\n".join(
+        f"- {f['id']} ({f['label']}): {fw.GUARDRAILS.get(f['id'], 'one grounded insight line')}"
+        for f in selected
+    )
+    return (
+        f"<story>\nHeadline: {cluster.title}\nSummary: {cluster.summary or ''}\n</story>\n\n"
+        f"Apply these frameworks (≤20 words each):\n{rows}\n\n"
+        'Respond ONLY as JSON: {"lines": {"<framework_id>": "<one-line insight>"}}.'
+    )
+
+
+async def frameworks(db, cluster_id):
+    """Auto-selected analytical-framework one-liners for a cluster (≤4 chips, ≤20 words each)."""
+    cluster, articles = await _load(db, cluster_id)
+    if cluster is None:
+        return {"error": "cluster_not_found"}
+    if not articles:
+        return {"unavailable": True, "reason": "no_sources"}
+
+    topic_rows = (
+        await db.execute(
+            select(Topic.name)
+            .join(ArticleTopic, ArticleTopic.topic_id == Topic.id)
+            .join(ClusterArticle, ClusterArticle.article_id == ArticleTopic.article_id)
+            .where(ClusterArticle.cluster_id == cluster_id)
+        )
+    ).all()
+    story_type = fw.infer_story_type([r[0] for r in topic_rows])
+    selected = fw.select_frameworks(story_type)
+    if not selected:
+        return {"frameworks": [], "story_type": story_type}
+
+    sh = _source_hash(articles)
+    subkey = f"frameworks:{story_type}"
+    cached = _cache_read(cluster, "extra_json", subkey, sh)
+    if cached is None:
+        try:
+            raw = await llm.generate(
+                _frameworks_prompt(cluster, selected),
+                system=_FRAMEWORKS_SYSTEM, schema={"lines": {}}, max_tokens=500,
+            )
+        except llm.LLMUnavailable:
+            return {"unavailable": True, "reason": "no_llm_key"}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("frameworks_failed", error=str(e))
+            return {"unavailable": True, "reason": "llm_error"}
+        raw_lines = (raw.get("lines") if isinstance(raw, dict) else None) or {}
+        data = {"lines": {k: fw.clamp_words(str(v), 20) for k, v in raw_lines.items()}}
+        await _cache_write(db, cluster, "extra_json", subkey, sh, data)
+        cached = data
+
+    lines = cached.get("lines", {})
+    return {
+        "story_type": story_type,
+        "frameworks": [
+            {"id": f["id"], "label": f["label"], "one_liner": lines.get(f["id"], "")}
+            for f in selected
+        ],
+    }

@@ -1189,6 +1189,13 @@ async def cluster_ask(
     return await lenses.ask(db, cluster_id, q)
 
 
+@router.get("/clusters/{cluster_id}/frameworks")
+async def cluster_frameworks(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services import lenses
+
+    return await lenses.frameworks(db, cluster_id)
+
+
 _GEOPOLITICS_TOPIC_TERMS = (
     "world", "geopolitics", "international", "politics", "conflict", "defense",
 )
