@@ -19,6 +19,7 @@ const LOCALES = ["IN", "US", "GB", "global"];
 export function ProfileFields() {
   const [profession, setProfession] = useState("");
   const [locale, setLocale] = useState("IN");
+  const [depth, setDepth] = useState("standard"); // B5: generalist ↔ expert
   const [loaded, setLoaded] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSaved, setProfileSaved] = useState(false);
@@ -32,6 +33,7 @@ export function ProfileFields() {
       .then((p) => {
         setProfession(p.profession ?? "");
         setLocale(p.locale ?? "IN");
+        setDepth(p.depth_pref ?? "standard");
       })
       .catch(() => {})
       .finally(() => setLoaded(true));
@@ -41,7 +43,7 @@ export function ProfileFields() {
     setSavingProfile(true);
     setProfileSaved(false);
     try {
-      await updateProfile({ profession: profession.trim() || null, locale });
+      await updateProfile({ profession: profession.trim() || null, locale, depth_pref: depth });
       setProfileSaved(true);
       setTimeout(() => setProfileSaved(false), 2000);
     } catch {
@@ -106,6 +108,29 @@ export function ProfileFields() {
               </button>
             ))}
           </div>
+
+          <label className="text-small text-[var(--text-secondary)] block mt-4 mb-1">
+            Depth
+          </label>
+          <div className="flex gap-2">
+            {(["brief", "standard", "expert"] as const).map((d) => (
+              <button
+                key={d}
+                onClick={() => setDepth(d)}
+                className={cn(
+                  "px-3 py-1.5 rounded-[var(--radius-md)] text-mono capitalize transition-colors",
+                  depth === d
+                    ? "bg-[var(--accent)] text-[var(--bg)]"
+                    : "bg-[var(--surface-raised)] text-[var(--text-muted)]"
+                )}
+              >
+                {d}
+              </button>
+            ))}
+          </div>
+          <p className="text-mono text-[var(--text-ghost)] mt-2">
+            How deep the AI goes — generalist to expert.
+          </p>
 
           <Button
             variant="primary"

@@ -269,6 +269,8 @@ export interface Profile {
   profession: string | null;
   locale: string;
   interests: string[];
+  depth_pref?: string; // brief | standard | expert
+  region?: string | null;
 }
 
 export async function getProfile(): Promise<Profile> {
@@ -276,7 +278,13 @@ export async function getProfile(): Promise<Profile> {
 }
 
 export async function updateProfile(
-  data: Partial<{ profession: string | null; locale: string; interests: string[] }>
+  data: Partial<{
+    profession: string | null;
+    locale: string;
+    interests: string[];
+    depth_pref: string;
+    region: string | null;
+  }>
 ): Promise<Profile> {
   return fetchJSON("/profile", { method: "PUT", body: JSON.stringify(data) });
 }
@@ -387,6 +395,36 @@ export async function askStory(clusterId: number, question: string): Promise<Ask
     method: "POST",
     body: JSON.stringify({ question }),
   });
+}
+
+/* Frameworks (B2) + Consensus (B3) */
+export interface FrameworkChip {
+  id: string;
+  label: string;
+  one_liner: string;
+}
+export interface FrameworksResult {
+  story_type?: string;
+  frameworks?: FrameworkChip[];
+  unavailable?: boolean;
+}
+export async function getFrameworks(clusterId: number): Promise<FrameworksResult> {
+  return fetchJSON(`/clusters/${clusterId}/frameworks`);
+}
+
+export interface Dissent {
+  outlet: string;
+  point: string;
+}
+export interface ConsensusResult {
+  agree_count?: number;
+  total?: number;
+  dissent?: Dissent[];
+  summary?: string;
+  unavailable?: boolean;
+}
+export async function getConsensus(clusterId: number): Promise<ConsensusResult> {
+  return fetchJSON(`/clusters/${clusterId}/consensus`);
 }
 
 export async function getClusterStrategic(clusterId: number): Promise<LensResult> {
