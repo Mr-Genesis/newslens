@@ -1,39 +1,61 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { getClusterAnalysis, type AnalysisLens, type LensResult } from "@/lib/api";
 
 type Tab = "summary" | "key-facts" | "5ws";
 
 interface AISummaryBoxProps {
   summary: string | null;
   coherence?: number;
+  clusterId?: number;
   className?: string;
 }
 
-const tabs: { id: Tab; label: string }[] = [
+const tabs: { id: Tab; label: string; lens?: AnalysisLens }[] = [
   { id: "summary", label: "Summary" },
-  { id: "key-facts", label: "Key Facts" },
-  { id: "5ws", label: "5Ws" },
+  { id: "key-facts", label: "Key Facts", lens: "key_facts" },
+  { id: "5ws", label: "5Ws", lens: "5ws" },
 ];
 
-export function AISummaryBox({
-  summary,
-  coherence,
-  className,
-}: AISummaryBoxProps) {
+const Disclaimer = () => (
+  <p className="text-mono text-[var(--text-ghost)] mt-3 text-[10px]">
+    AI-generated &middot; may contain errors &middot; verify with sources below
+  </p>
+);
+
+export function AISummaryBox({ summary, coherence, clusterId, className }: AISummaryBoxProps) {
   const [activeTab, setActiveTab] = useState<Tab>("summary");
+  const [cache, setCache] = useState<Record<string, LensResult | "loading">>({});
   const isLow = coherence !== undefined && coherence < 0.6;
 
+  useEffect(() => {
+    const lens = tabs.find((t) => t.id === activeTab)?.lens;
+    if (!lens || !clusterId || cache[lens]) return;
+    setCache((p) => ({ ...p, [lens]: "loading" }));
+    getClusterAnalysis(clusterId, lens)
+      .then((r) => setCache((p) => ({ ...p, [lens]: r })))
+      .catch(() => setCache((p) => ({ ...p, [lens]: { unavailable: true } })));
+  }, [activeTab, clusterId, cache]);
+
+  const renderLens = (lens: AnalysisLens, body: (r: LensResult) => React.ReactNode) => {
+    const state = cache[lens];
+    if (!clusterId) return <Unavailable msg="Open a story to see analysis." />;
+    if (state === "loading" || state === undefined)
+      return <div className="skeleton h-16 w-full" />;
+    if (state.unavailable) return <Unavailable />;
+    return (
+      <>
+        {body(state)}
+        <Disclaimer />
+      </>
+    );
+  };
+
   return (
-    <div
-      className={cn(
-        "rounded-[var(--radius-lg)] glass-light overflow-hidden",
-        className
-      )}
-    >
-      {/* Tab bar */}
+    <div className={cn("rounded-[var(--radius-lg)] glass-light overflow-hidden", className)}>
       <div className="flex border-b border-[var(--glass-border)]">
         {tabs.map((tab) => (
           <button
@@ -59,113 +81,84 @@ export function AISummaryBox({
         ))}
       </div>
 
-      {/* Tab content */}
       <div className="p-4 min-h-[120px]">
         <AnimatePresence mode="wait">
-          {activeTab === "summary" && (
-            <motion.div
-              key="summary"
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.15 }}
-            >
-              {summary ? (
-                <p
-                  className={cn(
-                    "text-small text-[var(--text-secondary)] leading-relaxed",
-                    isLow && "tracking-[0.5px]"
-                  )}
-                >
-                  {summary}
-                </p>
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.15 }}
+          >
+            {activeTab === "summary" &&
+              (summary ? (
+                <>
+                  <p
+                    className={cn(
+                      "text-small text-[var(--text-secondary)] leading-relaxed",
+                      isLow && "tracking-[0.5px]"
+                    )}
+                  >
+                    {summary}
+                  </p>
+                  <Disclaimer />
+                </>
               ) : (
                 <p className="text-small text-[var(--text-muted)] italic">
                   AI analysis unavailable
                 </p>
-              )}
-            </motion.div>
-          )}
+              ))}
 
-          {activeTab === "key-facts" && (
-            <motion.div
-              key="key-facts"
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.15 }}
-              className="flex flex-col items-center justify-center py-4"
-            >
-              <div className="w-10 h-10 rounded-full bg-[var(--accent-subtle)] flex items-center justify-center mb-3">
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="var(--accent)"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="16" y1="13" x2="8" y2="13" />
-                  <line x1="16" y1="17" x2="8" y2="17" />
-                  <line x1="10" y1="9" x2="8" y2="9" />
-                </svg>
-              </div>
-              <p className="text-small text-[var(--text-muted)]">
-                Coming soon
-              </p>
-              <p className="text-mono text-[var(--text-ghost)] mt-1">
-                Extracted key facts from all sources
-              </p>
-            </motion.div>
-          )}
+            {activeTab === "key-facts" &&
+              renderLens("key_facts", (r) => {
+                const facts = (r.facts as string[] | undefined) ?? [];
+                return facts.length ? (
+                  <ul className="space-y-2">
+                    {facts.map((f, i) => (
+                      <li key={i} className="flex gap-2 text-small text-[var(--text-secondary)]">
+                        <span className="text-[var(--accent)] shrink-0">&bull;</span>
+                        <span>{f}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <Unavailable />
+                );
+              })}
 
-          {activeTab === "5ws" && (
-            <motion.div
-              key="5ws"
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 0.15 }}
-              className="flex flex-col items-center justify-center py-4"
-            >
-              <div className="w-10 h-10 rounded-full bg-[var(--accent-subtle)] flex items-center justify-center mb-3">
-                <svg
-                  width="20"
-                  height="20"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="var(--accent)"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="10" />
-                  <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                  <line x1="12" y1="17" x2="12.01" y2="17" />
-                </svg>
-              </div>
-              <p className="text-small text-[var(--text-muted)]">
-                Coming soon
-              </p>
-              <p className="text-mono text-[var(--text-ghost)] mt-1">
-                Who, What, When, Where, Why
-              </p>
-            </motion.div>
-          )}
+            {activeTab === "5ws" &&
+              renderLens("5ws", (r) => {
+                const ws: [string, string][] = [
+                  ["Who", r.who as string],
+                  ["What", r.what as string],
+                  ["When", r.when as string],
+                  ["Where", r.where as string],
+                  ["Why", r.why as string],
+                ];
+                return (
+                  <dl className="space-y-2">
+                    {ws.map(([k, v]) =>
+                      v ? (
+                        <div key={k} className="text-small">
+                          <dt className="text-mono text-[var(--accent)] uppercase">{k}</dt>
+                          <dd className="text-[var(--text-secondary)]">{v}</dd>
+                        </div>
+                      ) : null
+                    )}
+                  </dl>
+                );
+              })}
+          </motion.div>
         </AnimatePresence>
-
-        {/* Disclaimer */}
-        {activeTab === "summary" && summary && (
-          <p className="text-mono text-[var(--text-ghost)] mt-3 text-[10px]">
-            AI-generated &middot; may contain errors &middot; verify with
-            sources below
-          </p>
-        )}
       </div>
     </div>
+  );
+}
+
+function Unavailable({ msg }: { msg?: string }) {
+  return (
+    <p className="text-small text-[var(--text-muted)] italic">
+      {msg ?? "AI analysis unavailable — add an API key in Settings."}
+    </p>
   );
 }

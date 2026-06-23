@@ -179,7 +179,11 @@ export default function DeepDiveView({
               transition={{ duration: 0.3, delay: 0.15 }}
               className="mb-4"
             >
-              <AISummaryBox summary={cluster.summary} coherence={0.85} />
+              <AISummaryBox
+                summary={cluster.summary}
+                coherence={0.85}
+                clusterId={clusterId}
+              />
             </motion.div>
 
             {/* Source Spectrum */}
