@@ -5,7 +5,7 @@ Hybrid strategy: batch job pre-generates + on-demand fallback.
 """
 
 import structlog
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from sqlalchemy import select, update
 
@@ -14,6 +14,15 @@ from app.database import async_session
 from app.models import ClusterArticle, StoryCluster, Article, EmbeddingStatus
 
 logger = structlog.get_logger()
+
+
+def _staleness_cutoff(now: datetime | None = None) -> datetime:
+    """Summaries older than this are stale and eligible for refresh.
+
+    Fixes the original ``datetime.now().replace(hour=hour-4)`` bug (ValueError before 4am).
+    """
+    now = now or datetime.now(timezone.utc)
+    return now - timedelta(hours=4)
 
 
 async def _get_client():
@@ -146,9 +155,7 @@ async def backfill_summaries():
         # Find clusters without summaries or with stale summaries (>4 hours)
         from sqlalchemy import or_
 
-        four_hours_ago = datetime.now(timezone.utc).replace(
-            hour=datetime.now(timezone.utc).hour - 4
-        )
+        cutoff = _staleness_cutoff()
 
         result = await session.execute(
             select(StoryCluster.id)
@@ -156,6 +163,7 @@ async def backfill_summaries():
                 or_(
                     StoryCluster.summary_generated_at.is_(None),
                     StoryCluster.summary.is_(None),
+                    StoryCluster.summary_generated_at < cutoff,
                 )
             )
             .order_by(StoryCluster.created_at.desc())

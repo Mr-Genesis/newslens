@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = ""
 
+    # LLM generation provider (embeddings stay on OpenAI — see embeddings.py)
+    generation_provider: str = "openai"  # "openai" | "gemini"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
+
     # Encryption (for storing API keys in DB)
     encryption_key: str = ""
 
