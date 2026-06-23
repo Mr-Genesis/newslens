@@ -213,6 +213,7 @@ cd backend && pytest -x                           # Run tests, stop on first fai
 # Frontend validation
 cd frontend && npm run build                      # Full production build (uses --webpack)
 cd frontend && npx vitest run                     # Run unit tests
+cd frontend && npm run lint:copy                  # Copy guard — blocks internal jargon in UI (see docs/content/COPY-GUIDELINES.md)
 
 # Full stack validation
 docker-compose up -d db                           # Ensure DB is running

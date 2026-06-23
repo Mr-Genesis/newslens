@@ -321,7 +321,7 @@ export default function ProfilePage() {
                   )}
                 </div>
                 <p className="text-mono text-[var(--text-ghost)] mb-4">
-                  OpenAI API key for embeddings and summaries
+                  Powers AI summaries and related-story matching
                 </p>
 
                 {/* Current key display */}
