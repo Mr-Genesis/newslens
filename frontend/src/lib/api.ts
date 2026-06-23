@@ -427,6 +427,36 @@ export async function getConsensus(clusterId: number): Promise<ConsensusResult> 
   return fetchJSON(`/clusters/${clusterId}/consensus`);
 }
 
+/* Wave C: digest + follows */
+export interface DigestStory {
+  cluster_id: number;
+  title: string;
+  headline: string | null;
+}
+export interface Digest {
+  count: number;
+  since: string;
+  items: DigestStory[];
+}
+export async function getDigest(): Promise<Digest> {
+  return fetchJSON("/digest");
+}
+
+export interface FollowItem {
+  id: number;
+  kind: string;
+  value: string;
+}
+export async function getFollows(): Promise<FollowItem[]> {
+  return fetchJSON("/follows");
+}
+export async function addFollow(kind: string, value: string): Promise<FollowItem> {
+  return fetchJSON("/follows", { method: "POST", body: JSON.stringify({ kind, value }) });
+}
+export async function removeFollow(id: number): Promise<void> {
+  await fetchJSON(`/follows/${id}`, { method: "DELETE" });
+}
+
 export async function getClusterStrategic(clusterId: number): Promise<LensResult> {
   return fetchJSON(`/clusters/${clusterId}/strategic`);
 }

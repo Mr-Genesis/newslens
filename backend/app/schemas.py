@@ -306,3 +306,29 @@ class AskAnswer(BaseModel):
     answer: str = ""
     citations: list[AskCitation] = Field(default_factory=list)
     refused: bool = False
+
+
+# --- Follows + digest (Wave C) ---
+class FollowCreate(BaseModel):
+    kind: str  # topic | entity | saved_search
+    value: str
+
+
+class FollowOut(BaseModel):
+    id: int
+    kind: str
+    value: str
+
+    model_config = {"from_attributes": True}
+
+
+class DigestItem(BaseModel):
+    cluster_id: int
+    title: str
+    headline: str | None = None
+
+
+class DigestResponse(BaseModel):
+    count: int
+    since: str
+    items: list[DigestItem]
