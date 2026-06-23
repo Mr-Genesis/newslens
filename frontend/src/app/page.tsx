@@ -8,6 +8,7 @@ import { HeroStoryCard } from "@/components/HeroStoryCard";
 import { Chip } from "@/components/ui/Chip";
 import { Button } from "@/components/ui/Button";
 import { StoryCardSkeleton } from "@/components/ui/Skeleton";
+import { DailyTriviaCard } from "@/components/ui/DailyTriviaCard";
 import { getBriefing, type Briefing, type BriefingStory } from "@/lib/api";
 import { isStale } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -235,6 +236,9 @@ export default function BriefingPage() {
           initial="initial"
           animate="animate"
         >
+          {/* Daily quiz (E8) — dismissible, returns each day */}
+          <DailyTriviaCard />
+
           {/* Hero story */}
           {heroStory && (
             <div className="mb-4">
