@@ -38,6 +38,13 @@ export function HeroStoryCard({ story }: HeroStoryCardProps) {
           {story.summary}
         </p>
 
+        {/* "Why you're seeing this" — WIIFM one-liner, when cached (Wave Q1) */}
+        {story.impact_headline && (
+          <p className="text-mono text-[var(--accent)] line-clamp-1 mb-3">
+            {story.impact_headline}
+          </p>
+        )}
+
         <div className="flex items-center gap-3">
           <ConfidenceScore
             sourceCount={story.source_count}

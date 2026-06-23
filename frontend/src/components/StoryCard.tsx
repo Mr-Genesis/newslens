@@ -65,6 +65,13 @@ export function StoryCard({ story }: StoryCardProps) {
             {story.summary}
           </p>
 
+          {/* "Why you're seeing this" — WIIFM one-liner, when cached (Wave Q1) */}
+          {story.impact_headline && (
+            <p className="text-mono text-[var(--accent)] mt-1.5 line-clamp-1">
+              {story.impact_headline}
+            </p>
+          )}
+
           {/* Meta row */}
           <div className="flex items-center justify-between gap-3 mt-2">
             <ConfidenceScore

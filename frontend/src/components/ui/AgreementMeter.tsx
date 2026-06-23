@@ -9,8 +9,10 @@ interface AgreementMeterProps {
   createdAt: string;
 }
 
-/** Deep Dive trust meter — "Sources agree" + % + bar, tier-coloured.
- *  Plain-language ("agreement", never "coherence"); see COPY-GUIDELINES §4. */
+/** Deep Dive cluster meter — "Source overlap" + % + bar, tier-coloured.
+ *  HONEST LABEL (Wave A): the value is embedding tightness — how tightly the sources
+ *  cluster onto the same story — NOT whether they agree. We no longer assert "agreement"
+ *  (a claim we don't measure). A real consensus/divergence metric lands in Wave B. */
 function tier(coherence: number): { pct: number; color: string } {
   const pct = Math.round(coherence * 100);
   if (coherence >= 0.8) return { pct, color: "var(--agree)" };
@@ -29,7 +31,7 @@ export function AgreementMeter({
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center justify-between">
         <span className="text-small text-[var(--text-secondary)]">
-          Sources agree
+          Source overlap
         </span>
         <span className="text-mono" style={{ color }}>
           {pct}%

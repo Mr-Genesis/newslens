@@ -62,6 +62,8 @@ export interface BriefingStory {
   source_count: number;
   coherence: number;
   is_read?: boolean;
+  // E6/Wave Q1: best-effort WIIFM one-liner ("why you're seeing this"), when cached
+  impact_headline?: string | null;
 }
 
 export interface Briefing {
@@ -314,7 +316,53 @@ export async function getClusterAnalysis(
   return fetchJSON(`/clusters/${clusterId}/analysis?lens=${lens}`);
 }
 
-export async function getClusterImpact(clusterId: number): Promise<LensResult> {
+/* Impact engine v2 (Wave A) — structured StoryImpact contract */
+export type Horizon = "now" | "weeks" | "quarter" | "year_plus";
+export type ImpactConfidence = "low" | "medium" | "high";
+
+export interface ImpactEvidence {
+  claim: string;
+  source: string;
+}
+
+export interface ImpactDimension {
+  applicable: boolean;
+  relevance: string;
+  mechanism: string;
+  watch_items: string[];
+  horizon: Horizon;
+  confidence: ImpactConfidence;
+  confidence_rationale: string;
+  evidence: ImpactEvidence[];
+  not_advice?: boolean;
+}
+
+export interface StoryImpact {
+  cluster_id: string;
+  headline: string;
+  personal_relevance: { score: number; one_liner: string };
+  dimensions: {
+    professional: ImpactDimension;
+    financial: ImpactDimension;
+    civic: ImpactDimension;
+  };
+  caveats: string;
+  cached?: boolean;
+}
+
+export interface Unavailable {
+  unavailable: true;
+  reason?: string;
+}
+
+export type ImpactResult = StoryImpact | Unavailable;
+
+/** Type guard: a real impact payload (vs an `unavailable` degradation response). */
+export function isStoryImpact(r: ImpactResult | null): r is StoryImpact {
+  return !!r && !("unavailable" in r) && "personal_relevance" in r;
+}
+
+export async function getClusterImpact(clusterId: number): Promise<ImpactResult> {
   return fetchJSON(`/clusters/${clusterId}/impact`);
 }
 
