@@ -35,6 +35,12 @@ async def engine():
     async with eng.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_articles_embedding_hnsw "
+                "ON articles USING hnsw (embedding vector_cosine_ops)"
+            )
+        )
     yield eng
     await eng.dispose()
 

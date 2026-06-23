@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     gdelt_fetch_interval_minutes: int = 15
     embedding_backfill_interval_minutes: int = 5
 
+    # GDELT query (parametrized for region/language; default India + English)
+    gdelt_query: str = "sourcecountry:IN"
+
     # Embedding config
     embedding_model: str = "text-embedding-3-small"
     embedding_dimensions: int = 1536

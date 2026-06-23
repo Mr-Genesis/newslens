@@ -1141,3 +1141,123 @@ async def trivia_daily(
         return {"unavailable": True, "reason": "no_llm_key"}
     except Exception:  # noqa: BLE001 — graceful degradation, never 500
         return {"unavailable": True, "reason": "llm_error"}
+
+
+# ── E2: admin sources ──
+@router.get("/admin/sources")
+async def list_sources(db: AsyncSession = Depends(get_db)):
+    rows = (await db.execute(select(Source).order_by(Source.name))).scalars().all()
+    return [
+        {
+            "id": s.id, "name": s.name, "url": s.url, "rss_url": s.rss_url,
+            "region": s.region, "category": s.category,
+            "is_paywalled": s.is_paywalled,
+            "source_type": s.source_type.value if s.source_type else None,
+        }
+        for s in rows
+    ]
+
+
+@router.post("/admin/sources")
+async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
+    from fastapi import HTTPException
+
+    name = (body.get("name") or "").strip()
+    url = (body.get("url") or "").strip()
+    if not name or not url:
+        raise HTTPException(status_code=400, detail="name and url are required")
+    existing = (
+        await db.execute(select(Source).where(Source.url == url))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="source url already exists")
+    s = Source(
+        name=name, url=url, rss_url=(body.get("rss_url") or "").strip() or None,
+        is_paywalled=bool(body.get("is_paywalled", False)),
+        source_type=body.get("source_type", "other"),
+        region=body.get("region", "global"), category=body.get("category"),
+    )
+    db.add(s)
+    await db.commit()
+    return {"id": s.id, "name": s.name}
+
+
+# ── E4: hybrid search (semantic + keyword; keyword ranks above semantic-only) ──
+@router.get("/search")
+async def search(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+):
+    from fastapi import HTTPException
+
+    query_str = q.strip()
+    if not query_str:
+        raise HTTPException(status_code=400, detail="empty query")
+
+    results: dict[int, dict] = {}
+
+    # Semantic (pgvector NN) — lower priority than exact keyword.
+    from app.services.embeddings import generate_embedding
+
+    try:
+        emb = await generate_embedding(query_str)
+    except Exception:  # noqa: BLE001
+        emb = None
+    if emb is not None:
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT id FROM articles WHERE embedding IS NOT NULL "
+                    "ORDER BY embedding <=> :v LIMIT :k"
+                ),
+                {"v": str(emb), "k": limit},
+            )
+        ).all()
+        for i, (aid,) in enumerate(rows):
+            results[aid] = {"id": aid, "matched_on": "meaning", "rank": 100 + i}
+
+    # Keyword (exact substring) — promote to the top.
+    kw_rows = (
+        await db.execute(
+            select(Article.id).where(Article.title.ilike(f"%{query_str}%")).limit(limit)
+        )
+    ).all()
+    for (aid,) in kw_rows:
+        if aid in results:
+            results[aid]["matched_on"] = "topic+meaning"
+            results[aid]["rank"] = 0
+        else:
+            results[aid] = {"id": aid, "matched_on": "topic", "rank": 0}
+
+    ids = list(results.keys())
+    if not ids:
+        return {"query": query_str, "results": []}
+
+    arts = (
+        await db.execute(
+            select(Article).options(selectinload(Article.source)).where(Article.id.in_(ids))
+        )
+    ).scalars().all()
+    art_map = {a.id: a for a in arts}
+    ca = (
+        await db.execute(
+            select(ClusterArticle.article_id, ClusterArticle.cluster_id).where(
+                ClusterArticle.article_id.in_(ids)
+            )
+        )
+    ).all()
+    art_to_cluster = {aid: cid for aid, cid in ca}
+
+    out = []
+    for aid, meta in sorted(results.items(), key=lambda kv: kv[1]["rank"]):
+        a = art_map.get(aid)
+        if not a:
+            continue
+        out.append({
+            "id": a.id, "title": a.title, "snippet": a.snippet, "url": a.url,
+            "source": SourceOut.model_validate(a.source).model_dump(),
+            "cluster_id": art_to_cluster.get(a.id),
+            "matched_on": meta["matched_on"],
+        })
+    return {"query": query_str, "results": out}

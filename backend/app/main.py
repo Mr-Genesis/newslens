@@ -55,6 +55,9 @@ async def init_db():
             # E2: source region + category
             "ALTER TABLE sources ADD COLUMN IF NOT EXISTS region VARCHAR(16) DEFAULT 'global'",
             "ALTER TABLE sources ADD COLUMN IF NOT EXISTS category VARCHAR(64)",
+            # E4: HNSW index for fast vector search (clustering + /search)
+            "CREATE INDEX IF NOT EXISTS ix_articles_embedding_hnsw "
+            "ON articles USING hnsw (embedding vector_cosine_ops)",
             # Add 'read' to feedback_type enum if not present
             "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_enum WHERE enumlabel = 'read' AND enumtypid = (SELECT oid FROM pg_type WHERE typname = 'feedbacktype')) THEN ALTER TYPE feedbacktype ADD VALUE 'read'; END IF; END $$",
         ]:

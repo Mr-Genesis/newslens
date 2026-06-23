@@ -1,10 +1,13 @@
 """RSS feed fetcher service with retry and structured logging."""
 
+import json
 import structlog
 import feedparser
 import httpx
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
+from urllib.parse import quote_plus
 
 from sqlalchemy import select, text
 
@@ -119,40 +122,73 @@ async def backfill_topic_assignments():
     logger.info("topic_assignment_backfill_complete", processed=len(articles), success=success)
 
 
-# Starter RSS feeds
-STARTER_FEEDS = [
-    {"name": "Reuters - World", "url": "https://www.reuters.com", "rss_url": "https://www.rssboard.org/rss-specification", "is_paywalled": False, "source_type": "wire"},
-    {"name": "Ars Technica", "url": "https://arstechnica.com", "rss_url": "https://feeds.arstechnica.com/arstechnica/index", "is_paywalled": False, "source_type": "blog"},
-    {"name": "TechCrunch", "url": "https://techcrunch.com", "rss_url": "https://techcrunch.com/feed/", "is_paywalled": False, "source_type": "blog"},
-    {"name": "The Verge", "url": "https://www.theverge.com", "rss_url": "https://www.theverge.com/rss/index.xml", "is_paywalled": False, "source_type": "blog"},
-    {"name": "Hacker News", "url": "https://news.ycombinator.com", "rss_url": "https://hnrss.org/frontpage", "is_paywalled": False, "source_type": "other"},
-    {"name": "BBC News", "url": "https://www.bbc.com/news", "rss_url": "http://feeds.bbci.co.uk/news/rss.xml", "is_paywalled": False, "source_type": "newspaper"},
-    {"name": "NPR News", "url": "https://www.npr.org", "rss_url": "https://feeds.npr.org/1001/rss.xml", "is_paywalled": False, "source_type": "channel"},
-    {"name": "Al Jazeera", "url": "https://www.aljazeera.com", "rss_url": "https://www.aljazeera.com/xml/rss/all.xml", "is_paywalled": False, "source_type": "channel"},
-    {"name": "Nature News", "url": "https://www.nature.com", "rss_url": "https://www.nature.com/nature.rss", "is_paywalled": True, "source_type": "newspaper"},
-    {"name": "Wall Street Journal", "url": "https://www.wsj.com", "rss_url": "https://feeds.a.dj.com/rss/RSSWorldNews.xml", "is_paywalled": True, "source_type": "newspaper"},
-]
+_SOURCES_FILE = Path(__file__).resolve().parent.parent / "data" / "sources.json"
 
 
-async def ensure_sources():
-    """Seed starter sources if none exist."""
-    async with async_session() as session:
-        result = await session.execute(select(Source).limit(1))
-        if result.scalar_one_or_none() is not None:
-            return
+def load_feeds() -> list[dict]:
+    """Load the configured feed list (global + India) from app/data/sources.json."""
+    with open(_SOURCES_FILE, encoding="utf-8") as f:
+        return json.load(f)
 
-        for feed in STARTER_FEEDS:
-            source = Source(
-                name=feed["name"],
-                url=feed["url"],
-                rss_url=feed["rss_url"],
-                is_paywalled=feed["is_paywalled"],
-                source_type=feed["source_type"],
-            )
-            session.add(source)
 
+def google_news_rss_url(
+    query: str, *, hl: str = "en-IN", gl: str = "IN", ceid: str = "IN:en"
+) -> str:
+    """Build a Google News RSS search URL for per-topic ingestion (default: India/English)."""
+    return (
+        f"https://news.google.com/rss/search?q={quote_plus(query)}"
+        f"&hl={hl}&gl={gl}&ceid={ceid}"
+    )
+
+
+async def ensure_sources(session=None):
+    """Upsert configured sources: insert new feeds, backfill region/category on existing.
+
+    Keyed on rss_url (fallback url). Safe to run repeatedly — adds feeds to an existing DB
+    instead of only seeding when the table is empty. Accepts an optional session (tests).
+    """
+    if session is not None:
+        await _upsert_sources(session, load_feeds())
+        return
+    async with async_session() as s:
+        await _upsert_sources(s, load_feeds())
+
+
+async def _upsert_sources(session, feeds: list[dict]):
+    added = 0
+    if True:
+        for feed in feeds:
+            existing = (
+                await session.execute(
+                    select(Source).where(Source.rss_url == feed["rss_url"])
+                )
+            ).scalar_one_or_none()
+            if existing is None:
+                existing = (
+                    await session.execute(
+                        select(Source).where(Source.url == feed["url"])
+                    )
+                ).scalar_one_or_none()
+            if existing is not None:
+                existing.region = feed.get("region", existing.region)
+                existing.category = feed.get("category", existing.category)
+                if not existing.rss_url:
+                    existing.rss_url = feed["rss_url"]
+            else:
+                session.add(
+                    Source(
+                        name=feed["name"],
+                        url=feed["url"],
+                        rss_url=feed["rss_url"],
+                        is_paywalled=feed.get("is_paywalled", False),
+                        source_type=feed.get("source_type", "other"),
+                        region=feed.get("region", "global"),
+                        category=feed.get("category"),
+                    )
+                )
+                added += 1
         await session.commit()
-        logger.info("sources_seeded", count=len(STARTER_FEEDS))
+    logger.info("sources_ensured", total=len(feeds), added=added)
 
 
 def parse_pub_date(entry) -> datetime | None:
