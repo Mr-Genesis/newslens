@@ -26,6 +26,9 @@ apscheduler==3.10.4
 # Encryption
 cryptography>=42.0.0
 
+# Auth (Firebase ID-token verification at app/services/auth.py)
+firebase-admin==7.4.0
+
 # Utilities
 pydantic==2.10.4
 pydantic-settings==2.7.1

@@ -15,10 +15,12 @@
     "apk:debug": "cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
+    "@capacitor-firebase/authentication": "^8.3.0",
     "@capacitor/android": "^8.3.0",
     "@capacitor/cli": "^8.3.0",
     "@capacitor/core": "^8.3.0",
     "clsx": "^2.1.1",
+    "firebase": "^12.15.0",
     "framer-motion": "^12.38.0",
     "next": "16.2.1",
     "react": "19.2.4",

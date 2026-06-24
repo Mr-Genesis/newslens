@@ -66,10 +66,15 @@ class User(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    # Wave D Phase A: Firebase identity (multi-user). Uniqueness enforced in app (get-or-create).
+    # Wave D Phase A: Firebase identity (multi-user). UNIQUE on non-NULL uids — Postgres allows
+    # many NULLs in a unique index, so the default user + any legacy rows stay NULL without conflict.
     firebase_uid: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("uq_users_firebase_uid", "firebase_uid", unique=True),
     )
 
     feedback: Mapped[list["UserFeedback"]] = relationship(back_populates="user")

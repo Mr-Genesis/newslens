@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import async_session, get_db
+from app.services.auth import get_current_user
 from app.models import (
     Article,
     ArticleTopic,
@@ -1213,6 +1214,13 @@ async def cluster_timeline(cluster_id: int, db: AsyncSession = Depends(get_db)):
     from app.services import lenses
 
     return await lenses.timeline(db, cluster_id)
+
+
+@router.get("/auth/me")
+async def auth_me(user: User = Depends(get_current_user)):
+    """Resolve the caller from the Firebase ID token (or the default user when unauthenticated).
+    The first auth-gated endpoint — makes the seam reachable and lets the frontend confirm sign-in."""
+    return {"id": user.id, "firebase_uid": user.firebase_uid, "profession": user.profession}
 
 
 # ── Wave C: standing follows + "while you were away" digest ──

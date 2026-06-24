@@ -40,3 +40,46 @@ async def test_resolve_user_rejects_invalid_token(db_session, monkeypatch):
     with pytest.raises(HTTPException) as ei:
         await auth.resolve_user(db_session, "Bearer badtoken")
     assert ei.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_auth_me_default_user_without_token(aclient):
+    b = (await aclient.get("/auth/me")).json()
+    assert b["id"] == 1  # unauthenticated → default user (back-compat)
+
+
+@pytest.mark.asyncio
+async def test_auth_me_with_valid_token(aclient, monkeypatch):
+    async def fake_verify(token):
+        return "me-uid-1"
+
+    monkeypatch.setattr(auth, "verify_firebase_token", fake_verify)
+    r = await aclient.get("/auth/me", headers={"Authorization": "Bearer x"})
+    assert r.status_code == 200
+    assert r.json()["firebase_uid"] == "me-uid-1"
+
+
+@pytest.mark.asyncio
+async def test_auth_me_rejects_bad_token(aclient, monkeypatch):
+    async def fake_verify(token):
+        return None
+
+    monkeypatch.setattr(auth, "verify_firebase_token", fake_verify)
+    r = await aclient.get("/auth/me", headers={"Authorization": "Bearer bad"})
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_firebase_uid_unique_constraint(db_session):
+    """DB-level guard: two rows can't share a firebase_uid (the get-or-create race backstop)."""
+    from sqlalchemy.exc import IntegrityError
+
+    db_session.add(User(firebase_uid="dup-uid", locale="IN"))
+    await db_session.flush()
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():  # isolate the failure to a savepoint
+            db_session.add(User(firebase_uid="dup-uid", locale="IN"))
+    # ...but multiple NULLs are allowed (default user + legacy rows coexist)
+    async with db_session.begin_nested():
+        db_session.add(User(firebase_uid=None, locale="IN"))
+        db_session.add(User(firebase_uid=None, locale="IN"))

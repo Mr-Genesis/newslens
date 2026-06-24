@@ -8,6 +8,7 @@ is present, so existing endpoints keep working until they are migrated to requir
 import structlog
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -27,7 +28,9 @@ async def verify_firebase_token(token: str) -> str | None:
     try:
         from firebase_admin import auth as fb_auth  # lazy — only on the real verify path
 
-        decoded = fb_auth.verify_id_token(token)
+        # clock_skew_seconds absorbs the #1 false-401 cause ("Token used too early") from
+        # Docker/mobile clock drift; firebase-admin 7.x supports it.
+        decoded = fb_auth.verify_id_token(token, clock_skew_seconds=10)
         return decoded.get("uid")
     except Exception as e:  # noqa: BLE001 — any failure = unverifiable
         logger.debug("firebase_verify_failed", error=str(e))
@@ -56,9 +59,17 @@ async def resolve_user(db: AsyncSession, authorization: str | None) -> User:
         await db.execute(select(User).where(User.firebase_uid == uid))
     ).scalar_one_or_none()
     if u is None:
-        u = User(firebase_uid=uid, locale="IN")
-        db.add(u)
-        await db.flush()
+        # Get-or-create with a race guard: a concurrent first-request for the same uid could also
+        # see no row; the UNIQUE(firebase_uid) index turns the loser's insert into IntegrityError,
+        # which we absorb (SAVEPOINT rollback) and resolve by re-selecting the winner's row.
+        try:
+            async with db.begin_nested():
+                u = User(firebase_uid=uid, locale="IN")
+                db.add(u)
+        except IntegrityError:
+            u = (
+                await db.execute(select(User).where(User.firebase_uid == uid))
+            ).scalar_one()
     return u
 
 
