@@ -11,6 +11,7 @@ import { StoryCardSkeleton } from "@/components/ui/Skeleton";
 import { DailyTriviaCard } from "@/components/ui/DailyTriviaCard";
 import { PersonalizeBanner } from "@/components/ui/PersonalizeBanner";
 import { WhileAwayCard } from "@/components/ui/WhileAwayCard";
+import { LaunchScreen } from "@/components/LaunchScreen";
 import { getBriefing, type Briefing, type BriefingStory } from "@/lib/api";
 import { isStale } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -43,12 +44,13 @@ export default function BriefingPage() {
   const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string>("All");
+  const [rechecking, setRechecking] = useState(false);
   const router = useRouter();
 
-  // First-run: send new users to onboarding (once per browser).
+  // First-run: send new users through the intro (once per browser).
   useEffect(() => {
     if (typeof window !== "undefined" && !localStorage.getItem("newslens-onboarded")) {
-      router.replace("/onboarding");
+      router.replace("/welcome");
     }
   }, [router]);
 
@@ -76,6 +78,31 @@ export default function BriefingPage() {
   useEffect(() => {
     fetchBriefing();
   }, [fetchBriefing]);
+
+  // Silent cold-start re-check: keeps the launch screen mounted (no "refreshing"
+  // flash) and only flips to success once stories arrive.
+  const recheckBriefing = useCallback(async () => {
+    setRechecking(true);
+    try {
+      const data = await getBriefing();
+      if (data.stories && data.stories.length > 0) {
+        setBriefing(data);
+        setState("success");
+      }
+    } catch {
+      /* still warming up — stay on the launch screen */
+    } finally {
+      setRechecking(false);
+    }
+  }, []);
+
+  // While the first briefing is still warming up (empty), quietly re-check every
+  // 20s so the launch screen advances to the feed on its own.
+  useEffect(() => {
+    if (state !== "empty") return;
+    const id = setInterval(recheckBriefing, 20000);
+    return () => clearInterval(id);
+  }, [state, recheckBriefing]);
 
   // Get unique categories
   const categories = briefing
@@ -160,38 +187,9 @@ export default function BriefingPage() {
         </div>
       )}
 
-      {/* Empty / first-run state */}
+      {/* Empty / first-run state — cold-start launch experience */}
       {state === "empty" && (
-        <div className="flex flex-col items-center justify-center pt-[var(--space-3xl)] text-center">
-          {/* Animated stacked cards */}
-          <div className="relative w-16 h-20 mb-6">
-            {[0, 1, 2].map((i) => (
-              <motion.div
-                key={i}
-                animate={{ y: [0, -4, 0] }}
-                transition={{
-                  duration: 2,
-                  delay: i * 0.3,
-                  repeat: Infinity,
-                  ease: "easeInOut",
-                }}
-                className="absolute inset-0 rounded-[var(--radius-md)] bg-[var(--surface-raised)] border border-[var(--border)]"
-                style={{
-                  transform: `translateY(${i * 4}px) scale(${1 - i * 0.05})`,
-                  opacity: 1 - i * 0.3,
-                  zIndex: 3 - i,
-                }}
-              />
-            ))}
-          </div>
-          <p className="text-heading text-[var(--text-primary)]">
-            Your briefing is being prepared
-          </p>
-          <p className="text-small text-[var(--text-muted)] mt-2 max-w-[280px]">
-            Articles are being fetched and analyzed. This usually takes 2-3
-            minutes.
-          </p>
-        </div>
+        <LaunchScreen onRetry={recheckBriefing} refreshing={rechecking} />
       )}
 
       {/* Error state */}

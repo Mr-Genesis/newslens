@@ -3,6 +3,7 @@ import { Fraunces, DM_Sans, JetBrains_Mono } from "next/font/google";
 import { NavBar } from "@/components/layout/NavBar";
 import { BottomTabBar } from "@/components/layout/BottomTabBar";
 import { ThemeProvider } from "@/components/ThemeProvider";
+import { SplashScreen } from "@/components/SplashScreen";
 import "./globals.css";
 
 // Inline script to prevent flash of wrong theme (runs before React hydration)
@@ -57,6 +58,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-[100dvh] flex flex-col overflow-x-hidden">
         <ThemeProvider>
+          <SplashScreen />
           <NavBar />
           <main className="flex-1 pt-[var(--page-top)] pb-[var(--page-bottom)]">
             {children}
