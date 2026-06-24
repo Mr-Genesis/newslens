@@ -5,12 +5,13 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { BrandMark } from "@/components/ui/BrandMark";
 
 /**
- * SplashScreen — branded app-open reveal.
+ * SplashScreen — branded cold-start reveal, per the official Splash design.
  *
- * Mounted once in the root layout. Shows a full-viewport "NewsLens" wordmark on
- * cold start, then fades out and hands off to the app. Gated by sessionStorage
- * so it appears once per app session (a fresh launch), not on every in-app
- * navigation or re-render. Honours prefers-reduced-motion.
+ * Shows the animated NewsLens mark (the brand GIF) over the wordmark with a
+ * resolving progress bar, then fades out and hands off to the app. Mounted once
+ * in the root layout and gated by sessionStorage so it appears once per app
+ * session (a fresh launch). Reduced-motion users get the static mark instead of
+ * the looping GIF.
  */
 const SEEN_KEY = "newslens-splash-seen";
 
@@ -30,7 +31,7 @@ export function SplashScreen() {
     if (seen) return;
 
     setShow(true);
-    const hold = reduce ? 650 : 1500;
+    const hold = reduce ? 700 : 2200;
     const t = setTimeout(() => {
       setShow(false);
       try {
@@ -45,10 +46,6 @@ export function SplashScreen() {
   // Avoid hydration mismatch — render nothing on the server / first paint.
   if (!mounted) return null;
 
-  // Timing helper: collapse all motion when the user prefers reduced motion.
-  const t = (duration: number, delay = 0) =>
-    reduce ? { duration: 0 } : { duration, delay, ease: [0.16, 1, 0.3, 1] as const };
-
   return (
     <AnimatePresence>
       {show && (
@@ -56,62 +53,55 @@ export function SplashScreen() {
           key="splash"
           role="status"
           aria-label="NewsLens is starting"
-          className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[var(--bg)] px-[var(--space-lg)]"
+          className="fixed inset-0 z-[100] flex flex-col items-center justify-center gap-[34px] bg-[#0C0C0E] px-[var(--space-lg)]"
           initial={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.45, ease: "easeIn" } }}
         >
-          {/* Kicker — classified-brief framing */}
-          <motion.p
-            className="text-mono uppercase text-[var(--text-ghost)] mb-[var(--space-lg)]"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={t(0.4, 0.05)}
-          >
-            Daily Intelligence Brief
-          </motion.p>
-
-          {/* Mark */}
-          <motion.div
-            className="text-[var(--text-primary)] mb-[var(--space-lg)]"
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={t(0.5, 0.1)}
-          >
-            <BrandMark size={76} />
-          </motion.div>
+          {/* Animated mark — the brand GIF (static mark under reduced motion) */}
+          {reduce ? (
+            <div className="text-[var(--text-primary)]">
+              <BrandMark size={132} />
+            </div>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src="/newslens-mark.gif"
+              alt=""
+              width={150}
+              height={150}
+              className="w-[150px] h-[150px] select-none"
+              draggable={false}
+            />
+          )}
 
           {/* Wordmark */}
-          <motion.div
-            className="flex items-baseline"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={t(0.55, 0.12)}
-          >
-            <span className="text-[44px] sm:text-[56px] leading-none font-semibold tracking-[-0.02em] text-[var(--text-primary)] font-[family-name:var(--font-fraunces)]">
+          <div className="flex items-baseline">
+            <span className="text-[40px] sm:text-[48px] leading-none font-semibold tracking-[-0.02em] text-[var(--text-primary)] font-[family-name:var(--font-fraunces)]">
               News
             </span>
-            <span className="text-[44px] sm:text-[56px] leading-none font-semibold tracking-[-0.02em] text-[var(--accent)] font-[family-name:var(--font-fraunces)]">
+            <span className="text-[40px] sm:text-[48px] leading-none font-semibold tracking-[-0.02em] text-[var(--accent)] font-[family-name:var(--font-fraunces)]">
               Lens
             </span>
-          </motion.div>
+          </div>
 
-          {/* Amber underline — the single accent, "earned" as it draws in */}
-          <motion.div
-            className="h-[2px] w-16 bg-[var(--accent)] mt-[var(--space-md)] origin-left"
-            initial={{ scaleX: 0, opacity: 0.6 }}
-            animate={{ scaleX: 1, opacity: 1 }}
-            transition={t(0.5, 0.4)}
-          />
-
-          {/* Tagline */}
-          <motion.p
-            className="text-small text-[var(--text-muted)] mt-[var(--space-lg)]"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={t(0.4, 0.6)}
-          >
-            Breadth, not bubbles.
-          </motion.p>
+          {/* Resolving progress + status label */}
+          <div className="absolute bottom-[54px] left-0 right-0 flex flex-col items-center gap-3.5">
+            <div className="w-[150px] h-[2px] rounded-full bg-[var(--border-subtle)] overflow-hidden">
+              {reduce ? (
+                <div className="w-1/3 h-full bg-[var(--text-primary)]" />
+              ) : (
+                <motion.div
+                  className="w-[46px] h-full rounded-full bg-[var(--text-primary)]"
+                  initial={{ x: -46 }}
+                  animate={{ x: 150 }}
+                  transition={{ duration: 1.5, ease: [0.65, 0, 0.35, 1], repeat: Infinity }}
+                />
+              )}
+            </div>
+            <p className="text-mono uppercase text-[var(--text-ghost)]">
+              Assembling your briefing
+            </p>
+          </div>
         </motion.div>
       )}
     </AnimatePresence>
