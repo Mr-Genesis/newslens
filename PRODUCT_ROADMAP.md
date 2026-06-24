@@ -109,5 +109,5 @@ Data Retention
 - **SSE real-time updates** — APScheduler refreshes every 10 min, sufficient for MVP
 - **Admin endpoints** — Developer-only monitoring, not user-facing
 - **Landscape orientation** — Mobile news readers used in portrait 95%+ of the time
-- **Custom app icon** — Cosmetic, zero impact on product value
+- **Custom app icon** — ✅ shipped anyway: full brand alignment (adaptive launcher icon, native splash, favicons) from the official NewsLens brand kit; the default Capacitor robot is gone
 - **Multi-language** — English-only MVP is appropriate for initial user base
