@@ -6,6 +6,7 @@ import { motion } from "framer-motion";
 import { StoryCard } from "@/components/StoryCard";
 import { HeroStoryCard } from "@/components/HeroStoryCard";
 import { Chip } from "@/components/ui/Chip";
+import { FollowButton } from "@/components/ui/FollowButton";
 import { Button } from "@/components/ui/Button";
 import { StoryCardSkeleton } from "@/components/ui/Skeleton";
 import { DailyTriviaCard } from "@/components/ui/DailyTriviaCard";
@@ -173,6 +174,19 @@ export default function BriefingPage() {
                 {cat}
               </Chip>
             ))}
+          </div>
+        )}
+
+      {/* Follow the topic you've filtered to — kept quiet until a topic is picked */}
+      {(state === "success" || state === "refreshing") &&
+        activeCategory !== "All" && (
+          <div className="flex justify-end mb-2">
+            <FollowButton
+              key={activeCategory}
+              kind="topic"
+              value={activeCategory}
+              label="Follow topic"
+            />
           </div>
         )}
 
