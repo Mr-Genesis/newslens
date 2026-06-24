@@ -46,10 +46,10 @@ export default function BriefingPage() {
   const [rechecking, setRechecking] = useState(false);
   const router = useRouter();
 
-  // First-run: send new users to onboarding (once per browser).
+  // First-run: send new users through the intro (once per browser).
   useEffect(() => {
     if (typeof window !== "undefined" && !localStorage.getItem("newslens-onboarded")) {
-      router.replace("/onboarding");
+      router.replace("/welcome");
     }
   }, [router]);
 

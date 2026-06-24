@@ -8,11 +8,11 @@ describe("SplashScreen — branded app-open reveal", () => {
     sessionStorage.clear();
   });
 
-  it("shows the wordmark and tagline on first launch of a session", () => {
+  it("shows the wordmark and status label on first launch of a session", () => {
     render(<SplashScreen />);
     expect(screen.getByText("News")).toBeInTheDocument();
     expect(screen.getByText("Lens")).toBeInTheDocument();
-    expect(screen.getByText(/breadth, not bubbles/i)).toBeInTheDocument();
+    expect(screen.getByText(/assembling your briefing/i)).toBeInTheDocument();
   });
 
   it("does not show again once the session flag is set", () => {
@@ -27,7 +27,7 @@ describe("SplashScreen — branded app-open reveal", () => {
       render(<SplashScreen />);
       expect(sessionStorage.getItem("newslens-splash-seen")).toBeNull();
       act(() => {
-        vi.advanceTimersByTime(2000);
+        vi.advanceTimersByTime(2500);
       });
       expect(sessionStorage.getItem("newslens-splash-seen")).toBe("1");
     } finally {

@@ -109,8 +109,13 @@ const tabs = [
 export function BottomTabBar() {
   const pathname = usePathname();
 
-  // Hide tab bar on deep dive + onboarding (full-screen flows)
-  if (pathname.startsWith("/story") || pathname.startsWith("/onboarding")) return null;
+  // Hide tab bar on deep dive + first-run flows (full-screen)
+  if (
+    pathname.startsWith("/story") ||
+    pathname.startsWith("/onboarding") ||
+    pathname.startsWith("/welcome")
+  )
+    return null;
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/";

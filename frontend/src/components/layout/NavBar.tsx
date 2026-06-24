@@ -8,6 +8,10 @@ import { Logo } from "@/components/ui/BrandMark";
 export function NavBar() {
   const pathname = usePathname();
   const router = useRouter();
+
+  // Full-screen first-run intro — no app chrome.
+  if (pathname.startsWith("/welcome")) return null;
+
   const isDeepDive = pathname.startsWith("/story");
 
   return (
