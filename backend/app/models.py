@@ -102,7 +102,9 @@ class Article(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(1024), nullable=False)
-    snippet: Mapped[str | None] = mapped_column(Text)
+    snippet: Mapped[str | None] = mapped_column(Text)  # ≤300 chars, for cards
+    # Wave D1: full extracted article body (for deep retrieval; snippet stays for cards).
+    extracted_text: Mapped[str | None] = mapped_column(Text)
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
     source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

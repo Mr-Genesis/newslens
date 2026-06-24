@@ -248,16 +248,17 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
             if link.startswith("/"):
                 link = source.url.rstrip("/") + link
 
-            # Snippet from summary or content
-            snippet = ""
-            if hasattr(entry, "summary"):
-                snippet = entry.summary[:300]
-            elif hasattr(entry, "content") and entry.content:
-                snippet = entry.content[0].get("value", "")[:300]
-
-            # Strip HTML tags from snippet (basic)
+            # Card snippet from summary/content; keep the FULL text as the body (Wave D1).
+            # RSS often ships only a summary, so body may ≈ snippet — graceful degradation.
             import re
-            snippet = re.sub(r"<[^>]+>", "", snippet).strip()
+            raw = ""
+            if hasattr(entry, "summary"):
+                raw = entry.summary
+            elif hasattr(entry, "content") and entry.content:
+                raw = entry.content[0].get("value", "")
+            raw = re.sub(r"<[^>]+>", "", raw).strip()
+            snippet = raw[:300]
+            body = raw[:16000] if raw else None
 
             pub_date = parse_pub_date(entry)
 
@@ -268,6 +269,7 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
             article = Article(
                 title=title,
                 snippet=snippet if len(snippet) >= 50 else None,
+                extracted_text=body,
                 url=link,
                 source_id=source.id,
                 published_at=pub_date,

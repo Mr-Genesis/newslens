@@ -68,12 +68,13 @@ async def fetch_gdelt():
             if not url or not title:
                 continue
 
-            # Try to extract better snippet via trafilatura
-            snippet = await _extract_snippet(client, url)
+            # Try to extract snippet + full body via trafilatura (Wave D1)
+            snippet, body = await _extract(client, url)
 
-            # Quality gate: reject garbage snippets
+            # Quality gate: reject garbage snippets (drops the body too)
             if snippet and (len(snippet) < settings.min_snippet_length or bool(re.search(r"<[^>]+>", snippet))):
                 snippet = None
+                body = None
 
             # Find or create source for this domain
             source = await _get_or_create_source(domain, url)
@@ -96,6 +97,7 @@ async def fetch_gdelt():
                 article = Article(
                     title=title,
                     snippet=snippet,
+                    extracted_text=body,
                     url=url,
                     source_id=source.id,
                     published_at=pub_date,
@@ -110,8 +112,8 @@ async def fetch_gdelt():
         logger.info("gdelt_fetch_complete", new_articles=new_count, checked=len(articles))
 
 
-async def _extract_snippet(client: httpx.AsyncClient, url: str) -> str | None:
-    """Extract article snippet using trafilatura. Returns None on failure."""
+async def _extract(client: httpx.AsyncClient, url: str) -> tuple[str | None, str | None]:
+    """Extract (snippet, full_body) via trafilatura. Wave D1: keep the FULL body, not just [:300]."""
     try:
         response = await client.get(url, timeout=15.0)
         response.raise_for_status()
@@ -122,10 +124,11 @@ async def _extract_snippet(client: httpx.AsyncClient, url: str) -> str | None:
             no_fallback=True,
         )
         if extracted:
-            return extracted[:300].strip()
+            full = extracted.strip()[:16000]
+            return full[:300], full
     except Exception:
         pass
-    return None
+    return None, None
 
 
 async def _get_or_create_source(domain: str, article_url: str) -> Source | None:
