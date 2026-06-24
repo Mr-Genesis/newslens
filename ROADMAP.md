@@ -16,6 +16,7 @@
 - Feedback-driven explore/exploit (0.3 is now only a cold-start fallback; swipes move weights)
 - Design system: Full spec + CSS token implementation
 - Mobile: Capacitor Android APK builds
+- Brand: authentic NewsLens launcher icon (adaptive) + native splash (mark + Fraunces wordmark on #0C0C0E) + web/PWA favicons, all from the official brand kit; `@capacitor/splash-screen` controlled splash → WebView fade
 - Per-user OpenAI + Gemini API key management with Fernet encryption
 
 **Still stubbed / heuristic:**
@@ -76,8 +77,8 @@ Implement in briefing screen. Full spec exists in `design-system.md` (threshold:
 ### 3.4 Orientation Handling
 Landscape card sizing per design-system.md: `min(360px, 60vh)` card height, percentage-based swipe thresholds.
 
-### 3.5 Custom App Icon
-Replace default Capacitor launcher icon with NewsLens branding. Current icon is the default Android bot.
+### 3.5 Custom App Icon ✅ Shipped
+The default Capacitor robot is gone — adaptive launcher icon, native splash, and web/PWA favicons are regenerated from the official NewsLens brand kit. See [Brand & App Identity](design-system.md#brand--app-identity).
 
 ---
 
@@ -90,3 +91,4 @@ Replace default Capacitor launcher icon with NewsLens branding. Current icon is 
 | Android emulator doesn't work | Use physical device or skip | QEMU2 + WOW64 incompatibility on ARM |
 | Dynamic routes fail in Capacitor build | Dual routing: `[clusterId]` (web) + `?id=X` (Capacitor) | Next.js static export can't handle dynamic segments |
 | JDK 17 insufficient for Capacitor | JDK 21 required | Capacitor Android Gradle config targets Java 21 |
+| `@capacitor/assets` / `sharp` can't generate icons | Deterministic `System.Drawing` resize from the brand kit | sharp won't load on Windows ARM; current `@capacitor/assets` emits broken adaptive output |

@@ -41,7 +41,7 @@ cd frontend && npm run apk:debug               # Build debug APK via Gradle
 
 NewsLens is an AI-powered news intelligence platform. Two-language stack: Python backend (data pipeline + ML) and TypeScript frontend (UI). They communicate via REST JSON — no shared types needed. Mobile builds use Capacitor to wrap the Next.js static export into a native Android WebView app.
 
-**Stack:** Next.js 16 App Router, React 19, Tailwind CSS 4, Framer Motion, Python FastAPI, PostgreSQL + pgvector, OpenAI API, APScheduler, Capacitor (Android)
+**Stack:** Next.js 16 App Router, React 19, Tailwind CSS 4, Framer Motion, Python FastAPI, PostgreSQL + pgvector, OpenAI API, APScheduler, Capacitor (Android) + `@capacitor/splash-screen`
 
 **Key architectural decisions:**
 - pgvector nearest-neighbor SQL for clustering (not Python pairwise — O(n) vs O(n²))
@@ -53,6 +53,8 @@ NewsLens is an AI-powered news intelligence platform. Two-language stack: Python
 - Per-user OpenAI API key with Fernet encryption + env var fallback
 - Capacitor static export with conditional `next.config.ts` (`BUILD_TARGET=capacitor`)
 - Dual story routes: `/story/[clusterId]` (web dynamic) + `/story?id=X` (Capacitor static export)
+- Brand assets (adaptive launcher icon, native splash, favicons) regenerate from one official brand kit via deterministic `System.Drawing` resize — `@capacitor/assets`/`sharp` are broken on Windows ARM (see Windows ARM Notes)
+- `@capacitor/splash-screen` holds the native splash (`launchAutoHide: false`) and cross-fades into the in-app splash on native
 
 ## Directory Structure
 
@@ -94,7 +96,8 @@ news-app/
 │   │   │   │   └── page.tsx          # OpenAI API key management
 │   │   │   └── story/
 │   │   │       ├── [clusterId]/
-│   │   │       │   └── page.tsx      # Deep dive (web — dynamic route)
+│   │   │       │   ├── page.tsx      # Deep dive (web — dynamic route)
+│   │   │       │   └── loading.tsx   # Route loading skeleton (StoryLoadingSkeleton)
 │   │   │       ├── page.tsx          # Deep dive (Capacitor — query param)
 │   │   │       └── StoryContent.tsx  # Client component for query-param routing
 │   │   ├── components/
@@ -108,7 +111,7 @@ news-app/
 │   │   │       ├── AISummaryBox.tsx  # AI-generated summary display
 │   │   │       ├── Badge.tsx         # Topic/category badge
 │   │   │       ├── ConfidenceScore.tsx # src:N · coh:0.XX display
-│   │   │       └── Skeleton.tsx      # Loading skeleton shimmer
+│   │   │       └── Skeleton.tsx      # Skeletons: StoryCard / DeepDive / StoryLoading
 │   │   └── lib/
 │   │       ├── api.ts                # API client (env-aware base URL)
 │   │       └── utils.ts              # cn() utility (clsx + tailwind-merge)
@@ -183,7 +186,7 @@ Implementation lives in `frontend/src/app/globals.css`.
 Do not deviate without explicit user approval.
 In QA mode, flag any code that doesn't match design-system.md.
 
-Key tokens: dark bg `#0C0C0E`, accent amber `#F97316`, fonts Instrument Serif (display) + DM Sans (body) + JetBrains Mono (data).
+Key tokens: dark bg `#0C0C0E`, accent amber `#F97316`, fonts **Fraunces** (display/wordmark — the app's override of the kit's Instrument Serif) + DM Sans (body) + JetBrains Mono (data). Brand assets come from the official NewsLens brand kit (single source of truth); see design-system.md → "Brand & App Identity".
 
 ## Windows ARM Notes
 
@@ -193,6 +196,7 @@ This project is developed on Windows 11 ARM (win32/arm64). Several tools have co
 - **Backend:** `greenlet` DLL load failure breaks SQLAlchemy async on native Windows ARM. Run backend in Docker instead.
 - **Android emulator:** Does not work on Windows ARM — QEMU2 can't run ARM64 guest images on x86_64 host binary (via WOW64), and x86_64 guests need Intel/AMD hardware virtualization. Use a physical Android device for testing.
 - **JDK:** Capacitor Android builds require JDK 21 (JDK 17 insufficient).
+- **Icon/splash generation:** `sharp`/`@capacitor/assets` don't load on Windows ARM (QEMU amd64 emulation segfaults libvips), and the current `@capacitor/assets` emits broken adaptive output (dangling `@mipmap/ic_launcher_background`, undersized 48px foregrounds). Regenerate launcher icons + splash deterministically via PowerShell `System.Drawing` (high-quality resize) from the official brand kit — never hand-edit the per-density PNGs.
 
 ## Mobile / Android Build
 
@@ -212,7 +216,9 @@ cd frontend && npm run apk:debug      # Step 5
 # Output: frontend/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-**Capacitor config:** `frontend/capacitor.config.ts` — appId: `com.newslens.app`, webDir: `out`
+**Capacitor config:** `frontend/capacitor.config.ts` — appId: `com.newslens.app`, webDir: `out`, `SplashScreen` plugin (`launchAutoHide: false` → controlled fade; `SplashScreen.tsx` calls `hide()` on native).
+
+**After building, verify on a physical device** (no emulator on Windows ARM) — see the [on-device checklist in CONTRIBUTING.md](CONTRIBUTING.md#on-device-verification-after-an-android-build).
 
 ## Build & Validation
 

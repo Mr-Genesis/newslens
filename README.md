@@ -21,7 +21,7 @@ An AI-powered news intelligence platform. NewsLens ingests articles from RSS fee
 | Backend | Python, FastAPI, APScheduler |
 | Database | PostgreSQL + pgvector |
 | ML | OpenAI `text-embedding-3-small`, pgvector cosine clustering |
-| Mobile | Capacitor (Android) |
+| Mobile | Capacitor (Android) + `@capacitor/splash-screen` |
 
 ## Quick start
 
@@ -65,6 +65,8 @@ npm run apk:debug       # build debug APK via Gradle
 
 `npm run build:android:prod` points the APK at the deployed backend instead of localhost. Requires JDK 21. The Android emulator does not work on Windows ARM — test on a physical device.
 
+The app ships the official NewsLens brand: an adaptive launcher icon and a cold-start splash (the mark + "NewsLens" wordmark on `#0C0C0E`) that `@capacitor/splash-screen` holds until the web app paints, then cross-fades into the in-app splash. After building, walk the [on-device verification checklist](CONTRIBUTING.md#on-device-verification-after-an-android-build).
+
 ## Testing
 
 ```bash
@@ -79,7 +81,7 @@ cd frontend && npx playwright test  # E2E
 |-----|--------------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System, pipeline, and DB diagrams; decision log |
 | [DEPLOY.md](DEPLOY.md) | Deploying to Render or Fly.io; env var reference |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Developer onboarding |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Developer onboarding + on-device APK verification checklist |
 | [design-system.md](design-system.md) | Colors, typography, spacing — read before any UI change |
 | [ROADMAP.md](ROADMAP.md) / [PRODUCT_ROADMAP.md](PRODUCT_ROADMAP.md) | Feature roadmap + known limitations |
 | [CLAUDE.md](CLAUDE.md) | Commands, architecture notes, platform caveats |
