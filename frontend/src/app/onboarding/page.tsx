@@ -98,11 +98,13 @@ export default function OnboardingPage() {
       {/* Brand mark */}
       <Logo markSize={22} textClassName="text-[22px]" className="mb-[var(--space-lg)]" />
 
-      <p className="text-mono uppercase text-[var(--accent)] mb-2">Welcome</p>
-      <h1 className="text-hero text-[var(--text-primary)]">
+      <p className="text-mono uppercase tracking-[0.18em] text-[var(--text-muted)] mb-3.5">
+        Make it yours
+      </p>
+      <h1 className="italic font-semibold leading-[0.98] tracking-[-0.02em] text-[var(--text-primary)] text-[40px] sm:text-[44px] font-[family-name:var(--font-fraunces)]">
         What do you want to follow?
       </h1>
-      <p className="text-small text-[var(--text-muted)] mt-2">
+      <p className="text-[15px] leading-relaxed text-[var(--text-secondary)] mt-4">
         Pick a few topics — your briefing adapts as you read.
       </p>
 
