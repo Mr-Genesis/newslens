@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
@@ -286,6 +287,38 @@ export default function ProfilePage() {
                   ))}
                 </div>
               </div>
+            </Card>
+          </motion.div>
+
+          {/* Following — manage standing follows */}
+          <motion.div variants={fadeUp} className="mb-4">
+            <Card variant="raised">
+              <Link
+                href="/following"
+                className="flex items-center justify-between p-3.5 group"
+              >
+                <div>
+                  <h2 className="text-heading text-[var(--text-primary)] mb-1">
+                    Following
+                  </h2>
+                  <p className="text-mono text-[var(--text-ghost)]">
+                    Topics, people and saved searches you track
+                  </p>
+                </div>
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="shrink-0 text-[var(--text-muted)] group-hover:text-[var(--text-secondary)] transition-colors"
+                >
+                  <path d="M9 18l6-6-6-6" />
+                </svg>
+              </Link>
             </Card>
           </motion.div>
 
