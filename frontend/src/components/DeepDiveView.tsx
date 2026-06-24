@@ -5,7 +5,10 @@ import { useParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { AISummaryBox } from "@/components/ui/AISummaryBox";
 import { ImpactCard } from "@/components/ui/ImpactCard";
-import { StrategicCard } from "@/components/ui/StrategicCard";
+import { AskBox } from "@/components/ui/AskBox";
+import { Collapsible } from "@/components/ui/Collapsible";
+import { FrameworksCard } from "@/components/ui/FrameworksCard";
+import { ConsensusRow } from "@/components/ui/ConsensusRow";
 import { TriviaCard } from "@/components/ui/TriviaCard";
 import { SourceCard } from "@/components/SourceCard";
 import { SourceSpectrum } from "@/components/SourceSpectrum";
@@ -57,6 +60,7 @@ export default function DeepDiveView({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [impact, setImpact] = useState<ImpactResult | null>(null);
+  const [expandAll, setExpandAll] = useState(false); // BRIEF / FULL toggle (v4)
 
   // One impact fetch shared by the lead sentence + the ImpactCard.
   useEffect(() => {
@@ -221,35 +225,71 @@ export default function DeepDiveView({
             </div>
           </div>
 
-          {/* AI Summary */}
-          <AISummaryBox summary={cluster.summary} coherence={cluster.coherence} clusterId={clusterId} />
-
-          {/* What's in it for me */}
-          <ImpactCard clusterId={clusterId} data={impact} />
-
-          {/* Source access */}
-          <SourceSpectrum freeCount={freeCount} paywallCount={paywallCount} />
-
-          {/* Source cards */}
-          <div className="flex flex-col">
-            {sortedSources.map((sourceCard, index) => (
-              <SourceCard
-                key={sourceCard.article.id}
-                sourceName={sourceCard.article.source.name}
-                url={sourceCard.article.url}
-                snippet={sourceCard.article.snippet}
-                isFree={sourceCard.is_free}
-                publishedAt={sourceCard.article.published_at}
-                index={index}
-              />
-            ))}
+          {/* BRIEF / FULL toggle (v4: brief by default, deep on tap) */}
+          <div className="flex justify-end">
+            <div className="inline-flex rounded-[var(--radius-md)] border border-[var(--border)] overflow-hidden text-mono">
+              <button
+                type="button"
+                onClick={() => setExpandAll(false)}
+                className={
+                  !expandAll
+                    ? "bg-[var(--surface-raised)] text-[var(--text-primary)] px-3 py-1"
+                    : "text-[var(--text-muted)] px-3 py-1"
+                }
+              >
+                BRIEF
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpandAll(true)}
+                className={
+                  expandAll
+                    ? "bg-[var(--surface-raised)] text-[var(--text-primary)] px-3 py-1"
+                    : "text-[var(--text-muted)] px-3 py-1"
+                }
+              >
+                FULL
+              </button>
+            </div>
           </div>
 
-          {/* Strategic (game-theory) lens */}
-          <StrategicCard clusterId={clusterId} />
+          {/* Brief-by-default accordion (key flips on BRIEF/FULL to expand/collapse all) */}
+          <div className="flex flex-col">
+            <Collapsible key={`sum-${expandAll}`} label="SUMMARY" preview={firstSentence(cluster.summary)} defaultOpen={expandAll}>
+              <AISummaryBox summary={cluster.summary} coherence={cluster.coherence} clusterId={clusterId} />
+            </Collapsible>
+            <Collapsible key={`you-${expandAll}`} label="FOR YOU" preview="What this means for you" defaultOpen={expandAll}>
+              <ImpactCard clusterId={clusterId} data={impact} />
+            </Collapsible>
+            <Collapsible key={`con-${expandAll}`} label="CONSENSUS" preview="Where sources agree & diverge" defaultOpen={expandAll}>
+              <ConsensusRow clusterId={clusterId} />
+            </Collapsible>
+            <Collapsible key={`fw-${expandAll}`} label="FRAMEWORKS" preview="How to read this story" defaultOpen={expandAll}>
+              <FrameworksCard clusterId={clusterId} />
+            </Collapsible>
+            <Collapsible key={`src-${expandAll}`} label="SOURCES" preview={`${freeCount} free · ${paywallCount} paywall`} defaultOpen={expandAll}>
+              <SourceSpectrum freeCount={freeCount} paywallCount={paywallCount} />
+              <div className="flex flex-col">
+                {sortedSources.map((sourceCard, index) => (
+                  <SourceCard
+                    key={sourceCard.article.id}
+                    sourceName={sourceCard.article.source.name}
+                    url={sourceCard.article.url}
+                    snippet={sourceCard.article.snippet}
+                    isFree={sourceCard.is_free}
+                    publishedAt={sourceCard.article.published_at}
+                    index={index}
+                  />
+                ))}
+              </div>
+            </Collapsible>
+          </div>
 
           {/* Quiz */}
           <TriviaCard clusterId={clusterId} />
+
+          {/* Ask this story (Wave B1) */}
+          <AskBox clusterId={clusterId} />
         </motion.div>
       )}
     </div>

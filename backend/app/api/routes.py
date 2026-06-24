@@ -11,6 +11,7 @@ from app.models import (
     ArticleTopic,
     ClusterArticle,
     FeedbackType,
+    Follow,
     Source,
     StoryCluster,
     Topic,
@@ -21,7 +22,12 @@ from app.models import (
 )
 from app.schemas import (
     ArticleOut,
+    AskRequest,
     BriefingResponse,
+    DigestItem,
+    DigestResponse,
+    FollowCreate,
+    FollowOut,
     BriefingStory,
     ClusterDetailOut,
     ClusterSourceCard,
@@ -1172,6 +1178,121 @@ async def cluster_impact(
 
     persona = await _user_persona(db)
     return await lenses.impact(db, cluster_id, persona, force=bool(refresh))
+
+
+@router.post("/clusters/{cluster_id}/ask")
+async def cluster_ask(
+    cluster_id: int, body: AskRequest, db: AsyncSession = Depends(get_db)
+):
+    from fastapi import HTTPException
+
+    from app.services import lenses
+
+    q = (body.question or "").strip()
+    if not q or len(q) > 500:
+        raise HTTPException(status_code=400, detail="question must be 1-500 characters")
+    return await lenses.ask(db, cluster_id, q)
+
+
+@router.get("/clusters/{cluster_id}/frameworks")
+async def cluster_frameworks(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services import lenses
+
+    return await lenses.frameworks(db, cluster_id)
+
+
+@router.get("/clusters/{cluster_id}/consensus")
+async def cluster_consensus(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services import lenses
+
+    return await lenses.consensus(db, cluster_id)
+
+
+# ── Wave C: standing follows + "while you were away" digest ──
+_FOLLOW_KINDS = {"topic", "entity", "saved_search"}
+
+
+@router.get("/follows", response_model=list[FollowOut])
+async def list_follows(db: AsyncSession = Depends(get_db)):
+    rows = (
+        await db.execute(
+            select(Follow).where(Follow.user_id == DEFAULT_USER_ID).order_by(Follow.id)
+        )
+    ).scalars().all()
+    return [FollowOut.model_validate(f) for f in rows]
+
+
+@router.post("/follows", response_model=FollowOut, status_code=201)
+async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
+    from fastapi import HTTPException
+
+    kind = (body.kind or "").strip().lower()
+    value = (body.value or "").strip()
+    if kind not in _FOLLOW_KINDS or not value:
+        raise HTTPException(status_code=400, detail="invalid kind or empty value")
+    # Idempotent: a duplicate (user, kind, value) returns the existing row.
+    existing = (
+        await db.execute(
+            select(Follow).where(
+                Follow.user_id == DEFAULT_USER_ID,
+                Follow.kind == kind,
+                Follow.value == value,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return FollowOut.model_validate(existing)
+    f = Follow(user_id=DEFAULT_USER_ID, kind=kind, value=value)
+    db.add(f)
+    await db.commit()
+    await db.refresh(f)
+    return FollowOut.model_validate(f)
+
+
+@router.delete("/follows/{follow_id}", status_code=204)
+async def delete_follow(follow_id: int, db: AsyncSession = Depends(get_db)):
+    f = (
+        await db.execute(
+            select(Follow).where(
+                Follow.id == follow_id, Follow.user_id == DEFAULT_USER_ID
+            )
+        )
+    ).scalar_one_or_none()
+    if f is not None:
+        await db.delete(f)
+        await db.commit()
+
+
+@router.get("/digest", response_model=DigestResponse)
+async def get_digest(db: AsyncSession = Depends(get_db)):
+    """In-app 'while you were away' — clusters formed since the last visit, with their cached
+    WIIFM headline (no new LLM calls). Marks the visit as seen."""
+    from datetime import timedelta
+
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    now = datetime.now(timezone.utc)
+    since = u.last_seen_at if (u and u.last_seen_at) else (now - timedelta(hours=24))
+    rows = (
+        await db.execute(
+            select(StoryCluster)
+            .where(StoryCluster.created_at > since)
+            .order_by(StoryCluster.created_at.desc())
+            .limit(3)
+        )
+    ).scalars().all()
+    items = [
+        DigestItem(
+            cluster_id=c.id, title=c.title,
+            headline=_extract_impact_headline(c.impact_json),
+        )
+        for c in rows
+    ]
+    if u is not None:
+        u.last_seen_at = now
+        await db.commit()
+    return DigestResponse(count=len(items), since=since.isoformat(), items=items)
 
 
 _GEOPOLITICS_TOPIC_TERMS = (

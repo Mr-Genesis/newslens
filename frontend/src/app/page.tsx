@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/Button";
 import { StoryCardSkeleton } from "@/components/ui/Skeleton";
 import { DailyTriviaCard } from "@/components/ui/DailyTriviaCard";
 import { PersonalizeBanner } from "@/components/ui/PersonalizeBanner";
+import { WhileAwayCard } from "@/components/ui/WhileAwayCard";
 import { LaunchScreen } from "@/components/LaunchScreen";
 import { getBriefing, type Briefing, type BriefingStory } from "@/lib/api";
 import { isStale } from "@/lib/utils";
@@ -237,6 +238,9 @@ export default function BriefingPage() {
         >
           {/* Personalize impact lens (E3) — self-gates: only after first impact card */}
           <PersonalizeBanner />
+
+          {/* While you were away (Wave C) — self-gates: only when something moved */}
+          <WhileAwayCard />
 
           {/* Daily quiz (E8) — dismissible, returns each day */}
           <DailyTriviaCard />

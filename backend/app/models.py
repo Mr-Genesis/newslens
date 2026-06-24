@@ -61,6 +61,10 @@ class User(Base):
         String(16), default="standard"
     )  # brief|standard|expert
     persona_version: Mapped[int] = mapped_column(Integer, default=1)
+    # Wave C: "while you were away" gating.
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -168,6 +172,8 @@ class StoryCluster(Base):
     impact_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     strategic_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     trivia_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Wave B: umbrella cache for newer lenses (frameworks, consensus) keyed by subkey.
+    extra_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -250,3 +256,21 @@ class UserSetting(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="settings")
+
+
+class Follow(Base):
+    """Wave C: a standing follow — topic / entity / saved-search → feed rail + alerts."""
+
+    __tablename__ = "follows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # topic|entity|saved_search
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "kind", "value", name="uq_follow"),
+    )

@@ -19,13 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.models import Article, ClusterArticle, StoryCluster
-from app.schemas import FinancialDimension, StoryImpact
+from app.models import Article, ArticleTopic, ClusterArticle, StoryCluster, Topic
+from app.schemas import AskAnswer, FinancialDimension, StoryImpact
+from app.services import frameworks as fw
 from app.services import impact_guardrails, llm
 
 logger = structlog.get_logger()
 
-_LENS_COLUMNS = {"analysis_json", "impact_json", "strategic_json", "trivia_json"}
+_LENS_COLUMNS = {"analysis_json", "impact_json", "strategic_json", "trivia_json", "extra_json"}
 
 
 def _utcnow() -> datetime:
@@ -406,3 +407,192 @@ async def impact(db, cluster_id, persona: dict, *, force: bool = False):
 
     await _cache_write(db, cluster, "impact_json", subkey, sh, payload)
     return {"cached": False, **payload}
+
+
+# ── Ask this story (Wave B1) ──
+_ASK_SYSTEM = (
+    "You answer a reader's question about ONE news story using ONLY the provided sources. "
+    "Ground every claim in those sources and cite the outlet for each. If the sources do not "
+    "answer the question, do NOT guess — set refused=true and leave the answer empty. Never give "
+    "financial or medical advice. Plain, concrete, no hype."
+)
+
+
+def _ask_user(question: str, cluster: StoryCluster, source_lines: str) -> str:
+    return (
+        f"<story>\nHeadline: {cluster.title}\nSummary: {cluster.summary or ''}\n</story>\n\n"
+        f"<sources>\n{source_lines}\n</sources>\n\n"
+        f'Reader question: "{question}"\n\n'
+        'Answer ONLY from the sources. Respond ONLY as JSON: '
+        '{"answer": "...", "citations": [{"claim": "...", "source": "<outlet>"}], '
+        '"refused": false}. If the sources do not answer it, set refused=true and answer to "".'
+    )
+
+
+async def ask(db, cluster_id, question: str):
+    """Grounded, cited Q&A over a single cluster's sources. Refuses (never fabricates) when the
+    answer isn't supported; drops citations whose outlet isn't in the cluster."""
+    cluster, articles = await _load(db, cluster_id)
+    if cluster is None:
+        return {"error": "cluster_not_found"}
+    if not articles:
+        return {"unavailable": True, "reason": "no_sources"}
+    outlets = {(a.source.name or "").strip().lower() for a in articles if a.source}
+
+    try:
+        raw = await llm.generate(
+            _ask_user(question, cluster, _impact_source_lines(articles)),
+            system=_ASK_SYSTEM, schema={"answer": ""}, max_tokens=600,
+        )
+    except llm.LLMUnavailable:
+        return {"unavailable": True, "reason": "no_llm_key"}
+    except Exception as e:  # noqa: BLE001 — never 500 on an LLM/API failure
+        logger.warning("ask_failed", error=str(e))
+        return {"unavailable": True, "reason": "llm_error"}
+
+    try:
+        obj = AskAnswer.model_validate(raw if isinstance(raw, dict) else {})
+    except Exception as e:  # noqa: BLE001
+        logger.info("ask_invalid", error=str(e)[:200])
+        return {"unavailable": True, "reason": "ask_invalid"}
+
+    p = obj.model_dump(mode="json")
+    # Groundedness: keep only citations whose outlet is one of the cluster's sources.
+    p["citations"] = [
+        c for c in p["citations"] if (c.get("source", "").strip().lower() in outlets)
+    ]
+    # No grounded answer text → treat as a refusal rather than an empty assertion.
+    if not (p.get("answer") or "").strip():
+        p["refused"] = True
+    return p
+
+
+# ── Frameworks (Wave B2): show-the-working, auto-selected, ≤20-word lines ──
+_FRAMEWORKS_SYSTEM = (
+    "You apply named analytical frameworks to a news story. For each requested framework, write "
+    "ONE insight line of at most 20 words, grounded in the story. Forecast/game-theory lines must "
+    "include a falsifiable condition; analogy/precedent lines must include the disanalogy. No hype, "
+    "no financial or medical advice. Output JSON only."
+)
+
+
+def _frameworks_prompt(cluster: StoryCluster, selected: list[dict]) -> str:
+    rows = "\n".join(
+        f"- {f['id']} ({f['label']}): {fw.GUARDRAILS.get(f['id'], 'one grounded insight line')}"
+        for f in selected
+    )
+    return (
+        f"<story>\nHeadline: {cluster.title}\nSummary: {cluster.summary or ''}\n</story>\n\n"
+        f"Apply these frameworks (≤20 words each):\n{rows}\n\n"
+        'Respond ONLY as JSON: {"lines": {"<framework_id>": "<one-line insight>"}}.'
+    )
+
+
+async def frameworks(db, cluster_id):
+    """Auto-selected analytical-framework one-liners for a cluster (≤4 chips, ≤20 words each)."""
+    cluster, articles = await _load(db, cluster_id)
+    if cluster is None:
+        return {"error": "cluster_not_found"}
+    if not articles:
+        return {"unavailable": True, "reason": "no_sources"}
+
+    topic_rows = (
+        await db.execute(
+            select(Topic.name)
+            .join(ArticleTopic, ArticleTopic.topic_id == Topic.id)
+            .join(ClusterArticle, ClusterArticle.article_id == ArticleTopic.article_id)
+            .where(ClusterArticle.cluster_id == cluster_id)
+        )
+    ).all()
+    story_type = fw.infer_story_type([r[0] for r in topic_rows])
+    selected = fw.select_frameworks(story_type)
+    if not selected:
+        return {"frameworks": [], "story_type": story_type}
+
+    sh = _source_hash(articles)
+    subkey = f"frameworks:{story_type}"
+    cached = _cache_read(cluster, "extra_json", subkey, sh)
+    if cached is None:
+        try:
+            raw = await llm.generate(
+                _frameworks_prompt(cluster, selected),
+                system=_FRAMEWORKS_SYSTEM, schema={"lines": {}}, max_tokens=500,
+            )
+        except llm.LLMUnavailable:
+            return {"unavailable": True, "reason": "no_llm_key"}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("frameworks_failed", error=str(e))
+            return {"unavailable": True, "reason": "llm_error"}
+        raw_lines = (raw.get("lines") if isinstance(raw, dict) else None) or {}
+        data = {"lines": {k: fw.clamp_words(str(v), 20) for k, v in raw_lines.items()}}
+        await _cache_write(db, cluster, "extra_json", subkey, sh, data)
+        cached = data
+
+    lines = cached.get("lines", {})
+    return {
+        "story_type": story_type,
+        "frameworks": [
+            {"id": f["id"], "label": f["label"], "one_liner": lines.get(f["id"], "")}
+            for f in selected
+        ],
+    }
+
+
+# ── Consensus / divergence (Wave B3): the real "where they diverge" metric ──
+_CONSENSUS_SYSTEM = (
+    "You assess whether a story's sources AGREE or DIVERGE. Read the sources and report how many "
+    "concur on the core claim and which outlets dissent and on what specific point. Ground strictly "
+    "in the provided sources and use only their outlet names. No hype."
+)
+
+
+def _consensus_prompt(cluster: StoryCluster, source_lines: str) -> str:
+    return (
+        f"<story>\nHeadline: {cluster.title}\nSummary: {cluster.summary or ''}\n</story>\n\n"
+        f"<sources>\n{source_lines}\n</sources>\n\n"
+        'Respond ONLY as JSON: {"agree_count": <int>, '
+        '"dissent": [{"outlet": "<name>", "point": "what they dispute"}], '
+        '"summary": "<one line, e.g. 6 of 7 align>"}. Use only outlets from the sources.'
+    )
+
+
+async def consensus(db, cluster_id):
+    """One grounded LLM pass → agree/dissent split + the disputed point. Cached; dissent whose
+    outlet isn't a cluster source is dropped (groundedness)."""
+    cluster, articles = await _load(db, cluster_id)
+    if cluster is None:
+        return {"error": "cluster_not_found"}
+    if not articles:
+        return {"unavailable": True, "reason": "no_sources"}
+    outlets = {(a.source.name or "").strip().lower() for a in articles if a.source}
+    sh = _source_hash(articles)
+    cached = _cache_read(cluster, "extra_json", "consensus", sh)
+    if cached is None:
+        try:
+            raw = await llm.generate(
+                _consensus_prompt(cluster, _impact_source_lines(articles)),
+                system=_CONSENSUS_SYSTEM, schema={"summary": ""}, max_tokens=400,
+            )
+        except llm.LLMUnavailable:
+            return {"unavailable": True, "reason": "no_llm_key"}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("consensus_failed", error=str(e))
+            return {"unavailable": True, "reason": "llm_error"}
+        d = raw if isinstance(raw, dict) else {}
+        dissent = [
+            x for x in (d.get("dissent") or [])
+            if isinstance(x, dict) and (x.get("outlet", "").strip().lower() in outlets)
+        ]
+        try:
+            agree = int(d.get("agree_count") or 0)
+        except (TypeError, ValueError):
+            agree = 0
+        data = {
+            "agree_count": agree,
+            "total": len(articles),
+            "dissent": dissent,
+            "summary": str(d.get("summary") or ""),
+        }
+        await _cache_write(db, cluster, "extra_json", "consensus", sh, data)
+        cached = data
+    return cached
