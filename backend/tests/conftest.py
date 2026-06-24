@@ -21,6 +21,7 @@ from app.models import (
     ClusterArticle,
     EmbeddingStatus,
     FeedbackType,
+    Follow,
     Source,
     SourceType,
     StoryCluster,
@@ -103,6 +104,17 @@ class FakeTopic:
         self.children = []
 
 
+class FakeFollow:
+    """Mimics Follow ORM model for testing without SQLAlchemy instrumentation."""
+
+    def __init__(self, id=1, kind="topic", value="AI", user_id=1):
+        self.id = id
+        self.user_id = user_id
+        self.kind = kind
+        self.value = value
+        self.created_at = datetime.now(timezone.utc)
+
+
 def make_source(**kwargs) -> FakeSource:
     return FakeSource(**kwargs)
 
@@ -158,7 +170,9 @@ class MockSession:
         self.feed_total: int = 0
         self.cluster: StoryCluster | None = None
         self.topics: list[Topic] = []
+        self.follows: list[Follow] = []
         self.added_objects: list = []
+        self.deleted_objects: list = []
         self.committed = False
         self._last_feedback_id = 100
 
@@ -177,6 +191,15 @@ class MockSession:
                         return MockExecuteResult(rows=self.topics)
                     if entity is Article:
                         return MockExecuteResult(rows=self.feed_articles)
+                    if entity is Follow:
+                        # Serves both `.scalars().all()` (list endpoint) and
+                        # `.scalar_one_or_none()` (idempotency + delete lookups).
+                        # The mock can't honor the WHERE clause, so per-test setup
+                        # of `.follows` decides what a single-row lookup sees.
+                        return MockExecuteResult(
+                            rows=self.follows,
+                            scalar=(self.follows[0] if self.follows else None),
+                        )
 
         # Count query (returns int)
         if 'count' in str(stmt).lower() or 'anon_1' in str(stmt).lower():
@@ -187,6 +210,17 @@ class MockSession:
 
     def add(self, obj):
         self.added_objects.append(obj)
+
+    async def flush(self, *args, **kwargs):
+        # No DB to flush to; ids are assigned on commit (see below).
+        pass
+
+    async def delete(self, obj):
+        self.deleted_objects.append(obj)
+        if obj in self.follows:
+            self.follows.remove(obj)
+        if obj in self.added_objects:
+            self.added_objects.remove(obj)
 
     async def commit(self):
         self.committed = True

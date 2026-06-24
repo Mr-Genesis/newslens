@@ -154,6 +154,9 @@ news-app/
 | GET | /trivia/daily | Daily quiz by topic |
 | GET/POST | /admin/sources | List / upsert sources |
 | GET | /search | Hybrid semantic + keyword search |
+| GET | /follows | List standing follows (newest first) |
+| POST | /follows | Follow a topic/entity/saved_search (idempotent on user+kind+value; 400 on invalid kind) |
+| DELETE | /follows/{id} | Unfollow by id (idempotent 204) |
 
 **Not yet implemented:** `GET /events` (SSE stream), `GET /admin/breadth`
 

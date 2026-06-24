@@ -1,6 +1,6 @@
 import structlog
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -10,7 +10,9 @@ from app.models import (
     Article,
     ArticleTopic,
     ClusterArticle,
+    FOLLOW_KINDS,
     FeedbackType,
+    Follow,
     Source,
     StoryCluster,
     Topic,
@@ -29,6 +31,8 @@ from app.schemas import (
     FeedbackCreate,
     FeedbackOut,
     FeedResponse,
+    FollowCreate,
+    FollowOut,
     GeminiKeyUpdate,
     HealthResponse,
     KeyTestResult,
@@ -951,6 +955,82 @@ async def unsave_article(
         await db.delete(feedback)
         await db.commit()
         logger.info("article_unsaved", article_id=article_id)
+
+
+# ── Follows ────────────────────────────────────────────
+# Standing follows: a topic, a named entity, or a saved search the user wants to
+# keep tracking. Idempotent on (user, kind, value); invalid kind → 400.
+
+
+@router.get("/follows", response_model=list[FollowOut])
+async def list_follows(db: AsyncSession = Depends(get_db)):
+    """All standing follows for the user, newest first."""
+    result = await db.execute(
+        select(Follow)
+        .where(Follow.user_id == DEFAULT_USER_ID)
+        .order_by(Follow.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+@router.post("/follows", response_model=FollowOut, status_code=201)
+async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
+    """Follow a topic, entity, or saved search.
+
+    Idempotent: re-following an identical (kind, value) returns the existing row
+    instead of creating a duplicate. An unknown ``kind`` is a 400.
+    """
+    kind = (body.kind or "").strip()
+    value = (body.value or "").strip()
+    if kind not in FOLLOW_KINDS:
+        raise HTTPException(status_code=400, detail=f"invalid follow kind: {kind!r}")
+    if not value:
+        raise HTTPException(status_code=400, detail="follow value required")
+
+    existing = (
+        await db.execute(
+            select(Follow).where(
+                Follow.user_id == DEFAULT_USER_ID,
+                Follow.kind == kind,
+                Follow.value == value,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return existing  # idempotent — no duplicate row
+
+    # Single-user MVP: ensure the user row exists before the FK insert
+    # (mirrors the profile / gemini-key routes; the test DB isn't pre-seeded).
+    u = (
+        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+    ).scalar_one_or_none()
+    if not u:
+        db.add(User(id=DEFAULT_USER_ID))
+        await db.flush()
+
+    follow = Follow(user_id=DEFAULT_USER_ID, kind=kind, value=value)
+    db.add(follow)
+    await db.commit()
+    await db.refresh(follow)
+    logger.info("follow_created", kind=kind, value=value)
+    return follow
+
+
+@router.delete("/follows/{follow_id}", status_code=204)
+async def delete_follow(follow_id: int, db: AsyncSession = Depends(get_db)):
+    """Unfollow by id. Still 204 if it doesn't exist or isn't this user's."""
+    follow = (
+        await db.execute(
+            select(Follow).where(
+                Follow.id == follow_id,
+                Follow.user_id == DEFAULT_USER_ID,
+            )
+        )
+    ).scalar_one_or_none()
+    if follow:
+        await db.delete(follow)
+        await db.commit()
+        logger.info("follow_deleted", follow_id=follow_id)
 
 
 # ── Stats ──────────────────────────────────────────────

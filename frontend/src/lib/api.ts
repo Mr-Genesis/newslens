@@ -436,3 +436,35 @@ export async function createAdminSource(data: {
     body: JSON.stringify(data),
   });
 }
+
+/* ── Follows (standing follows: topics, entities, saved searches) ── */
+
+export type FollowKind = "topic" | "entity" | "saved_search";
+
+export interface FollowItem {
+  id: number;
+  kind: FollowKind;
+  value: string;
+  created_at: string;
+}
+
+/** All of the user's standing follows, newest first. */
+export async function getFollows(): Promise<FollowItem[]> {
+  return fetchJSON("/follows");
+}
+
+/** Follow a topic, entity, or saved search. Idempotent on (kind, value). */
+export async function addFollow(
+  kind: FollowKind,
+  value: string
+): Promise<FollowItem> {
+  return fetchJSON("/follows", {
+    method: "POST",
+    body: JSON.stringify({ kind, value }),
+  });
+}
+
+/** Unfollow by id. */
+export async function removeFollow(id: number): Promise<void> {
+  await fetchJSON(`/follows/${id}`, { method: "DELETE" });
+}

@@ -250,3 +250,27 @@ class UserSetting(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="settings")
+
+
+# Allowed kinds for a standing follow. Validated in the route (→ 400), not by a DB
+# enum, so a bad value is a clean client error rather than a DB-level failure.
+FOLLOW_KINDS = ("topic", "entity", "saved_search")
+
+
+class Follow(Base):
+    """A standing follow the user wants to keep tracking: a topic, a named entity
+    (person/org/place), or a saved search query. Idempotent per (user, kind, value)."""
+
+    __tablename__ = "follows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # one of FOLLOW_KINDS
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "kind", "value", name="uq_follow_user_kind_value"),
+    )

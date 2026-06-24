@@ -226,6 +226,21 @@ class SavedListResponse(BaseModel):
     count: int
 
 
+# --- Follows (standing follows: topics, entities, saved searches) ---
+class FollowCreate(BaseModel):
+    kind: str  # one of FOLLOW_KINDS; validated in the route → 400 on a bad value
+    value: str
+
+
+class FollowOut(BaseModel):
+    id: int
+    kind: str
+    value: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # --- Stats ---
 class StatsResponse(BaseModel):
     articles_read: int
