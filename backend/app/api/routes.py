@@ -1208,6 +1208,13 @@ async def cluster_consensus(cluster_id: int, db: AsyncSession = Depends(get_db))
     return await lenses.consensus(db, cluster_id)
 
 
+@router.get("/clusters/{cluster_id}/timeline")
+async def cluster_timeline(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services import lenses
+
+    return await lenses.timeline(db, cluster_id)
+
+
 # ── Wave C: standing follows + "while you were away" digest ──
 _FOLLOW_KINDS = {"topic", "entity", "saved_search"}
 

@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.models import Article, ArticleTopic, ClusterArticle, StoryCluster, Topic
+from app.models import Article, ArticleTopic, ClusterArticle, ClusterEdge, StoryCluster, Topic
 from app.schemas import AskAnswer, FinancialDimension, StoryImpact
 from app.services import frameworks as fw
 from app.services import impact_guardrails, llm, retrieval
@@ -591,3 +591,43 @@ async def consensus(db, cluster_id):
         await _cache_write(db, cluster, "extra_json", "consensus", sh, data)
         cached = data
     return cached
+
+
+# ── "How we got here" timeline (Wave D2) ──
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _timeline_prompt(cluster: StoryCluster, articles: list[Article], neighbours: list[str]) -> str:
+    ordered = sorted(articles, key=lambda a: (a.published_at or a.fetched_at or _EPOCH))
+    chron = "\n".join(f"- {(a.published_at or a.fetched_at or '?')}: {a.title}" for a in ordered)
+    nbr = "\n".join(f"- {t}" for t in neighbours) or "—"
+    return (
+        f"<story>\nHeadline: {cluster.title}\n</story>\n\n"
+        f"<chronology>\n{chron}\n</chronology>\n\n"
+        f"<related_prior_stories>\n{nbr}\n</related_prior_stories>\n\n"
+        'Write a brief "how we got here". Respond ONLY as JSON: '
+        '{"how_we_got_here": "...", "timeline": [{"when": "...", "what": "..."}]}.'
+    )
+
+
+async def timeline(db, cluster_id):
+    """'How we got here' — within-cluster chronology + prior related clusters (cluster_edges)."""
+    cluster, articles = await _load(db, cluster_id)
+    if cluster is None:
+        return {"error": "cluster_not_found"}
+    if not articles:
+        return {"unavailable": True, "reason": "no_sources"}
+    neighbours = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(StoryCluster.title)
+                .join(ClusterEdge, ClusterEdge.dst_cluster_id == StoryCluster.id)
+                .where(ClusterEdge.src_cluster_id == cluster_id)
+            )
+        ).all()
+    ]
+    return await get_lens(
+        db, cluster_id, column="extra_json", subkey="timeline",
+        prompt=_timeline_prompt(cluster, articles, neighbours), schema={"how_we_got_here": ""},
+    )

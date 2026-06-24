@@ -8,6 +8,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -275,4 +276,28 @@ class Follow(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", "kind", "value", name="uq_follow"),
+    )
+
+
+class ClusterEdge(Base):
+    """Wave D2: directed temporal/topical edges between existing clusters → "how we got here"."""
+
+    __tablename__ = "cluster_edges"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    src_cluster_id: Mapped[int] = mapped_column(
+        ForeignKey("story_clusters.id"), nullable=False
+    )
+    dst_cluster_id: Mapped[int] = mapped_column(
+        ForeignKey("story_clusters.id"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # successor|background|duplicate
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("src_cluster_id", "dst_cluster_id", "kind", name="uq_cluster_edge"),
+        Index("ix_cluster_edges_src", "src_cluster_id"),
     )

@@ -11,7 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session
-from app.models import Article, ClusterArticle, EmbeddingStatus, StoryCluster
+from app.models import (
+    Article,
+    ArticleTopic,
+    ClusterArticle,
+    ClusterEdge,
+    EmbeddingStatus,
+    StoryCluster,
+)
 
 logger = structlog.get_logger()
 
@@ -66,6 +73,11 @@ async def run_clustering():
                 )
                 session.add(ca)
                 await session.commit()
+                # Wave D2: link the new cluster to prior related clusters (best-effort).
+                try:
+                    await link_cluster(session, cluster.id)
+                except Exception as e:  # noqa: BLE001 — never break clustering on edge-linking
+                    logger.warning("cluster_link_failed", cluster_id=cluster.id, error=str(e))
                 new_clusters += 1
 
     logger.info(
@@ -74,6 +86,47 @@ async def run_clustering():
         assigned_to_existing=assigned,
         new_clusters=new_clusters,
     )
+
+
+async def link_cluster(session: AsyncSession, cluster_id: int, max_background: int = 3) -> None:
+    """Wave D2: link a cluster to prior clusters sharing a topic — nearest (by id/recency) =
+    'successor', next few = 'background'. Idempotent. Powers the 'how we got here' timeline."""
+    topic_ids = (
+        await session.execute(
+            select(ArticleTopic.topic_id)
+            .join(ClusterArticle, ClusterArticle.article_id == ArticleTopic.article_id)
+            .where(ClusterArticle.cluster_id == cluster_id)
+        )
+    ).scalars().all()
+    if not topic_ids:
+        return
+    prior = (
+        await session.execute(
+            select(StoryCluster.id)
+            .distinct()
+            .join(ClusterArticle, ClusterArticle.cluster_id == StoryCluster.id)
+            .join(ArticleTopic, ArticleTopic.article_id == ClusterArticle.article_id)
+            .where(ArticleTopic.topic_id.in_(topic_ids), StoryCluster.id < cluster_id)
+            .order_by(StoryCluster.id.desc())
+            .limit(max_background + 1)
+        )
+    ).scalars().all()
+    for i, prior_id in enumerate(prior):
+        kind = "successor" if i == 0 else "background"
+        exists = (
+            await session.execute(
+                select(ClusterEdge.id).where(
+                    ClusterEdge.src_cluster_id == cluster_id,
+                    ClusterEdge.dst_cluster_id == prior_id,
+                    ClusterEdge.kind == kind,
+                )
+            )
+        ).scalar_one_or_none()
+        if exists is None:
+            session.add(
+                ClusterEdge(src_cluster_id=cluster_id, dst_cluster_id=prior_id, kind=kind)
+            )
+    await session.commit()
 
 
 async def _find_nearest_cluster(article: Article) -> int | None:
