@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { BrandMark } from "@/components/ui/BrandMark";
 
 /**
  * Welcome — first-run intro carousel (official "Splash & Onboarding" design,
@@ -93,11 +92,22 @@ export default function WelcomePage() {
         >
           {/* Page 1 — spotlight */}
           <Slide className="!pt-[64px]">
-            <div className="flex-1 flex items-center justify-center relative">
-              <div className="absolute w-[210px] h-[210px] rounded-full border border-[var(--border-subtle)]" />
-              <div className="text-[var(--text-primary)]">
-                <BrandMark size={188} />
-              </div>
+            <div className="flex-1 flex items-center justify-center">
+              {/* Framed spotlight — the mark in a viewfinder ring with outer source ticks (official brand spotlight) */}
+              <svg viewBox="0 0 100 100" width={210} height={210} className="overflow-visible" role="img" aria-hidden>
+                <g stroke="var(--border)" strokeWidth={3} strokeLinecap="round">
+                  <line x1="6" y1="22" x2="17" y2="22" />
+                  <line x1="2" y1="50" x2="14" y2="50" />
+                  <line x1="6" y1="78" x2="17" y2="78" />
+                  <line x1="83" y1="22" x2="94" y2="22" />
+                  <line x1="86" y1="50" x2="98" y2="50" />
+                  <line x1="83" y1="78" x2="94" y2="78" />
+                </g>
+                <circle cx="50" cy="50" r="26" fill="none" stroke="var(--border-subtle)" strokeWidth={1} />
+                <path d="M35 26 H22 V74 H35" fill="none" stroke="var(--text-primary)" strokeWidth={5} strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M65 26 H78 V74 H65" fill="none" stroke="var(--text-primary)" strokeWidth={5} strokeLinecap="round" strokeLinejoin="round" />
+                <circle cx="50" cy="50" r="7.5" fill="var(--accent)" />
+              </svg>
             </div>
             <Kicker>News intelligence</Kicker>
             <Headline>

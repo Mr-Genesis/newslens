@@ -1,10 +1,10 @@
 import { Suspense } from "react";
 import StoryContent from "./StoryContent";
-import { LoadingScreen } from "@/components/ui/LoadingScreen";
+import { StoryLoadingSkeleton } from "@/components/ui/Skeleton";
 
 export default function StoryPage() {
   return (
-    <Suspense fallback={<LoadingScreen label="Loading story" />}>
+    <Suspense fallback={<StoryLoadingSkeleton />}>
       <StoryContent />
     </Suspense>
   );
