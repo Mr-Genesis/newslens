@@ -45,9 +45,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
 
     # LLM generation provider (embeddings stay on OpenAI — see embeddings.py)
-    generation_provider: str = "openai"  # "openai" | "gemini"
+    generation_provider: str = "openai"  # "openai" | "gemini" | "anthropic" (env default; per-user active_provider wins)
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
+    # Wave E (BYOM): Anthropic provider. Env key = platform fallback for background jobs.
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-haiku-4-5"  # cheap/fast default; env or per-user override wins
 
     # Encryption (for storing API keys in DB)
     encryption_key: str = ""

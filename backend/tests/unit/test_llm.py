@@ -27,6 +27,18 @@ class TestExtractJson:
 
 @pytest.mark.asyncio
 class TestGenerateRouting:
+    @pytest.fixture(autouse=True)
+    def _provider_from_env(self, monkeypatch):
+        # Wave E: generate() resolves the provider via _active_settings (a cached DB read). These
+        # branch tests intend to drive it off settings.generation_provider, so route it there
+        # directly (no cache, no DB) — active-settings resolution is covered by its own tests.
+        from app.config import settings as _s
+
+        async def _fake():
+            return ((_s.generation_provider or "openai").lower(), {})
+
+        monkeypatch.setattr(llm, "_active_settings", _fake)
+
     async def test_routes_to_gemini(self, monkeypatch):
         from app.config import settings
         monkeypatch.setattr(settings, "generation_provider", "gemini")
