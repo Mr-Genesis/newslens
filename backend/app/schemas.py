@@ -167,10 +167,19 @@ class UserSettingsOut(BaseModel):
     gemini_key_verified: bool = False
     gemini_key_last4: str | None = None
     gemini_key_verified_at: datetime | None = None
+    # Wave E (BYOM): Anthropic key trio + the owner's active provider + per-provider model overrides
+    has_anthropic_key: bool = False
+    anthropic_key_verified: bool = False
+    anthropic_key_last4: str | None = None
+    anthropic_key_verified_at: datetime | None = None
+    active_provider: str | None = None
+    model_prefs: dict = Field(default_factory=dict)
 
 
 class UserSettingsUpdate(BaseModel):
     openai_api_key: str | None = None  # raw key to save, or None to remove
+    active_provider: str | None = None  # openai | anthropic | gemini
+    model_prefs: dict | None = None     # {provider: model_id} overrides (merged server-side)
 
 
 class KeyTestResult(BaseModel):
@@ -206,6 +215,10 @@ class ProfileUpdate(BaseModel):
 # --- Gemini key (E1) ---
 class GeminiKeyUpdate(BaseModel):
     gemini_api_key: str | None = None  # raw key to save, or None to remove
+
+
+class AnthropicKeyUpdate(BaseModel):
+    anthropic_api_key: str | None = None  # raw key to save, or None to remove
 
 
 # --- Saved ---

@@ -30,6 +30,11 @@ class FakeUserSetting:
         gemini_api_key_encrypted=None,
         gemini_key_verified=False,
         gemini_key_verified_at=None,
+        anthropic_api_key_encrypted=None,
+        anthropic_key_verified=False,
+        anthropic_key_verified_at=None,
+        active_provider=None,
+        model_prefs=None,
     ):
         self.id = id
         self.user_id = user_id
@@ -39,6 +44,11 @@ class FakeUserSetting:
         self.gemini_api_key_encrypted = gemini_api_key_encrypted
         self.gemini_key_verified = gemini_key_verified
         self.gemini_key_verified_at = gemini_key_verified_at
+        self.anthropic_api_key_encrypted = anthropic_api_key_encrypted
+        self.anthropic_key_verified = anthropic_key_verified
+        self.anthropic_key_verified_at = anthropic_key_verified_at
+        self.active_provider = active_provider
+        self.model_prefs = model_prefs
         self.updated_at = datetime.now(timezone.utc)
 
 
