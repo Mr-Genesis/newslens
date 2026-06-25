@@ -24,11 +24,25 @@ export function StoryCardSkeleton() {
   );
 }
 
-/** Skeleton matching the deep-dive page */
+/** Skeleton matching the deep-dive page — eyebrow, title, lead, meta chips,
+ *  AI summary box and source rows, so it dovetails into the real content. */
 export function DeepDiveSkeleton() {
   return (
     <div className="space-y-6">
-      <Skeleton className="h-7 w-4/5" />
+      {/* Eyebrow + title */}
+      <div className="space-y-3">
+        <Skeleton className="h-3 w-24" />
+        <Skeleton className="h-7 w-11/12" />
+        <Skeleton className="h-7 w-3/5" />
+      </div>
+      {/* Lead + meta chips */}
+      <div className="space-y-3">
+        <Skeleton className="h-4 w-full" />
+        <div className="flex gap-2">
+          <Skeleton className="h-5 w-32" />
+          <Skeleton className="h-5 w-20" />
+        </div>
+      </div>
       {/* AI summary box */}
       <div className="rounded-[var(--radius-md)] bg-[var(--drill-muted)] p-4 space-y-2">
         <Skeleton className="h-3 w-20" />
@@ -36,7 +50,7 @@ export function DeepDiveSkeleton() {
         <Skeleton className="h-4 w-5/6" />
         <Skeleton className="h-4 w-3/4" />
       </div>
-      {/* Source cards */}
+      {/* Source rows */}
       {[1, 2, 3].map((i) => (
         <div key={i} className="space-y-2 py-4">
           <div className="flex items-center gap-2">
@@ -48,6 +62,17 @@ export function DeepDiveSkeleton() {
           <Skeleton className="h-3 w-28" />
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Full-page deep-dive route skeleton — DeepDiveSkeleton inside the story
+ *  container. Used as the route/Suspense fallback on story open so the
+ *  transition shows the content shape instead of a generic spinner. */
+export function StoryLoadingSkeleton() {
+  return (
+    <div className="mx-auto max-w-[640px] w-full px-[var(--space-md)] pb-[var(--space-2xl)] pt-[var(--space-md)]">
+      <DeepDiveSkeleton />
     </div>
   );
 }

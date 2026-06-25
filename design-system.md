@@ -16,22 +16,33 @@
 - **Core principle:** Monochromatic until the user interacts — color is earned through action, not decoration
 - **Anti-patterns:** No purple gradients, no 3-column icon grids, no centered everything, no uniform bubbly border-radius, no stock photo hero sections
 
+## Brand & App Identity
+
+> **Single source of truth:** all brand assets derive from the official NewsLens brand kit. Icons and splash are regenerated from it — never hand-drawn per surface.
+
+- **The mark.** Two editorial brackets `[ ]` close in on a field of faint source ticks and hold a single amber dot — "ten headlines, one story." Middle tick brighter (`--text-primary`), top/bottom ghost (`--text-ghost`), focal dot amber (`--accent`). At small sizes the ticks drop and it resolves to `[ • ]`. Never recolour the brackets; amber lives only on the dot (or on "Lens") — one accent per composition. Implemented as `BrandMark` in `frontend/src/components/ui/BrandMark.tsx`.
+- **Logo lockup.** `Logo` = mark + "NewsLens" wordmark — **News** in `--text-primary`, **Lens** in `--accent`, in **Fraunces, upright** (see Typography). Body headlines use *italic* Fraunces; the wordmark/logotype stays upright as house style.
+- **App / launcher icon.** A flat `#0C0C0E` tile with the mark inset to ~44% — the OS applies the mask. Android adaptive icon = `@color/ic_launcher_background` (`#0C0C0E`) + a transparent mark foreground (`@mipmap/ic_launcher_foreground`); the ~44% inset keeps the mark inside the adaptive safe zone (no cropping under circle / squircle / rounded-square masks). Per-density assets in `frontend/android/app/src/main/res/mipmap-*`.
+- **Favicon.** Bolder, **ticks dropped** (`frontend/public/favicon.svg`) so the mark reads at 16 px; the web app icon (`frontend/src/app/icon.svg`) keeps the ticks.
+- **Native splash.** Mark + "NewsLens" wordmark centered on `#0C0C0E` (`frontend/android/.../res/drawable*/splash.png`). The launch window is backed with `#0C0C0E` so nothing flashes before it paints; `@capacitor/splash-screen` holds it and cross-fades into the in-app splash once the web app is ready.
+- **Brand colours.** BG `#0C0C0E` · text `#E4E4E7` · amber `#F97316` (dark) / `#EA580C` (light) · ghost ticks `#3F3F46`. (Full token table under [Color](#color).)
+
 ## Typography
-- **Display/Hero:** Instrument Serif (italic) — editorial broadsheet elegance with hand-set quality. Used for all headlines, story titles, briefing headers
+- **Display/Hero:** Fraunces — editorial broadsheet elegance with hand-set quality. Used for all headlines, story titles, briefing headers, and the wordmark. Default upright; *italic* is used selectively for emphasis (welcome/onboarding headlines, the deep-dive lead, pull-quotes). _The official brand kit specifies Instrument Serif for the wordmark; the app deliberately implements **Fraunces** as a house-style choice — the wordmark/logotype renders upright._
 - **Body:** DM Sans — geometric sans with warmth. Slightly wider than typical UI fonts for a declassified-document feel. Used for summaries, descriptions, UI text
 - **UI/Labels:** DM Sans (same as body, 500 weight for emphasis)
 - **Data/Tables:** JetBrains Mono — tabular figures, ligatures make data feel intentional. Used for timestamps, source counts, confidence scores, metadata
 - **Code:** JetBrains Mono
-- **Loading:** Google Fonts CDN — `https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=JetBrains+Mono:wght@400;500&display=swap`
+- **Loading:** `next/font/google` in `frontend/src/app/layout.tsx` — Fraunces (400–700, normal + italic), DM Sans, JetBrains Mono — self-hosted, exposed as CSS vars `--font-fraunces` / `--font-dm-sans` / `--font-jetbrains-mono`
 - **Scale:**
-  - Hero: 28px / 1.2 line-height / -0.02em tracking (Instrument Serif italic)
-  - Title: 22px / 1.3 line-height / -0.01em tracking (Instrument Serif italic)
-  - Heading: 17px / 1.35 line-height (Instrument Serif italic)
+  - Hero: 28px / 1.2 line-height / -0.02em tracking (Fraunces)
+  - Title: 22px / 1.3 line-height / -0.01em tracking (Fraunces)
+  - Heading: 17px / 1.35 line-height (Fraunces)
   - Body: 15px / 1.7 line-height (DM Sans)
   - Small: 13px / 1.5 line-height (DM Sans)
   - Caption: 12px / 1.4 line-height (DM Sans)
   - Mono: 11px / 1.6 line-height / 0.05em tracking (JetBrains Mono)
-  - Category label: 12px / uppercase / 0.15em tracking (Instrument Serif)
+  - Category label: 12px / uppercase / 0.15em tracking (Fraunces)
 
 ## Color
 
@@ -118,7 +129,7 @@ One chromatic accent (warm amber) + monochrome neutrals. Semantic colors appear 
 
 ### Story Card (Briefing)
 - Unread amber dot (6px) before title
-- Title in Instrument Serif italic (17px)
+- Title in Fraunces italic (17px)
 - 1-2 sentence summary in DM Sans (14px, secondary color)
 - Metadata row: `src:N` in accent, `coh:0.XX` in muted, relative time in ghost
 - 1px hairline separator, 32px vertical gap between stories
@@ -126,7 +137,7 @@ One chromatic accent (warm amber) + monochrome neutrals. Semantic colors appear 
 ### Discover Card (Swipe)
 - No images — text-only cards
 - Topic badge (top-right, colored by category)
-- Tension line: single sentence in Instrument Serif italic (22px) — the core conflict
+- Tension line: single sentence in Fraunces italic (22px) — the core conflict
 - 3 bullet sourced facts in DM Sans (14px)
 - Footer: source names (mono 11px) + confidence score (mono 11px ghost)
 - Stack: 3 cards visible (top active, 2 behind at 0.97/0.94 scale, 0.6/0.3 opacity)
@@ -154,7 +165,7 @@ One chromatic accent (warm amber) + monochrome neutrals. Semantic colors appear 
 - Active segment: amber fill
 - Inactive segments: surface-raised fill
 - Segments represent: Briefing | Discover | Deep Dive
-- Brand "NewsLens" in header: Instrument Serif 28px, "News" in primary, "Lens" in accent
+- Brand "NewsLens" in header: Fraunces (upright), "News" in primary, "Lens" in accent
 
 ### Loading States
 - Skeleton shimmer matching content layout
@@ -637,3 +648,5 @@ returned → resting (snap back with spring)
 | 2026-03-26 | Mobile viewport specs added | Pixel-precise per-screen layouts, safe areas, device tiers, responsive card heights |
 | 2026-03-26 | Settings screen as utility page | Gear icon in NavBar (not a nav segment) — settings is utility, not primary workflow |
 | 2026-03-26 | Per-user encrypted API key storage | Fernet encryption in DB, env var fallback, forward-compatible with multi-user |
+| 2026-06-24 | Fraunces (not Instrument Serif) as display/wordmark font | House-style override of the brand kit; wordmark renders upright, body headlines use italic Fraunces |
+| 2026-06-24 | Brand assets from one official kit, generated deterministically | Removed the default Capacitor robot; adaptive launcher + native splash + favicons regenerate from the kit (System.Drawing on Windows ARM) |

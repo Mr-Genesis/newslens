@@ -80,6 +80,30 @@ npm run apk:debug                  # Gradle build
 
 > **Windows ARM:** Android emulator doesn't work. Test on a physical device by transferring the APK.
 
+> The launcher icon, web/PWA favicons, and splash images come from the official NewsLens brand kit and are generated **deterministically** (PowerShell `System.Drawing` high-quality resize) — `sharp`/`@capacitor/assets` don't load on Windows ARM, and the current `@capacitor/assets` emits broken adaptive output. Regenerate via that pipeline; don't hand-edit the per-density PNGs.
+
+## On-Device Verification (after an Android build)
+
+The Android emulator does not run on Windows ARM, so a built APK must be checked on a **physical device**. After `npm run build:android && npm run apk:debug`, install `frontend/android/app/build/outputs/apk/debug/app-debug.apk` (USB transfer or `adb install`) and walk this checklist:
+
+**Launcher icon**
+- [ ] Shows the NewsLens mark (square brackets + amber dot) on the dark `#0C0C0E` tile — not the old generic / Android-robot icon.
+- [ ] Under every shape the launcher applies (circle, squircle, rounded square), the mark stays centered and is **not cropped** — the adaptive safe zone holds.
+- [ ] Crisp at launcher, app-switcher, and Settings → Apps sizes (per-density assets, no upscaling blur).
+
+**Cold-start splash**
+- [ ] A cold launch shows the mark + "NewsLens" wordmark centered on `#0C0C0E`.
+- [ ] No white/black flash before the splash paints (brand-dark window background).
+- [ ] The native splash holds until the app is ready, then cross-fades (~250 ms) into the in-app splash — no hard cut or blank gap.
+- [ ] Renders centered in both portrait and landscape.
+
+**First-run & loading**
+- [ ] `/welcome` → `/onboarding` reads as one flow (same mono eyebrow + italic Fraunces headline); welcome slide 1 shows the framed spotlight (mark in a ring with outer source ticks).
+- [ ] Opening a story shows a content-shaped skeleton (title / summary / source rows), not a generic spinner.
+
+**Smoke**
+- [ ] Briefing, Discover, and a Deep Dive load against the configured backend (`build:android` → `http://10.0.2.2:8000`; `build:android:prod` → the deployed backend).
+
 ## Code Style
 
 - **Python:** Enforced by `ruff` — run `cd backend && ruff check .`

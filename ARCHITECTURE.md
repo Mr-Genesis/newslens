@@ -232,6 +232,8 @@ flowchart LR
 
 Web builds use `rewrites()` to proxy `/api/*` to the backend. Capacitor builds use `NEXT_PUBLIC_API_BASE_URL` env var to point directly to the backend host.
 
+**Brand assets & splash.** The launcher icon, web/PWA favicons, and the native splash all derive from the official NewsLens brand kit (the single source of truth). They're generated **deterministically** (PowerShell `System.Drawing` high-quality resize) rather than via `@capacitor/assets`/`sharp`, which fail to load on Windows ARM (the current `@capacitor/assets` also emits broken adaptive output). The native splash is held by `@capacitor/splash-screen` (`launchAutoHide: false`, `#0C0C0E`) and hidden with a ~250 ms fade from `frontend/src/components/SplashScreen.tsx` once the web app paints — a controlled native-splash → WebView hand-off with no bare-WebView flash.
+
 ## Decision Log
 
 | Decision | Chosen | Alternative | Rationale |
@@ -246,3 +248,6 @@ Web builds use `rewrites()` to proxy `/api/*` to the backend. Capacitor builds u
 | Encryption | Fernet (symmetric) | RSA / AES-GCM | Simple, battle-tested; good for per-user key storage |
 | CSS | Tailwind CSS 4 | CSS Modules / styled-components | Utility-first; design token integration; small bundle |
 | Motion | Framer Motion | CSS animations | Complex gesture physics (swipe cards); declarative API |
+| Brand assets | Single source of truth (official NewsLens brand kit) | Ad-hoc per-surface art | One canonical mark/lockup; icons + splash regenerate from it, no drift |
+| Icon/splash generation | Deterministic `System.Drawing` resize | `@capacitor/assets` / `sharp` | sharp won't load on Windows ARM; current `@capacitor/assets` emits broken adaptive output (dangling background ref, undersized foregrounds) |
+| Splash control | `@capacitor/splash-screen` controlled fade | Default launch auto-hide | Holds the native splash until the WebView paints, then cross-fades — no white flash or hard cut |

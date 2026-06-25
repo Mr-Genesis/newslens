@@ -4,7 +4,7 @@ Frontend-specific guidance for Claude Code. See also `../CLAUDE.md` for full-sta
 
 ## Stack
 
-Next.js 16 App Router, React 19, Tailwind CSS 4, Framer Motion, Capacitor (Android).
+Next.js 16 App Router, React 19, Tailwind CSS 4, Framer Motion, Capacitor (Android) + `@capacitor/splash-screen`.
 
 **Important:** Always use `--webpack` flag for builds — Turbopack is broken on Windows ARM. This is already configured in `package.json` scripts.
 
@@ -44,7 +44,7 @@ layout.tsx (NavBar)
 
 Visual specs live in `../design-system.md`. CSS token implementation in `src/app/globals.css`.
 
-Key tokens: dark bg `#0C0C0E`, accent amber `#F97316`, fonts Instrument Serif (display) + DM Sans (body) + JetBrains Mono (data).
+Key tokens: dark bg `#0C0C0E`, accent amber `#F97316`, fonts **Fraunces** (display/wordmark — overrides the kit's Instrument Serif) + DM Sans (body) + JetBrains Mono (data). Brand assets (icons/splash) come from the official NewsLens brand kit.
 
 ## Capacitor / Static Export
 
@@ -57,3 +57,5 @@ Build commands:
 npm run build:android    # Static export + cap sync
 npm run apk:debug       # Gradle assembleDebug
 ```
+
+**Splash:** `@capacitor/splash-screen` holds the native splash (`launchAutoHide: false`, `#0C0C0E`) and `src/components/SplashScreen.tsx` calls `SplashScreen.hide({ fadeOutDuration: 250 })` on native once the web overlay paints — a controlled native-splash → WebView fade. Native splash images + launcher icon come from the official brand kit. Verify on a physical device after building (no emulator on Windows ARM).

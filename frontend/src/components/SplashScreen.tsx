@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { Capacitor } from "@capacitor/core";
 import { BrandMark } from "@/components/ui/BrandMark";
 
 /**
@@ -42,6 +43,20 @@ export function SplashScreen() {
     }, hold);
     return () => clearTimeout(t);
   }, [reduce]);
+
+  // Native (Capacitor): hand off from the held native splash to the web app with
+  // a controlled fade, once the WebView has painted this overlay. The native
+  // splash is configured with launchAutoHide:false so it never flashes the bare
+  // WebView before React mounts.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const raf = requestAnimationFrame(() => {
+      import("@capacitor/splash-screen")
+        .then(({ SplashScreen }) => SplashScreen.hide({ fadeOutDuration: 250 }))
+        .catch(() => {});
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   // Avoid hydration mismatch — render nothing on the server / first paint.
   if (!mounted) return null;

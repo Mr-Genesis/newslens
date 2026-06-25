@@ -5,6 +5,7 @@ import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { Input } from "@/components/ui/Input";
 import { Chip } from "@/components/ui/Chip";
+import { FollowButton } from "@/components/ui/FollowButton";
 import { search, type SearchResultItem } from "@/lib/api";
 import { storyHref } from "@/lib/utils";
 
@@ -152,10 +153,20 @@ export default function SearchPage() {
         )}
         {state === "done" && (
           <>
-            <p className="text-mono text-[var(--text-muted)] mb-[var(--space-md)]">
-              &ldquo;{submitted}&rdquo; &middot; {filtered.length}{" "}
-              {filtered.length === 1 ? "result" : "results"}
-            </p>
+            <div className="flex items-center justify-between gap-3 mb-[var(--space-md)]">
+              <p className="text-mono text-[var(--text-muted)]">
+                &ldquo;{submitted}&rdquo; &middot; {filtered.length}{" "}
+                {filtered.length === 1 ? "result" : "results"}
+              </p>
+              {submitted && (
+                <FollowButton
+                  key={submitted}
+                  kind="saved_search"
+                  value={submitted}
+                  label="Follow this search"
+                />
+              )}
+            </div>
             {filtered.length === 0 ? (
               <p className="text-small text-[var(--text-muted)]">
                 No stories match &mdash; try a broader query.
