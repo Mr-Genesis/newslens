@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     graph_extract_batch_size: int = 20         # clusters per backfill run
     graph_extract_min_sources: int = 2         # only extract "settled" clusters (>= this many sources)
     graph_use_platform_key: bool = True        # extract on the platform key, never the owner's per-user key
+    graph_extract_interval_minutes: int = 15   # backfill cadence
 
     # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
     # chain genuinely can't be verified in your environment.

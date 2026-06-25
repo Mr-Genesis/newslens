@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.database import async_session
 from app.models import ArticleEntity, ClusterArticle, Entity, EntityAlias, StoryCluster
 from app.schemas import EntityExtraction
 from app.services import llm, retrieval
@@ -79,6 +80,7 @@ async def extract_entities(cluster: StoryCluster, articles: list) -> EntityExtra
         build_extraction_prompt(text_),
         schema={"entities": []},  # truthy → JSON mode; contents ignored by llm.generate
         model=settings.graph_extraction_model,
+        force_platform_key=settings.graph_use_platform_key,  # bill the platform, not the owner's key
     )
     try:
         return EntityExtraction.model_validate(raw)
@@ -143,3 +145,53 @@ async def resolve_and_persist(db: AsyncSession, articles: list, extraction: Enti
                 db.add(ArticleEntity(article_id=aid, entity_id=entity.id,
                                      salience=ext.salience, confidence=ext.salience))
     await db.flush()
+
+
+# ── Decoupled backfill job (G1 S5) ──────────────────────────────────────────────────
+
+async def backfill_entities() -> None:
+    """APScheduler job: extract entities for SETTLED, CHANGED clusters. Modeled on
+    summarizer.backfill_summaries — selects candidate ids in one session, then processes each in
+    its OWN session/transaction (independent of the already-committed clustering loop). On-change
+    skip via the source_hash stored in extra_json.graph. Dark unless graph_extraction_enabled."""
+    from app.services import lenses  # lazy — avoids any import-time weight/cycle
+
+    if not settings.graph_extraction_enabled:
+        return
+
+    async with async_session() as session:
+        rows = (
+            await session.execute(
+                select(StoryCluster.id)
+                .join(ClusterArticle, ClusterArticle.cluster_id == StoryCluster.id)
+                .group_by(StoryCluster.id)
+                .having(func.count(ClusterArticle.id) >= settings.graph_extract_min_sources)
+                .order_by(StoryCluster.created_at.desc())
+                .limit(settings.graph_extract_batch_size)
+            )
+        ).all()
+        cluster_ids = [r[0] for r in rows]
+
+    if not cluster_ids:
+        return
+
+    extracted = 0
+    for cid in cluster_ids:
+        async with async_session() as s:  # own session + transaction per cluster
+            cluster, articles = await lenses._load(s, cid)
+            if cluster is None or not articles:
+                continue
+            sh = lenses._source_hash(articles)
+            stored = (cluster.extra_json or {}).get("graph", {}).get("source_hash")
+            if stored == sh:
+                continue  # settled + unchanged → no-op (no LLM call)
+            ext = await extract_entities(cluster, articles)
+            if ext is None:
+                continue
+            await resolve_and_persist(s, articles, ext)
+            # write the on-change marker + commit (one commit per cluster, via the lens JSONB merge)
+            await lenses._cache_write(s, cluster, "extra_json", "graph", sh,
+                                      {"entities": len(ext.entities)})
+            extracted += 1
+
+    logger.info("entity_backfill_complete", candidates=len(cluster_ids), extracted=extracted)

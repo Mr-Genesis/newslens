@@ -137,6 +137,7 @@ async def start_scheduler():
     from app.services.clustering import run_clustering
     from app.services.summarizer import backfill_summaries
     from app.services.fetcher import backfill_topic_assignments
+    from app.services.entities import backfill_entities
 
     scheduler = AsyncIOScheduler()
     # One-shot: seed topic embeddings 10s after startup (non-blocking)
@@ -189,6 +190,18 @@ async def start_scheduler():
         minutes=settings.rss_fetch_interval_minutes,
         id="topic_assignment_backfill",
         replace_existing=True,
+    )
+    # G1: decoupled entity extraction on its own interval — max_instances=1 + coalesce so a slow
+    # LLM batch can never overlap itself or starve the clustering loop. Dark unless enabled.
+    scheduler.add_job(
+        backfill_entities,
+        "interval",
+        minutes=settings.graph_extract_interval_minutes,
+        id="entity_backfill",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
     )
     scheduler.start()
     logger.info("scheduler_started", jobs=len(scheduler.get_jobs()))
