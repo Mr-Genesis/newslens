@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models import EmbeddingStatus, FeedbackType, SourceType
 
@@ -332,3 +332,40 @@ class DigestResponse(BaseModel):
     count: int
     since: str
     items: list[DigestItem]
+
+
+# --- G1 entity extraction (Wave D Phase 3) ---
+_ENTITY_KINDS = {"person", "org", "place", "other"}
+
+
+class ExtractedEntity(BaseModel):
+    canonical_name: str
+    kind: str = "other"
+    salience: float = 0.0
+    aliases: list[str] = Field(default_factory=list)
+
+    @field_validator("canonical_name")
+    @classmethod
+    def _nonempty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("empty canonical_name")
+        return v.strip()
+
+    @field_validator("kind", mode="before")
+    @classmethod
+    def _norm_kind(cls, v) -> str:
+        s = str(v or "").strip().lower()
+        return s if s in _ENTITY_KINDS else "other"
+
+    @field_validator("salience", mode="before")
+    @classmethod
+    def _clamp_salience(cls, v) -> float:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return max(0.0, min(1.0, f))
+
+
+class EntityExtraction(BaseModel):
+    entities: list[ExtractedEntity] = Field(default_factory=list)
