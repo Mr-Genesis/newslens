@@ -3,6 +3,7 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    DDL,
     Boolean,
     DateTime,
     Enum,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -308,3 +310,38 @@ class ClusterEdge(Base):
         UniqueConstraint("src_cluster_id", "dst_cluster_id", "kind", name="uq_cluster_edge"),
         Index("ix_cluster_edges_src", "src_cluster_id"),
     )
+
+
+# ── Row-Level Security (Wave D Phase A) ──────────────────────────────────────────────
+# Per-user tables are isolated by the `app.user_id` GUC, which get_current_user sets per request
+# (SET LOCAL). "Enforce-when-set": when the GUC is unset — background jobs reading the owner's API
+# key, direct-DB tests — the policy is permissive; when set (every real request) rows are filtered
+# to that user. The explicit current_user_id() filter in queries is the PRIMARY control; RLS is
+# defense-in-depth. Defined here (DDL events) so create_all (tests) matches the production migration.
+_RLS_TABLES = ("user_feedback", "user_preferences", "user_settings", "follows")
+
+
+def rls_statements(table: str) -> list[str]:
+    # NULLIF(..., '') treats both an unset GUC (NULL) and an explicitly-cleared one ('') as "no
+    # context" → permissive; a real user id filters. (set_config(NULL) yields '' not NULL, and the
+    # bare ''::int cast would otherwise error.)
+    pred = (
+        "NULLIF(current_setting('app.user_id', true), '') IS NULL "
+        "OR user_id = NULLIF(current_setting('app.user_id', true), '')::int"
+    )
+    return [
+        f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY",
+        f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY",
+        f"DROP POLICY IF EXISTS {table}_user_isolation ON {table}",
+        f"CREATE POLICY {table}_user_isolation ON {table} USING ({pred}) WITH CHECK ({pred})",
+    ]
+
+
+def _install_rls_events() -> None:
+    for table in _RLS_TABLES:
+        tbl = Base.metadata.tables[table]
+        for stmt in rls_statements(table):
+            event.listen(tbl, "after_create", DDL(stmt))
+
+
+_install_rls_events()

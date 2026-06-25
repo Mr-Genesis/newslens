@@ -70,6 +70,40 @@ async def test_auth_me_rejects_bad_token(aclient, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_anonymous_allowed_when_auth_not_required(aclient):
+    # Default (auth_required=False): a gated endpoint serves the default user, no 401.
+    r = await aclient.get("/follows")
+    assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_auth_required_rejects_anonymous(aclient, monkeypatch):
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "auth_required", True)
+    r = await aclient.get("/follows")  # gated endpoint, no Authorization header
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_follows_scoped_to_authenticated_user(aclient, monkeypatch):
+    """Cutover proof: a gated endpoint reads/writes the AUTHENTICATED user's rows, and the
+    default (anonymous) user cannot see them."""
+    async def fake_verify(token):
+        return "u-follow-scope"
+
+    monkeypatch.setattr(auth, "verify_firebase_token", fake_verify)
+    h = {"Authorization": "Bearer x"}
+    created = await aclient.post("/follows", json={"kind": "topic", "value": "Quantum"}, headers=h)
+    assert created.status_code == 201
+    mine = (await aclient.get("/follows", headers=h)).json()
+    assert any(f["value"] == "Quantum" for f in mine)
+    # Anonymous (default user) must NOT see the authenticated user's follow.
+    others = (await aclient.get("/follows")).json()
+    assert not any(f["value"] == "Quantum" for f in others)
+
+
+@pytest.mark.asyncio
 async def test_firebase_uid_unique_constraint(db_session):
     """DB-level guard: two rows can't share a firebase_uid (the get-or-create race backstop)."""
     from sqlalchemy.exc import IntegrityError

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.main import app
+from app.services.auth import get_current_user
 from app.models import (
     Article,
     ClusterArticle,
@@ -217,7 +218,13 @@ async def client(mock_session: MockSession):
     async def override_get_db():
         yield mock_session
 
+    async def override_current_user():
+        # Mock-DB tests don't exercise auth; gated endpoints read current_user_id() (→ default
+        # user) and never touch the real resolve_user/set_config path the MockSession can't serve.
+        return None
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_current_user
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

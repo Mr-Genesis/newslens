@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     # (back-compat dev path). env_prefix="" so the field name IS the env var (uppercased).
     firebase_credentials_json: str = ""          # inline service-account JSON (best for hosted secrets)
     google_application_credentials: str = ""     # path to a mounted service-account .json
+    # When true, an unauthenticated request (no Authorization header) is rejected with 401 instead
+    # of falling back to the default user. Set AUTH_REQUIRED=true for real multi-user production;
+    # default false keeps single-user dev + the rollout window working.
+    auth_required: bool = False
 
     # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
     # chain genuinely can't be verified in your environment.

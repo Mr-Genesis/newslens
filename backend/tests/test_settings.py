@@ -14,6 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from app.database import get_db
 from app.main import app
 from app.models import UserSetting
+from app.services.auth import get_current_user
 
 
 class FakeUserSetting:
@@ -96,6 +97,7 @@ async def settings_client(settings_session):
         yield settings_session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = lambda: None  # mock-DB: skip real auth resolution
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

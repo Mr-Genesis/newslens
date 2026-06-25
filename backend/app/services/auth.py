@@ -5,18 +5,31 @@ project credentials in env); tests monkeypatch ``verify_firebase_token``. ``reso
 verified uid to a User row (get-or-create) and falls back to the default single user when no token
 is present, so existing endpoints keep working until they are migrated to require auth.
 """
+from contextvars import ContextVar
+
 import structlog
 from fastapi import Depends, Header, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.database import get_db
 from app.models import User
 
 logger = structlog.get_logger()
 
 DEFAULT_USER_ID = 1
+
+# Request-scoped authenticated user id (async-task-local; set by get_current_user). Endpoints read
+# it via current_user_id() instead of a hardcoded constant, so the resolved user flows everywhere.
+_req_user_id: ContextVar[int | None] = ContextVar("newslens_req_user_id", default=None)
+
+
+def current_user_id() -> int:
+    """The authenticated user's id for this request, or the default user when unauthenticated."""
+    v = _req_user_id.get()
+    return v if v is not None else DEFAULT_USER_ID
 
 
 async def verify_firebase_token(token: str) -> str | None:
@@ -50,6 +63,8 @@ async def resolve_user(db: AsyncSession, authorization: str | None) -> User:
     """Authorization header → User. No header → default single user (back-compat). Present-but-
     invalid token → 401 (never silently fall through to another identity)."""
     if not authorization:
+        if settings.auth_required:
+            raise HTTPException(status_code=401, detail="authentication required")
         return await _get_or_create_default(db)
     token = authorization.split(" ", 1)[1] if " " in authorization else authorization
     uid = await verify_firebase_token(token)
@@ -77,6 +92,12 @@ async def get_current_user(
     authorization: str | None = Header(default=None),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """FastAPI dependency. New per-user endpoints depend on this; existing endpoints are
-    migrated incrementally (the no-token fallback keeps them working meanwhile)."""
-    return await resolve_user(db, authorization)
+    """FastAPI dependency: resolve the caller, publish their id to the request context, and set the
+    Postgres RLS GUC (app.user_id) on this request's transaction (txn-local → reset at commit/close,
+    so it can't leak across pooled connections)."""
+    user = await resolve_user(db, authorization)
+    _req_user_id.set(user.id)
+    await db.execute(
+        text("SELECT set_config('app.user_id', :uid, true)"), {"uid": str(user.id)}
+    )
+    return user
