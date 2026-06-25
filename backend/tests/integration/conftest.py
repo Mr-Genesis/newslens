@@ -191,9 +191,18 @@ def fake_llm(monkeypatch):
                 "headline": "Here's the one-line takeaway for you",
                 "points": ["Point one.", "Point two.", "Point three."],
             }
+        # G1 entity extraction
+        if '"canonical_name"' in p or "salient named entities" in p:
+            return {
+                "entities": [
+                    {"canonical_name": "Reserve Bank of India", "kind": "org",
+                     "salience": 0.9, "aliases": ["RBI"]},
+                    {"canonical_name": "Geneva", "kind": "place", "salience": 0.5, "aliases": []},
+                ]
+            }
         return {"result": "generic"}
 
-    async def _gen(prompt, *, system=None, schema=None, model=None, max_tokens=None):
+    async def _gen(prompt, *, system=None, schema=None, model=None, max_tokens=None, force_platform_key=False):
         calls["generate"] += 1
         if schema is None:
             return "STUB SUMMARY"

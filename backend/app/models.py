@@ -312,6 +312,66 @@ class ClusterEdge(Base):
     )
 
 
+# ── G1: global entity backbone (Wave D Phase 3) ──────────────────────────────────────
+# Global, content-scoped (shared across users like articles/clusters) — NOT in _RLS_TABLES.
+# Resolution is case-insensitive via normalized columns (*_norm = value.lower()) + plain b-tree
+# indexes — avoids functional lower() indexes that trip Alembic autogenerate parity. No embedding
+# column in G1 (the NN tie-breaker + auto-merge are deferred to G2).
+
+
+class Entity(Base):
+    __tablename__ = "entities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    canonical_name: Mapped[str] = mapped_column(Text, nullable=False)  # display form
+    name_norm: Mapped[str] = mapped_column(Text, nullable=False)  # lower(canonical_name) for lookup
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # person|org|place|other (convention)
+    description: Mapped[str | None] = mapped_column(Text)
+    first_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mention_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    __table_args__ = (
+        Index("ix_entities_kind_name", "kind", "name_norm"),  # exact resolution pre-filter
+    )
+
+
+class EntityAlias(Base):
+    __tablename__ = "entity_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entity_id: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+    )
+    alias: Mapped[str] = mapped_column(Text, nullable=False)
+    alias_norm: Mapped[str] = mapped_column(Text, nullable=False)  # lower(alias)
+    source: Mapped[str | None] = mapped_column(String(32))
+
+    __table_args__ = (
+        UniqueConstraint("entity_id", "alias_norm", name="uq_entity_alias"),
+        Index("ix_entity_aliases_alias", "alias_norm"),
+    )
+
+
+class ArticleEntity(Base):
+    __tablename__ = "article_entities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    article_id: Mapped[int] = mapped_column(
+        ForeignKey("articles.id", ondelete="CASCADE"), nullable=False
+    )
+    entity_id: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), nullable=False
+    )
+    salience: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+
+    __table_args__ = (
+        UniqueConstraint("article_id", "entity_id", name="uq_article_entity"),  # idempotent re-extract
+        Index("ix_article_entities_entity", "entity_id"),  # reverse "appears in" lookup
+    )
+
+
 # ── Row-Level Security (Wave D Phase A) ──────────────────────────────────────────────
 # Per-user tables are isolated by the `app.user_id` GUC, which get_current_user sets per request
 # (SET LOCAL). "Enforce-when-set": when the GUC is unset — background jobs reading the owner's API

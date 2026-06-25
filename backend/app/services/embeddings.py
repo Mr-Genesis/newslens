@@ -67,6 +67,12 @@ def _get_client() -> AsyncOpenAI | None:
     return AsyncOpenAI(api_key=settings.openai_api_key)
 
 
+def _get_client_platform() -> AsyncOpenAI | None:
+    """Platform (env) key ONLY — never the per-user key. Background graph extraction uses this so it
+    bills the platform, not the owner's personal key (which _get_client_async would pick up)."""
+    return _get_client()
+
+
 async def _get_client_async() -> AsyncOpenAI | None:
     """Get OpenAI client: per-user DB key first, env var fallback."""
     user_key = await _get_user_api_key()

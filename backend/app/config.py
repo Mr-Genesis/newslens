@@ -64,6 +64,16 @@ class Settings(BaseSettings):
     # default false keeps single-user dev + the rollout window working.
     auth_required: bool = False
 
+    # G1 entity backbone (Wave D Phase 3). Extraction ships DARK (enable after monitoring skip rate).
+    graph_extraction_enabled: bool = False
+    graph_extraction_model: str = "gpt-4o-mini"
+    graph_max_entities_per_cluster: int = 12   # cast-strip cap + extraction salience cap
+    graph_salience_floor: float = 0.3          # drop entities below this salience at extraction
+    graph_extract_batch_size: int = 20         # clusters per backfill run
+    graph_extract_min_sources: int = 2         # only extract "settled" clusters (>= this many sources)
+    graph_use_platform_key: bool = True        # extract on the platform key, never the owner's per-user key
+    graph_extract_interval_minutes: int = 15   # backfill cadence
+
     # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
     # chain genuinely can't be verified in your environment.
     db_ssl_insecure: bool = False

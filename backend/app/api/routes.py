@@ -1214,6 +1214,22 @@ async def cluster_timeline(cluster_id: int, db: AsyncSession = Depends(get_db)):
     return await lenses.timeline(db, cluster_id)
 
 
+@router.get("/clusters/{cluster_id}/entities", dependencies=[Depends(get_current_user)])
+async def cluster_entities_endpoint(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    """G1 cast strip: who/what is in this story (salient entities), highest-salience first."""
+    from app.services import entities
+
+    return await entities.cluster_entities(db, cluster_id)
+
+
+@router.get("/entities/{entity_id}/clusters", dependencies=[Depends(get_current_user)])
+async def entity_clusters_endpoint(entity_id: int, db: AsyncSession = Depends(get_db)):
+    """G1 'appears in' rail: other recent stories touching this entity."""
+    from app.services import entities
+
+    return await entities.entity_clusters(db, entity_id)
+
+
 @router.get("/auth/me")
 async def auth_me(user: User = Depends(get_current_user)):
     """Resolve the caller from the Firebase ID token (or the default user when unauthenticated).
@@ -1259,6 +1275,13 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     db.add(f)
     await db.commit()
     await db.refresh(f)
+    if kind == "entity":
+        # G1 S7: opportunistically resolve the followed entity to a graph node (resolution only —
+        # no follows.entity_id column, no merge re-point; both are deferred to G2).
+        from app.services import entities
+
+        eid = await entities.resolve_existing(db, value)
+        logger.info("entity_follow_resolved", value=value, entity_id=eid)
     return FollowOut.model_validate(f)
 
 

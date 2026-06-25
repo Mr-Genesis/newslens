@@ -97,10 +97,17 @@ async def _resolve_gemini_key() -> str | None:
 
 async def _generate_openai(prompt: str, *, system: str | None = None,
                            schema=None, model: str | None = None,
-                           max_tokens: int | None = None):
+                           max_tokens: int | None = None,
+                           force_platform_key: bool = False):
     # Module ref (not a bound import) so tests can patch embeddings._get_client_async.
     from app.services import embeddings
-    client = await embeddings._get_client_async()
+    # force_platform_key: background jobs (graph extraction) bill the platform/env key, never the
+    # per-user key that _get_client_async resolves.
+    client = (
+        embeddings._get_client_platform()
+        if force_platform_key
+        else await embeddings._get_client_async()
+    )
     if client is None:
         raise LLMUnavailable("no OpenAI key configured")
     messages = []
@@ -122,8 +129,9 @@ async def _generate_openai(prompt: str, *, system: str | None = None,
 
 async def _generate_gemini(prompt: str, *, system: str | None = None,
                            schema=None, model: str | None = None,
-                           max_tokens: int | None = None):
-    key = await _resolve_gemini_key()
+                           max_tokens: int | None = None,
+                           force_platform_key: bool = False):
+    key = settings.gemini_api_key if force_platform_key else await _resolve_gemini_key()
     if not key:
         raise LLMUnavailable("no Gemini key configured")
     import google.generativeai as genai  # lazy import — only needed on the gemini path
@@ -144,16 +152,20 @@ async def _generate_gemini(prompt: str, *, system: str | None = None,
 
 async def generate(prompt: str, *, system: str | None = None,
                    schema=None, model: str | None = None,
-                   max_tokens: int | None = None):
+                   max_tokens: int | None = None,
+                   force_platform_key: bool = False):
     """Generate text (or parsed JSON when ``schema`` is given) via the configured provider.
 
+    ``force_platform_key`` routes to the platform/env key (background jobs), never a per-user key.
     Raises ``LLMUnavailable`` when no key is configured.
     """
     provider = (settings.generation_provider or "openai").lower()
     if provider == "gemini":
         return await _generate_gemini(
-            prompt, system=system, schema=schema, model=model, max_tokens=max_tokens
+            prompt, system=system, schema=schema, model=model, max_tokens=max_tokens,
+            force_platform_key=force_platform_key,
         )
     return await _generate_openai(
-        prompt, system=system, schema=schema, model=model, max_tokens=max_tokens
+        prompt, system=system, schema=schema, model=model, max_tokens=max_tokens,
+        force_platform_key=force_platform_key,
     )

@@ -8,8 +8,11 @@ from sqlalchemy import create_engine, func, inspect, select, text
 from app.config import settings
 from app.models import (
     Article,
+    ArticleEntity,
     ClusterArticle,
     EmbeddingStatus,
+    Entity,
+    EntityAlias,
     Source,
     SourceType,
     StoryCluster,
@@ -27,6 +30,10 @@ EXPECTED_TABLES = {
     "article_topics",
     "cluster_articles",
     "user_feedback",
+    # Wave D Phase 3 — G1 entity backbone
+    "entities",
+    "entity_aliases",
+    "article_entities",
 }
 
 # backend/ root (contains alembic.ini + migrations/), two levels up from this file.
@@ -109,6 +116,34 @@ async def test_embedding_column_accepts_vector(db_session):
     await db_session.flush()
     got = (await db_session.execute(select(Article).where(Article.id == art.id))).scalar_one()
     assert got.embedding is not None
+
+
+@pytest.mark.asyncio
+async def test_entity_backbone_persists_and_dedups(db_session):
+    """G1 S0: entities/aliases/article_entities persist; uq_article_entity is idempotent."""
+    from sqlalchemy.exc import IntegrityError
+
+    src = Source(name="S", url="https://eb/u", source_type=SourceType.wire)
+    db_session.add(src)
+    await db_session.flush()
+    art = Article(title="A", url="https://eb/a", source_id=src.id,
+                  embedding_status=EmbeddingStatus.complete)
+    db_session.add(art)
+    await db_session.flush()
+    ent = Entity(canonical_name="Reserve Bank of India", name_norm="reserve bank of india", kind="org")
+    db_session.add(ent)
+    await db_session.flush()
+    db_session.add(EntityAlias(entity_id=ent.id, alias="RBI", alias_norm="rbi"))
+    db_session.add(ArticleEntity(article_id=art.id, entity_id=ent.id, salience=0.9))
+    await db_session.flush()
+
+    got = (await db_session.execute(
+        select(ArticleEntity).where(ArticleEntity.article_id == art.id))).scalars().all()
+    assert len(got) == 1 and got[0].entity_id == ent.id
+
+    with pytest.raises(IntegrityError):  # uq_article_entity rejects a duplicate mention
+        async with db_session.begin_nested():
+            db_session.add(ArticleEntity(article_id=art.id, entity_id=ent.id, salience=0.5))
 
 
 @pytest.mark.asyncio
