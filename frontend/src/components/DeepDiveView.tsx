@@ -8,6 +8,7 @@ import { ImpactCard } from "@/components/ui/ImpactCard";
 import { AskBox } from "@/components/ui/AskBox";
 import { Collapsible } from "@/components/ui/Collapsible";
 import { FrameworksCard } from "@/components/ui/FrameworksCard";
+import { EntityChips } from "@/components/ui/EntityChips";
 import { ConsensusRow } from "@/components/ui/ConsensusRow";
 import { TriviaCard } from "@/components/ui/TriviaCard";
 import { SourceCard } from "@/components/SourceCard";
@@ -266,6 +267,9 @@ export default function DeepDiveView({
             </Collapsible>
             <Collapsible key={`fw-${expandAll}`} label="FRAMEWORKS" preview="How to read this story" defaultOpen={expandAll}>
               <FrameworksCard clusterId={clusterId} />
+            </Collapsible>
+            <Collapsible key={`ent-${expandAll}`} label="IN THIS STORY" preview="People, orgs & places" defaultOpen={expandAll}>
+              <EntityChips clusterId={clusterId} />
             </Collapsible>
             <Collapsible key={`src-${expandAll}`} label="SOURCES" preview={`${freeCount} free · ${paywallCount} paywall`} defaultOpen={expandAll}>
               <SourceSpectrum freeCount={freeCount} paywallCount={paywallCount} />

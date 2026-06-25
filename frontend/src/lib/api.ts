@@ -427,6 +427,26 @@ export async function getFrameworks(clusterId: number): Promise<FrameworksResult
   return fetchJSON(`/clusters/${clusterId}/frameworks`);
 }
 
+// G1 entity backbone
+export interface ClusterEntity {
+  id: number;
+  canonical_name: string;
+  kind: string;
+  salience: number;
+}
+export async function getClusterEntities(clusterId: number): Promise<ClusterEntity[]> {
+  return fetchJSON(`/clusters/${clusterId}/entities`);
+}
+
+export interface EntityCluster {
+  cluster_id: number;
+  title: string;
+  created_at: string;
+}
+export async function getEntityClusters(entityId: number): Promise<EntityCluster[]> {
+  return fetchJSON(`/entities/${entityId}/clusters`);
+}
+
 export interface Dissent {
   outlet: string;
   point: string;
