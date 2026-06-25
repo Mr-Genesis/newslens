@@ -3,15 +3,18 @@ from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    DDL,
     Boolean,
     DateTime,
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -65,8 +68,15 @@ class User(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Wave D Phase A: Firebase identity (multi-user). UNIQUE on non-NULL uids — Postgres allows
+    # many NULLs in a unique index, so the default user + any legacy rows stay NULL without conflict.
+    firebase_uid: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("uq_users_firebase_uid", "firebase_uid", unique=True),
     )
 
     feedback: Mapped[list["UserFeedback"]] = relationship(back_populates="user")
@@ -102,7 +112,9 @@ class Article(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(1024), nullable=False)
-    snippet: Mapped[str | None] = mapped_column(Text)
+    snippet: Mapped[str | None] = mapped_column(Text)  # ≤300 chars, for cards
+    # Wave D1: full extracted article body (for deep retrieval; snippet stays for cards).
+    extracted_text: Mapped[str | None] = mapped_column(Text)
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
     source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -274,3 +286,62 @@ class Follow(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "kind", "value", name="uq_follow"),
     )
+
+
+class ClusterEdge(Base):
+    """Wave D2: directed temporal/topical edges between existing clusters → "how we got here"."""
+
+    __tablename__ = "cluster_edges"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    src_cluster_id: Mapped[int] = mapped_column(
+        ForeignKey("story_clusters.id"), nullable=False
+    )
+    dst_cluster_id: Mapped[int] = mapped_column(
+        ForeignKey("story_clusters.id"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # successor|background|duplicate
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("src_cluster_id", "dst_cluster_id", "kind", name="uq_cluster_edge"),
+        Index("ix_cluster_edges_src", "src_cluster_id"),
+    )
+
+
+# ── Row-Level Security (Wave D Phase A) ──────────────────────────────────────────────
+# Per-user tables are isolated by the `app.user_id` GUC, which get_current_user sets per request
+# (SET LOCAL). "Enforce-when-set": when the GUC is unset — background jobs reading the owner's API
+# key, direct-DB tests — the policy is permissive; when set (every real request) rows are filtered
+# to that user. The explicit current_user_id() filter in queries is the PRIMARY control; RLS is
+# defense-in-depth. Defined here (DDL events) so create_all (tests) matches the production migration.
+_RLS_TABLES = ("user_feedback", "user_preferences", "user_settings", "follows")
+
+
+def rls_statements(table: str) -> list[str]:
+    # NULLIF(..., '') treats both an unset GUC (NULL) and an explicitly-cleared one ('') as "no
+    # context" → permissive; a real user id filters. (set_config(NULL) yields '' not NULL, and the
+    # bare ''::int cast would otherwise error.)
+    pred = (
+        "NULLIF(current_setting('app.user_id', true), '') IS NULL "
+        "OR user_id = NULLIF(current_setting('app.user_id', true), '')::int"
+    )
+    return [
+        f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY",
+        f"ALTER TABLE {table} FORCE ROW LEVEL SECURITY",
+        f"DROP POLICY IF EXISTS {table}_user_isolation ON {table}",
+        f"CREATE POLICY {table}_user_isolation ON {table} USING ({pred}) WITH CHECK ({pred})",
+    ]
+
+
+def _install_rls_events() -> None:
+    for table in _RLS_TABLES:
+        tbl = Base.metadata.tables[table]
+        for stmt in rls_statements(table):
+            event.listen(tbl, "after_create", DDL(stmt))
+
+
+_install_rls_events()

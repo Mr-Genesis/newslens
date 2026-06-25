@@ -195,6 +195,35 @@ async def start_scheduler():
     return scheduler
 
 
+def init_firebase() -> bool:
+    """Initialize firebase-admin EXACTLY ONCE so app/services/auth.py:verify_firebase_token works.
+    No-op (warns) when no credential is configured: verify then returns None and resolve_user keeps
+    serving the default user (back-compat), so local dev still runs without Firebase configured."""
+    import json
+
+    import firebase_admin
+    from firebase_admin import credentials
+
+    if firebase_admin._apps:  # already initialized (uvicorn --reload / re-import) — second init raises
+        return True
+    try:
+        if settings.firebase_credentials_json:
+            cred = credentials.Certificate(json.loads(settings.firebase_credentials_json))
+            firebase_admin.initialize_app(cred)
+            logger.info("firebase_admin_initialized", source="inline_json")
+        elif settings.google_application_credentials:
+            cred = credentials.Certificate(settings.google_application_credentials)
+            firebase_admin.initialize_app(cred)
+            logger.info("firebase_admin_initialized", source="file")
+        else:
+            logger.warning("firebase_admin_init_skipped", reason="no_credentials")
+            return False
+        return True
+    except Exception as e:  # noqa: BLE001 — bad/missing creds disable auth, never crash boot
+        logger.warning("firebase_admin_init_failed", error=str(e))
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("starting_newslens")
@@ -202,6 +231,11 @@ async def lifespan(app: FastAPI):
         await init_db()
     except Exception as e:
         logger.error("db_init_failed", error=str(e))
+
+    try:
+        init_firebase()  # one-time Admin SDK init (no-op if no credential configured)
+    except Exception as e:
+        logger.error("firebase_init_failed", error=str(e))
 
     scheduler = None
     try:

@@ -1,18 +1,33 @@
 /* ═══════════════════════════════════════
    NewsLens API Client
    Calls go through Next.js rewrites → FastAPI
+   Every helper routes through fetchJSON, so attaching the Firebase ID token here authenticates
+   the whole app. getIdToken() returns null when signed out or server-side, so no header is sent
+   and the backend serves the default user (back-compat during the multi-user rollout).
    ═══════════════════════════════════════ */
+
+import { getIdToken } from "@/lib/firebase";
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "/api";
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
-  });
+  const doFetch = (token: string | null) =>
+    fetch(`${BASE}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...init?.headers,
+      },
+    });
+
+  let res = await doFetch(await getIdToken());
+
+  // Token expired/rotated since the cached copy (e.g. a long-idle tab) → force one refresh + retry.
+  if (res.status === 401) {
+    const fresh = await getIdToken(true);
+    if (fresh) res = await doFetch(fresh);
+  }
 
   if (!res.ok) {
     throw new Error(`API ${res.status}: ${res.statusText}`);

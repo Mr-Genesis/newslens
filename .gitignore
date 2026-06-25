@@ -20,6 +20,11 @@ out/
 .env.local
 .env.*.local
 
+# Secrets (Firebase service-account, etc.) + local compose override
+/secrets/
+backend/secrets/
+docker-compose.override.yml
+
 # IDE
 .vscode/
 .idea/

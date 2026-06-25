@@ -19,10 +19,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
-from app.models import Article, ArticleTopic, ClusterArticle, StoryCluster, Topic
+from app.models import Article, ArticleTopic, ClusterArticle, ClusterEdge, StoryCluster, Topic
 from app.schemas import AskAnswer, FinancialDimension, StoryImpact
 from app.services import frameworks as fw
-from app.services import impact_guardrails, llm
+from app.services import impact_guardrails, llm, retrieval
 
 logger = structlog.get_logger()
 
@@ -65,12 +65,8 @@ def _source_hash(articles: list[Article]) -> str:
 
 
 def _cluster_text(cluster: StoryCluster, articles: list[Article]) -> str:
-    lines = [f"STORY: {cluster.title}"]
-    for i, a in enumerate(articles, 1):
-        lines.append(f"\n{i}. {a.title}")
-        if a.snippet:
-            lines.append(f"   {a.snippet[:400]}")
-    return "\n".join(lines)
+    # Wave D1: route through the retrieval seam so lenses see full bodies, not snippet[:400].
+    return retrieval.cluster_text(cluster, articles)
 
 
 # ── analysis / strategic / trivia prompt builders (unchanged) ──
@@ -178,14 +174,9 @@ _IMPACT_STRICTER = (
 )
 
 
-def _impact_source_lines(articles: list[Article]) -> str:
-    out = []
-    for a in articles:
-        outlet = a.source.name if a.source else "Unknown"
-        tag = "paywall" if (a.source and a.source.is_paywalled) else "free"
-        excerpt = (a.snippet or a.title or "")[:240]
-        out.append(f"{outlet} — {excerpt} [{tag}]")
-    return "\n".join(out)
+def _impact_source_lines(articles: list[Article], depth_pref: str = "standard") -> str:
+    # Wave D1: full bodies, budgeted by depth, via the retrieval seam (was snippet[:240]).
+    return retrieval.source_lines(articles, depth_pref=depth_pref)
 
 
 def _impact_user(persona: dict, cluster: StoryCluster, articles: list[Article], source_lines: str) -> str:
@@ -364,7 +355,10 @@ async def impact(db, cluster_id, persona: dict, *, force: bool = False):
             return {"cached": True, **cached}
 
     outlets = [a.source.name for a in articles if a.source]
-    user_prompt = _impact_user(persona, cluster, articles, _impact_source_lines(articles))
+    user_prompt = _impact_user(
+        persona, cluster, articles,
+        _impact_source_lines(articles, persona.get("depth_pref") or "standard"),
+    )
 
     MAX_GENS = 2
     payload: dict | None = None
@@ -476,14 +470,15 @@ _FRAMEWORKS_SYSTEM = (
 )
 
 
-def _frameworks_prompt(cluster: StoryCluster, selected: list[dict]) -> str:
+def _frameworks_prompt(cluster: StoryCluster, selected: list[dict], source_lines: str) -> str:
     rows = "\n".join(
         f"- {f['id']} ({f['label']}): {fw.GUARDRAILS.get(f['id'], 'one grounded insight line')}"
         for f in selected
     )
     return (
         f"<story>\nHeadline: {cluster.title}\nSummary: {cluster.summary or ''}\n</story>\n\n"
-        f"Apply these frameworks (≤20 words each):\n{rows}\n\n"
+        f"<sources>\n{source_lines}\n</sources>\n\n"
+        f"Apply these frameworks (≤20 words each), grounded in the sources above:\n{rows}\n\n"
         'Respond ONLY as JSON: {"lines": {"<framework_id>": "<one-line insight>"}}.'
     )
 
@@ -515,7 +510,7 @@ async def frameworks(db, cluster_id):
     if cached is None:
         try:
             raw = await llm.generate(
-                _frameworks_prompt(cluster, selected),
+                _frameworks_prompt(cluster, selected, retrieval.source_lines(articles)),
                 system=_FRAMEWORKS_SYSTEM, schema={"lines": {}}, max_tokens=500,
             )
         except llm.LLMUnavailable:
@@ -596,3 +591,43 @@ async def consensus(db, cluster_id):
         await _cache_write(db, cluster, "extra_json", "consensus", sh, data)
         cached = data
     return cached
+
+
+# ── "How we got here" timeline (Wave D2) ──
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _timeline_prompt(cluster: StoryCluster, articles: list[Article], neighbours: list[str]) -> str:
+    ordered = sorted(articles, key=lambda a: (a.published_at or a.fetched_at or _EPOCH))
+    chron = "\n".join(f"- {(a.published_at or a.fetched_at or '?')}: {a.title}" for a in ordered)
+    nbr = "\n".join(f"- {t}" for t in neighbours) or "—"
+    return (
+        f"<story>\nHeadline: {cluster.title}\n</story>\n\n"
+        f"<chronology>\n{chron}\n</chronology>\n\n"
+        f"<related_prior_stories>\n{nbr}\n</related_prior_stories>\n\n"
+        'Write a brief "how we got here". Respond ONLY as JSON: '
+        '{"how_we_got_here": "...", "timeline": [{"when": "...", "what": "..."}]}.'
+    )
+
+
+async def timeline(db, cluster_id):
+    """'How we got here' — within-cluster chronology + prior related clusters (cluster_edges)."""
+    cluster, articles = await _load(db, cluster_id)
+    if cluster is None:
+        return {"error": "cluster_not_found"}
+    if not articles:
+        return {"unavailable": True, "reason": "no_sources"}
+    neighbours = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(StoryCluster.title)
+                .join(ClusterEdge, ClusterEdge.dst_cluster_id == StoryCluster.id)
+                .where(ClusterEdge.src_cluster_id == cluster_id)
+            )
+        ).all()
+    ]
+    return await get_lens(
+        db, cluster_id, column="extra_json", subkey="timeline",
+        prompt=_timeline_prompt(cluster, articles, neighbours), schema={"how_we_got_here": ""},
+    )

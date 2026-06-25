@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import async_session, get_db
+from app.services.auth import current_user_id, get_current_user
 from app.models import (
     Article,
     ArticleTopic,
@@ -54,8 +55,6 @@ from app.schemas import (
 logger = structlog.get_logger()
 router = APIRouter()
 
-DEFAULT_USER_ID = 1
-
 
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
@@ -86,7 +85,7 @@ async def health_check():
     )
 
 
-@router.get("/feed", response_model=FeedResponse)
+@router.get("/feed", response_model=FeedResponse, dependencies=[Depends(get_current_user)])
 async def get_feed(
     topic: int | None = None,
     page: int = Query(1, ge=1),
@@ -171,7 +170,7 @@ async def get_feed(
     from app.config import settings as app_settings
     feedback_result = await db.execute(
         select(UserFeedback.feedback_type)
-        .where(UserFeedback.user_id == DEFAULT_USER_ID)
+        .where(UserFeedback.user_id == current_user_id())
         .order_by(UserFeedback.created_at.desc())
         .limit(app_settings.feedback_window_size)
     )
@@ -194,7 +193,7 @@ async def get_feed(
     )
 
 
-@router.get("/clusters/{cluster_id}", response_model=ClusterDetailOut)
+@router.get("/clusters/{cluster_id}", response_model=ClusterDetailOut, dependencies=[Depends(get_current_user)])
 async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(StoryCluster)
@@ -223,14 +222,14 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
         # Mark article as read
         existing_read = await db.execute(
             select(UserFeedback).where(
-                UserFeedback.user_id == DEFAULT_USER_ID,
+                UserFeedback.user_id == current_user_id(),
                 UserFeedback.article_id == article.id,
                 UserFeedback.feedback_type == FeedbackType.read,
             )
         )
         if existing_read.scalar_one_or_none() is None:
             db.add(UserFeedback(
-                user_id=DEFAULT_USER_ID,
+                user_id=current_user_id(),
                 article_id=article.id,
                 feedback_type=FeedbackType.read,
             ))
@@ -273,14 +272,14 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
     for aid in article_ids:
         existing_read = await db.execute(
             select(UserFeedback).where(
-                UserFeedback.user_id == DEFAULT_USER_ID,
+                UserFeedback.user_id == current_user_id(),
                 UserFeedback.article_id == aid,
                 UserFeedback.feedback_type == FeedbackType.read,
             )
         )
         if existing_read.scalar_one_or_none() is None:
             db.add(UserFeedback(
-                user_id=DEFAULT_USER_ID,
+                user_id=current_user_id(),
                 article_id=aid,
                 feedback_type=FeedbackType.read,
             ))
@@ -341,13 +340,13 @@ async def get_topics(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.post("/feedback", response_model=FeedbackOut, status_code=201)
+@router.post("/feedback", response_model=FeedbackOut, status_code=201, dependencies=[Depends(get_current_user)])
 async def create_feedback(
     body: FeedbackCreate,
     db: AsyncSession = Depends(get_db),
 ):
     feedback = UserFeedback(
-        user_id=DEFAULT_USER_ID,
+        user_id=current_user_id(),
         article_id=body.article_id,
         feedback_type=body.feedback_type,
     )
@@ -387,7 +386,7 @@ def _extract_impact_headline(impact_json: dict | None) -> str | None:
     return None
 
 
-@router.get("/briefing", response_model=BriefingResponse)
+@router.get("/briefing", response_model=BriefingResponse, dependencies=[Depends(get_current_user)])
 async def get_briefing(db: AsyncSession = Depends(get_db)):
     """
     Returns AI-generated daily briefing built from story clusters.
@@ -399,7 +398,7 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     # Get read article IDs for this user
     read_result = await db.execute(
         select(UserFeedback.article_id).where(
-            UserFeedback.user_id == DEFAULT_USER_ID,
+            UserFeedback.user_id == current_user_id(),
             UserFeedback.feedback_type == FeedbackType.read,
         )
     )
@@ -407,7 +406,7 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
 
     # Get user topic preference weights
     pref_result = await db.execute(
-        select(UserPreference).where(UserPreference.user_id == DEFAULT_USER_ID)
+        select(UserPreference).where(UserPreference.user_id == current_user_id())
     )
     prefs = {p.topic_id: p.weight for p in pref_result.scalars().all()}
 
@@ -561,7 +560,7 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     # Compute real explore ratio from recent feedback
     feedback_result = await db.execute(
         select(UserFeedback.feedback_type)
-        .where(UserFeedback.user_id == DEFAULT_USER_ID)
+        .where(UserFeedback.user_id == current_user_id())
         .order_by(UserFeedback.created_at.desc())
         .limit(app_settings.feedback_window_size)
     )
@@ -639,7 +638,7 @@ async def get_discover_deck(
     return cards
 
 
-@router.post("/discover/swipe", status_code=204)
+@router.post("/discover/swipe", status_code=204, dependencies=[Depends(get_current_user)])
 async def record_swipe(
     body: SwipeRequest,
     db: AsyncSession = Depends(get_db),
@@ -658,7 +657,7 @@ async def record_swipe(
 
     # Record feedback
     feedback = UserFeedback(
-        user_id=DEFAULT_USER_ID,
+        user_id=current_user_id(),
         article_id=body.article_id,
         feedback_type=feedback_type,
     )
@@ -681,7 +680,7 @@ async def record_swipe(
                 # Upsert preference
                 pref_result = await db.execute(
                     select(UserPreference).where(
-                        UserPreference.user_id == DEFAULT_USER_ID,
+                        UserPreference.user_id == current_user_id(),
                         UserPreference.topic_id == at.topic_id,
                     )
                 )
@@ -691,7 +690,7 @@ async def record_swipe(
                 else:
                     db.add(
                         UserPreference(
-                            user_id=DEFAULT_USER_ID,
+                            user_id=current_user_id(),
                             topic_id=at.topic_id,
                             weight=max(0.0, 1.0 + weight_delta),
                         )
@@ -761,11 +760,11 @@ async def get_topic_cards(
 # ── Settings ─────────────────────────────────────────────
 
 
-@router.get("/settings", response_model=UserSettingsOut)
+@router.get("/settings", response_model=UserSettingsOut, dependencies=[Depends(get_current_user)])
 async def get_settings(db: AsyncSession = Depends(get_db)):
     """Return current user settings (API key masked)."""
     result = await db.execute(
-        select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID)
+        select(UserSetting).where(UserSetting.user_id == current_user_id())
     )
     setting = result.scalar_one_or_none()
 
@@ -796,19 +795,19 @@ async def get_settings(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.put("/settings", response_model=UserSettingsOut)
+@router.put("/settings", response_model=UserSettingsOut, dependencies=[Depends(get_current_user)])
 async def update_settings(
     body: UserSettingsUpdate,
     db: AsyncSession = Depends(get_db),
 ):
     """Save or remove the OpenAI API key."""
     result = await db.execute(
-        select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID)
+        select(UserSetting).where(UserSetting.user_id == current_user_id())
     )
     setting = result.scalar_one_or_none()
 
     if not setting:
-        setting = UserSetting(user_id=DEFAULT_USER_ID)
+        setting = UserSetting(user_id=current_user_id())
         db.add(setting)
 
     if body.openai_api_key:
@@ -842,11 +841,11 @@ async def update_settings(
     )
 
 
-@router.post("/settings/test-key", response_model=KeyTestResult)
+@router.post("/settings/test-key", response_model=KeyTestResult, dependencies=[Depends(get_current_user)])
 async def test_api_key(db: AsyncSession = Depends(get_db)):
     """Test the saved OpenAI API key by listing models."""
     result = await db.execute(
-        select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID)
+        select(UserSetting).where(UserSetting.user_id == current_user_id())
     )
     setting = result.scalar_one_or_none()
 
@@ -892,13 +891,13 @@ async def test_api_key(db: AsyncSession = Depends(get_db)):
 # ── Saved ──────────────────────────────────────────────
 
 
-@router.get("/saved", response_model=SavedListResponse)
+@router.get("/saved", response_model=SavedListResponse, dependencies=[Depends(get_current_user)])
 async def get_saved(db: AsyncSession = Depends(get_db)):
     """Return articles saved by the user."""
     result = await db.execute(
         select(UserFeedback)
         .where(
-            UserFeedback.user_id == DEFAULT_USER_ID,
+            UserFeedback.user_id == current_user_id(),
             UserFeedback.feedback_type == FeedbackType.save,
         )
         .order_by(UserFeedback.created_at.desc())
@@ -939,7 +938,7 @@ async def get_saved(db: AsyncSession = Depends(get_db)):
     return SavedListResponse(articles=articles, count=len(articles))
 
 
-@router.delete("/saved/{article_id}", status_code=204)
+@router.delete("/saved/{article_id}", status_code=204, dependencies=[Depends(get_current_user)])
 async def unsave_article(
     article_id: int,
     db: AsyncSession = Depends(get_db),
@@ -947,7 +946,7 @@ async def unsave_article(
     """Remove saved article by deleting the save feedback."""
     result = await db.execute(
         select(UserFeedback).where(
-            UserFeedback.user_id == DEFAULT_USER_ID,
+            UserFeedback.user_id == current_user_id(),
             UserFeedback.article_id == article_id,
             UserFeedback.feedback_type == FeedbackType.save,
         )
@@ -962,13 +961,13 @@ async def unsave_article(
 # ── Stats ──────────────────────────────────────────────
 
 
-@router.get("/stats", response_model=StatsResponse)
+@router.get("/stats", response_model=StatsResponse, dependencies=[Depends(get_current_user)])
 async def get_stats(db: AsyncSession = Depends(get_db)):
     """Return reading stats for the user."""
     # Articles read = any feedback given
     read_result = await db.execute(
         select(func.count(func.distinct(UserFeedback.article_id))).where(
-            UserFeedback.user_id == DEFAULT_USER_ID,
+            UserFeedback.user_id == current_user_id(),
         )
     )
     articles_read = read_result.scalar_one() or 0
@@ -976,7 +975,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     # Stories saved
     saved_result = await db.execute(
         select(func.count()).where(
-            UserFeedback.user_id == DEFAULT_USER_ID,
+            UserFeedback.user_id == current_user_id(),
             UserFeedback.feedback_type == FeedbackType.save,
         )
     )
@@ -986,7 +985,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     topics_result = await db.execute(
         select(func.count(func.distinct(ArticleTopic.topic_id)))
         .join(UserFeedback, UserFeedback.article_id == ArticleTopic.article_id)
-        .where(UserFeedback.user_id == DEFAULT_USER_ID)
+        .where(UserFeedback.user_id == current_user_id())
     )
     topics_explored = topics_result.scalar_one() or 0
 
@@ -1003,7 +1002,7 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
 
 async def _user_profession_locale(db: AsyncSession):
     u = (
-        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+        await db.execute(select(User).where(User.id == current_user_id()))
     ).scalar_one_or_none()
     return (u.profession if u else None), (u.locale if u and u.locale else "IN")
 
@@ -1012,7 +1011,7 @@ async def _user_persona(db: AsyncSession) -> dict:
     """Assemble the full impact persona for the default user. Interests come from the
     user_preferences topic rows (not duplicated onto users)."""
     u = (
-        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+        await db.execute(select(User).where(User.id == current_user_id()))
     ).scalar_one_or_none()
     interests = [
         r[0]
@@ -1020,7 +1019,7 @@ async def _user_persona(db: AsyncSession) -> dict:
             await db.execute(
                 select(Topic.name)
                 .join(UserPreference, UserPreference.topic_id == Topic.id)
-                .where(UserPreference.user_id == DEFAULT_USER_ID)
+                .where(UserPreference.user_id == current_user_id())
             )
         ).all()
     ]
@@ -1036,16 +1035,16 @@ async def _user_persona(db: AsyncSession) -> dict:
 
 
 # ── E3: profile (profession + locale + interests) ──
-@router.get("/profile", response_model=ProfileOut)
+@router.get("/profile", response_model=ProfileOut, dependencies=[Depends(get_current_user)])
 async def get_profile(db: AsyncSession = Depends(get_db)):
     u = (
-        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+        await db.execute(select(User).where(User.id == current_user_id()))
     ).scalar_one_or_none()
     prefs = (
         await db.execute(
             select(Topic.name)
             .join(UserPreference, UserPreference.topic_id == Topic.id)
-            .where(UserPreference.user_id == DEFAULT_USER_ID)
+            .where(UserPreference.user_id == current_user_id())
         )
     ).all()
     return ProfileOut(
@@ -1058,13 +1057,13 @@ async def get_profile(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.put("/profile", response_model=ProfileOut)
+@router.put("/profile", response_model=ProfileOut, dependencies=[Depends(get_current_user)])
 async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)):
     u = (
-        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+        await db.execute(select(User).where(User.id == current_user_id()))
     ).scalar_one_or_none()
     if not u:
-        u = User(id=DEFAULT_USER_ID)
+        u = User(id=current_user_id())
         db.add(u)
     if body.profession is not None:
         u.profession = body.profession.strip() or None
@@ -1073,7 +1072,7 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
     if body.interests is not None:
         await db.execute(
             UserPreference.__table__.delete().where(
-                UserPreference.user_id == DEFAULT_USER_ID
+                UserPreference.user_id == current_user_id()
             )
         )
         for raw in body.interests:
@@ -1088,7 +1087,7 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
                 db.add(topic)
                 await db.flush()
             db.add(
-                UserPreference(user_id=DEFAULT_USER_ID, topic_id=topic.id, weight=1.0)
+                UserPreference(user_id=current_user_id(), topic_id=topic.id, weight=1.0)
             )
     if body.watchlist is not None:
         u.watchlist = [w.model_dump() for w in body.watchlist]
@@ -1103,23 +1102,23 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
 
 
 # ── E1: per-user Gemini key ──
-@router.put("/settings/gemini-key")
+@router.put("/settings/gemini-key", dependencies=[Depends(get_current_user)])
 async def set_gemini_key(body: GeminiKeyUpdate, db: AsyncSession = Depends(get_db)):
     from app.services.encryption import encrypt_value
 
     # ensure the (single) user row exists (prod seeds it; tests use create_all only)
     u = (
-        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+        await db.execute(select(User).where(User.id == current_user_id()))
     ).scalar_one_or_none()
     if not u:
-        db.add(User(id=DEFAULT_USER_ID))
+        db.add(User(id=current_user_id()))
         await db.flush()
 
     setting = (
-        await db.execute(select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID))
+        await db.execute(select(UserSetting).where(UserSetting.user_id == current_user_id()))
     ).scalar_one_or_none()
     if not setting:
-        setting = UserSetting(user_id=DEFAULT_USER_ID)
+        setting = UserSetting(user_id=current_user_id())
         db.add(setting)
     if body.gemini_api_key:
         setting.gemini_api_key_encrypted = encrypt_value(body.gemini_api_key.strip())
@@ -1132,12 +1131,12 @@ async def set_gemini_key(body: GeminiKeyUpdate, db: AsyncSession = Depends(get_d
     return {"has_gemini_key": bool(setting.gemini_api_key_encrypted)}
 
 
-@router.post("/settings/test-gemini-key", response_model=KeyTestResult)
+@router.post("/settings/test-gemini-key", response_model=KeyTestResult, dependencies=[Depends(get_current_user)])
 async def test_gemini_key(db: AsyncSession = Depends(get_db)):
     from app.services.encryption import decrypt_value
 
     setting = (
-        await db.execute(select(UserSetting).where(UserSetting.user_id == DEFAULT_USER_ID))
+        await db.execute(select(UserSetting).where(UserSetting.user_id == current_user_id()))
     ).scalar_one_or_none()
     if not setting or not setting.gemini_api_key_encrypted:
         return KeyTestResult(success=False, error="No Gemini key saved")
@@ -1156,7 +1155,7 @@ async def test_gemini_key(db: AsyncSession = Depends(get_db)):
 
 
 # ── E5/E6/E7/E8: cluster lenses ──
-@router.get("/clusters/{cluster_id}/analysis")
+@router.get("/clusters/{cluster_id}/analysis", dependencies=[Depends(get_current_user)])
 async def cluster_analysis(
     cluster_id: int, lens: str = "key_facts", db: AsyncSession = Depends(get_db)
 ):
@@ -1170,7 +1169,7 @@ async def cluster_analysis(
     return await lenses.analysis(db, cluster_id, lens, profession=profession)
 
 
-@router.get("/clusters/{cluster_id}/impact")
+@router.get("/clusters/{cluster_id}/impact", dependencies=[Depends(get_current_user)])
 async def cluster_impact(
     cluster_id: int, refresh: int = 0, db: AsyncSession = Depends(get_db)
 ):
@@ -1180,7 +1179,7 @@ async def cluster_impact(
     return await lenses.impact(db, cluster_id, persona, force=bool(refresh))
 
 
-@router.post("/clusters/{cluster_id}/ask")
+@router.post("/clusters/{cluster_id}/ask", dependencies=[Depends(get_current_user)])
 async def cluster_ask(
     cluster_id: int, body: AskRequest, db: AsyncSession = Depends(get_db)
 ):
@@ -1208,21 +1207,35 @@ async def cluster_consensus(cluster_id: int, db: AsyncSession = Depends(get_db))
     return await lenses.consensus(db, cluster_id)
 
 
+@router.get("/clusters/{cluster_id}/timeline")
+async def cluster_timeline(cluster_id: int, db: AsyncSession = Depends(get_db)):
+    from app.services import lenses
+
+    return await lenses.timeline(db, cluster_id)
+
+
+@router.get("/auth/me")
+async def auth_me(user: User = Depends(get_current_user)):
+    """Resolve the caller from the Firebase ID token (or the default user when unauthenticated).
+    The first auth-gated endpoint — makes the seam reachable and lets the frontend confirm sign-in."""
+    return {"id": user.id, "firebase_uid": user.firebase_uid, "profession": user.profession}
+
+
 # ── Wave C: standing follows + "while you were away" digest ──
 _FOLLOW_KINDS = {"topic", "entity", "saved_search"}
 
 
-@router.get("/follows", response_model=list[FollowOut])
+@router.get("/follows", response_model=list[FollowOut], dependencies=[Depends(get_current_user)])
 async def list_follows(db: AsyncSession = Depends(get_db)):
     rows = (
         await db.execute(
-            select(Follow).where(Follow.user_id == DEFAULT_USER_ID).order_by(Follow.id)
+            select(Follow).where(Follow.user_id == current_user_id()).order_by(Follow.id)
         )
     ).scalars().all()
     return [FollowOut.model_validate(f) for f in rows]
 
 
-@router.post("/follows", response_model=FollowOut, status_code=201)
+@router.post("/follows", response_model=FollowOut, status_code=201, dependencies=[Depends(get_current_user)])
 async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     from fastapi import HTTPException
 
@@ -1234,7 +1247,7 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     existing = (
         await db.execute(
             select(Follow).where(
-                Follow.user_id == DEFAULT_USER_ID,
+                Follow.user_id == current_user_id(),
                 Follow.kind == kind,
                 Follow.value == value,
             )
@@ -1242,19 +1255,19 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     ).scalar_one_or_none()
     if existing is not None:
         return FollowOut.model_validate(existing)
-    f = Follow(user_id=DEFAULT_USER_ID, kind=kind, value=value)
+    f = Follow(user_id=current_user_id(), kind=kind, value=value)
     db.add(f)
     await db.commit()
     await db.refresh(f)
     return FollowOut.model_validate(f)
 
 
-@router.delete("/follows/{follow_id}", status_code=204)
+@router.delete("/follows/{follow_id}", status_code=204, dependencies=[Depends(get_current_user)])
 async def delete_follow(follow_id: int, db: AsyncSession = Depends(get_db)):
     f = (
         await db.execute(
             select(Follow).where(
-                Follow.id == follow_id, Follow.user_id == DEFAULT_USER_ID
+                Follow.id == follow_id, Follow.user_id == current_user_id()
             )
         )
     ).scalar_one_or_none()
@@ -1263,14 +1276,14 @@ async def delete_follow(follow_id: int, db: AsyncSession = Depends(get_db)):
         await db.commit()
 
 
-@router.get("/digest", response_model=DigestResponse)
+@router.get("/digest", response_model=DigestResponse, dependencies=[Depends(get_current_user)])
 async def get_digest(db: AsyncSession = Depends(get_db)):
     """In-app 'while you were away' — clusters formed since the last visit, with their cached
     WIIFM headline (no new LLM calls). Marks the visit as seen."""
     from datetime import timedelta
 
     u = (
-        await db.execute(select(User).where(User.id == DEFAULT_USER_ID))
+        await db.execute(select(User).where(User.id == current_user_id()))
     ).scalar_one_or_none()
     now = datetime.now(timezone.utc)
     since = u.last_seen_at if (u and u.last_seen_at) else (now - timedelta(hours=24))
