@@ -216,6 +216,12 @@ export interface UserSettings {
   gemini_key_verified: boolean;
   gemini_key_last4: string | null;
   gemini_key_verified_at: string | null;
+  has_anthropic_key: boolean;
+  anthropic_key_verified: boolean;
+  anthropic_key_last4: string | null;
+  anthropic_key_verified_at: string | null;
+  active_provider: string | null;
+  model_prefs: Record<string, string>;
 }
 
 export interface KeyTestResult {
@@ -229,7 +235,9 @@ export async function getSettings(): Promise<UserSettings> {
 }
 
 export async function updateSettings(data: {
-  openai_api_key: string | null;
+  openai_api_key?: string | null;
+  active_provider?: string;
+  model_prefs?: Record<string, string>;
 }): Promise<UserSettings> {
   return fetchJSON("/settings", {
     method: "PUT",
@@ -317,6 +325,19 @@ export async function setGeminiKey(
 
 export async function testGeminiKey(): Promise<KeyTestResult> {
   return fetchJSON("/settings/test-gemini-key", { method: "POST" });
+}
+
+export async function setAnthropicKey(
+  anthropic_api_key: string | null
+): Promise<{ has_anthropic_key: boolean }> {
+  return fetchJSON("/settings/anthropic-key", {
+    method: "PUT",
+    body: JSON.stringify({ anthropic_api_key }),
+  });
+}
+
+export async function testAnthropicKey(): Promise<KeyTestResult> {
+  return fetchJSON("/settings/test-anthropic-key", { method: "POST" });
 }
 
 /* ── Cluster lenses (E5/E6/E7/E8) ── */
