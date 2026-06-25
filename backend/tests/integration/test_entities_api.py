@@ -4,8 +4,10 @@ from datetime import datetime, timezone
 import pytest
 
 from app.models import (
-    Article, ArticleEntity, ClusterArticle, EmbeddingStatus, Entity, Source, SourceType, StoryCluster,
+    Article, ArticleEntity, ClusterArticle, EmbeddingStatus, Entity, EntityAlias, Source,
+    SourceType, StoryCluster,
 )
+from app.services import entities as E
 
 _n = 0
 
@@ -94,3 +96,20 @@ async def test_entity_clusters_recency_and_absence(aclient, db_session):
     body = (await aclient.get(f"/entities/{e.id}/clusters")).json()
     titles = [c["title"] for c in body]
     assert titles == ["Newer", "Older"]   # newest-first, and "Other" (E not mentioned) absent
+
+
+@pytest.mark.asyncio
+async def test_resolve_existing_by_name_and_alias(db_session):
+    e = await _entity(db_session, "Reserve Bank")
+    db_session.add(EntityAlias(entity_id=e.id, alias="RBI", alias_norm="rbi"))
+    await db_session.flush()
+    assert await E.resolve_existing(db_session, "Reserve Bank") == e.id  # exact name
+    assert await E.resolve_existing(db_session, "rbi") == e.id            # alias, case-insensitive
+    assert await E.resolve_existing(db_session, "Nope") is None
+
+
+@pytest.mark.asyncio
+async def test_entity_follow_creation_succeeds(aclient, db_session):
+    await _entity(db_session, "Acme")
+    r = await aclient.post("/follows", json={"kind": "entity", "value": "Acme"})
+    assert r.status_code == 201  # the S7 resolution hook runs without breaking follow creation

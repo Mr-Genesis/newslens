@@ -55,6 +55,19 @@ async def entity_clusters(db: AsyncSession, entity_id: int, limit: int = 10) -> 
     return [{"cluster_id": r.id, "title": r.title, "created_at": r.created_at} for r in rows]
 
 
+async def resolve_existing(db: AsyncSession, value: str) -> int | None:
+    """G1 S7: exact-or-alias lookup for an entity by surface form → entity id, or None. A cheap
+    forward-compat hook for entity follows (resolution only — no follows schema change, no merge)."""
+    q = (value or "").strip().lower()
+    if not q:
+        return None
+    ent = (await db.execute(select(Entity).where(Entity.name_norm == q))).scalars().first()
+    if ent is not None:
+        return ent.id
+    ea = (await db.execute(select(EntityAlias).where(EntityAlias.alias_norm == q))).scalars().first()
+    return ea.entity_id if ea is not None else None
+
+
 # ── Extraction + resolution (G1 S3-S4) ──────────────────────────────────────────────
 
 def build_extraction_prompt(cluster_text: str) -> str:

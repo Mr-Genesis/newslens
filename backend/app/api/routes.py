@@ -1275,6 +1275,13 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     db.add(f)
     await db.commit()
     await db.refresh(f)
+    if kind == "entity":
+        # G1 S7: opportunistically resolve the followed entity to a graph node (resolution only —
+        # no follows.entity_id column, no merge re-point; both are deferred to G2).
+        from app.services import entities
+
+        eid = await entities.resolve_existing(db, value)
+        logger.info("entity_follow_resolved", value=value, entity_id=eid)
     return FollowOut.model_validate(f)
 
 
