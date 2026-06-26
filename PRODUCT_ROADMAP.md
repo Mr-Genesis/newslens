@@ -2,6 +2,14 @@
 
 > Generated using PM Skills: `roadmap-planning` + `prioritization-advisor` (RICE framework)
 
+> **⚠️ Historical record.** This RICE-scored plan captures the original MVP→v2 sprint. Much of it has
+> since shipped — the scores/sequencing below are not current. **Shipped since:** E1 Real AI Summaries,
+> E2 Embedding Topics, E3 Read State, E4 Explore/Exploit, E5 Backend Deploy, **E6 User Auth (Firebase,
+> Google + Email/Password + RLS)**, **E7 Search** (hybrid keyword+semantic). **Beyond this roadmap:**
+> per-persona Impact engine + story lenses (Wave A/B), follows + digest (Wave C), the cluster timeline
+> (Wave D2), the G1/G2 knowledge graph + on-by-default personalization across feed/briefing/search, and
+> multi-provider BYOM (OpenAI/Anthropic/Gemini). See [ROADMAP.md](ROADMAP.md) and `docs/moat/` for current state.
+
 ## Strategy Context
 
 **Business Goal:** Transform NewsLens from an RSS-reader demo into a real AI-powered news intelligence product that delivers its core promise — multi-source story clustering with AI summaries.
@@ -15,8 +23,8 @@
 
 **Constraints:**
 - Solo developer on Windows ARM (Turbopack broken, backend in Docker)
-- Single-user MVP (no auth yet)
-- OpenAI API cost sensitivity (per-user keys, batched calls)
+- ~~Single-user MVP (no auth yet)~~ → **multi-user via Firebase auth + Postgres RLS shipped** (E6); `AUTH_REQUIRED=false` keeps single-user dev
+- LLM API cost sensitivity (per-user keys, batched calls) — now multi-provider (OpenAI/Anthropic/Gemini)
 
 ---
 

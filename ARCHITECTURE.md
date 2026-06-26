@@ -4,6 +4,8 @@
 
 NewsLens is a two-language AI news intelligence platform: Python backend (data pipeline + ML) and TypeScript frontend (UI), communicating via REST JSON. Mobile builds use Capacitor to wrap the frontend into a native Android WebView.
 
+Beyond the ingest→cluster→summarize core, the platform now layers on: **multi-provider LLM generation** (BYOM — OpenAI/Anthropic/Gemini, per-user key + model; embeddings stay OpenAI), **Firebase auth + Postgres RLS** for multi-user identity (single-user dev fallback), a **knowledge graph** (G1 global entity backbone + G2 per-user entity-relevance overlay), and **on-by-default personalization** that re-ranks the cast strip, feed, briefing, and search from one shared relevance scorer (a zero-signal user is a no-op). See the Decision Log for the rationale behind each.
+
 ## System Diagram
 
 ```mermaid
@@ -19,6 +21,7 @@ graph TB
             GF[GDELT Fetcher<br/>every 15min]
             EB[Embedding Backfill<br/>every 5min]
             CL[Clustering<br/>every 10min]
+            EE[Entity Extraction<br/>every 15min · gated]
         end
 
         subgraph "Services"
@@ -26,10 +29,13 @@ graph TB
             EMB[Embedding Service<br/>OpenAI text-embedding-3-small]
             CLUST[Clustering Service<br/>pgvector cosine distance]
             ENC[Encryption Service<br/>Fernet]
+            LLM[LLM Generation<br/>OpenAI/Anthropic/Gemini]
+            AUTH[Auth + RLS<br/>Firebase / app.user_id]
+            REL[Relevance Scorer<br/>G2 personalization]
         end
 
         subgraph "API Layer"
-            ROUTES[FastAPI Routes<br/>12 endpoints]
+            ROUTES[FastAPI Routes<br/>~40 endpoints]
         end
     end
 
@@ -66,6 +72,9 @@ graph TB
     GF --> DEDUP
     EB --> EMB --> PG
     CL --> CLUST --> PG
+    EE --> LLM --> PG
+    AUTH --> ROUTES
+    REL --> ROUTES
     PG --> ROUTES
     ROUTES --> API_CLIENT
     API_CLIENT --> BRIEF & DISC & DEEP & SETT
@@ -119,6 +128,8 @@ sequenceDiagram
     DB->>API: Results
     API->>UI: JSON response
 ```
+
+> **Not shown:** a 5th, gated job (`GRAPH_EXTRACTION_ENABLED`) extracts entities from settled clusters via the provider-aware LLM into `entities` / `article_entities`. On reads, `get_current_user` sets the RLS GUC `app.user_id`, and the personalized surfaces (cast strip, feed, briefing, search) call the shared relevance scorer (`entities.score_clusters_relevance`) before responding.
 
 ## Database Schema
 
@@ -201,7 +212,59 @@ erDiagram
         text openai_api_key_encrypted
         bool openai_key_verified
         timestamp openai_key_verified_at
+        text gemini_api_key_encrypted
+        text anthropic_api_key_encrypted
+        string active_provider "openai|anthropic|gemini"
+        json model_prefs "per-provider model overrides"
         timestamp updated_at
+    }
+
+    follows {
+        int id PK
+        int user_id FK
+        string kind "topic|entity|saved_search"
+        string value
+        int entity_id FK "G2: resolved entity (nullable)"
+        timestamp created_at
+    }
+
+    cluster_edges {
+        int id PK
+        int src_cluster_id FK
+        int dst_cluster_id FK
+        string kind "successor|background|duplicate"
+        float score
+    }
+
+    entities {
+        int id PK
+        string canonical_name
+        string name_norm
+        string kind "person|org|place|other"
+    }
+
+    entity_aliases {
+        int id PK
+        int entity_id FK
+        string alias_norm
+        string source
+    }
+
+    article_entities {
+        int id PK
+        int article_id FK
+        int entity_id FK
+        float salience
+        float confidence
+    }
+
+    user_entity_relevance {
+        int user_id PK
+        int entity_id PK
+        string source "follow|feedback"
+        float engagement_raw
+        timestamp last_event_at
+        float score
     }
 
     users ||--o{ user_feedback : has
@@ -215,9 +278,23 @@ erDiagram
     story_clusters ||--o{ cluster_articles : contains
     articles ||--o{ user_feedback : receives
     topics ||--o{ user_preferences : weighted
+    users ||--o{ follows : has
+    users ||--o{ user_entity_relevance : has
+    entities ||--o{ entity_aliases : aliased
+    articles ||--o{ article_entities : mentions
+    entities ||--o{ article_entities : mentioned_in
+    entities ||--o{ user_entity_relevance : scored
+    entities ||--o{ follows : followed
+    story_clusters ||--o{ cluster_edges : links
 ```
 
 **pgvector columns:** `articles.embedding` and `topics.embedding` are `Vector(1536)` for OpenAI text-embedding-3-small. Clustering uses cosine distance with threshold 0.15.
+
+**Knowledge-graph tables (Wave D Phase 3):** `entities` / `entity_aliases` / `article_entities` are the global G1 backbone (populated by the gated extraction job). `user_entity_relevance` (composite PK `user_id,entity_id`) is the G2 per-user overlay that drives personalization; `follows.entity_id` links an entity-follow to its graph node. `cluster_edges` (Wave D2) is the directed temporal "how we got here" graph between clusters.
+
+**Row-level security:** `user_feedback`, `user_preferences`, `user_settings`, `follows`, and `user_entity_relevance` carry RLS policies (enforce-when-set on the GUC `app.user_id`; permissive for background jobs). They enforce only under a non-superuser DB role — the explicit `current_user_id()` query filter is the primary control. See `backend/scripts/create_app_role.sql`.
+
+**BYOM columns:** `user_settings` now stores per-provider encrypted keys (OpenAI/Gemini/Anthropic) plus `active_provider` and a `model_prefs` JSONB of per-provider model overrides.
 
 ## Capacitor Build Pipeline
 
@@ -246,6 +323,12 @@ Web builds use `rewrites()` to proxy `/api/*` to the backend. Capacitor builds u
 | Mobile | Capacitor static export | React Native rewrite | Zero code duplication; wraps existing web app; 4.75 MB APK |
 | API proxy | Next.js rewrites | CORS headers | No CORS configuration needed; single origin in dev |
 | Encryption | Fernet (symmetric) | RSA / AES-GCM | Simple, battle-tested; good for per-user key storage |
+| Auth | Firebase Admin SDK + Postgres RLS | Custom JWT / sessions | Offloads identity (Google + Email/Password); `app.user_id` GUC + RLS gives defense-in-depth; `AUTH_REQUIRED=false` keeps single-user dev |
+| Per-user isolation | Explicit `current_user_id()` filter + RLS | RLS alone | RLS is inert under a superuser role, so the explicit filter is the primary control; RLS (non-superuser role) is defense-in-depth |
+| LLM generation | Multi-provider (OpenAI/Anthropic/Gemini), per-user key + model | OpenAI-only | BYOM avoids lock-in + cost sensitivity; per-user `active_provider` + `model_prefs`; embeddings stay OpenAI for vector consistency |
+| Entity graph | Exact + alias resolution on normalized columns (G1); per-user relevance overlay (G2) | Embedding NN dedup / auto-merge | Precision-biased + cheap at MVP scale; embedding-NN merge deferred until it's justified by data |
+| Personalization | One shared `AVG(decayed)` cluster scorer across all surfaces, on by default | Per-surface bespoke ranking / off by default | DRY + consistent; salience omitted so a zero-signal user is a guaranteed no-op (safe to default on) |
+| Decay | Read-time half-life (`exp(-ln2·age/hl)`, age clamped ≥0) | Cron/materialized scores | No background job; always-fresh; clock-skew-safe |
 | CSS | Tailwind CSS 4 | CSS Modules / styled-components | Utility-first; design token integration; small bundle |
 | Motion | Framer Motion | CSS animations | Complex gesture physics (swipe cards); declarative API |
 | Brand assets | Single source of truth (official NewsLens brand kit) | Ad-hoc per-surface art | One canonical mark/lockup; icons + splash regenerate from it, no drift |
