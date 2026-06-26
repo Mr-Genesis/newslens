@@ -9,18 +9,22 @@ An AI-powered news intelligence platform. NewsLens ingests articles from RSS fee
 - **Daily briefing** — top story clusters with AI-generated summaries, free sources surfaced first.
 - **Discover deck** — swipe through randomized cards; swipes adjust your topic weights.
 - **Deep dive** — every cluster expands to all its source articles with a confidence score (`src:N · coh:0.XX`).
-- **Explore/exploit feed** — 70% your topics, 30% new ones; the ratio adapts to your feedback.
-- **Bring your own key** — per-user OpenAI API key, Fernet-encrypted, with an env-var fallback.
-- **Graceful degradation** — if OpenAI is down, articles still ingest and the UI shows snippets instead of AI summaries.
+- **Story lenses** — Key Facts / 5Ws, a profession-aware "what's in it for me" impact, ask-a-question, analytical frameworks, consensus/divergence, a "how we got here" timeline, and a per-story quiz.
+- **Who's in the story** — a cast strip of the people/orgs/places in each cluster, with an "appears in" rail to other stories about the same entity.
+- **Personalized ranking** — follow entities and read stories, and the entities you care about rise across the cast strip, feed, briefing, and search. On by default; a brand-new account just sees the neutral ranking.
+- **Follows + digest** — follow topics, entities, or saved searches and get a personalized digest.
+- **Bring your own model** — per-user, Fernet-encrypted keys for **OpenAI, Anthropic, or Gemini**, with model selection and an env-var platform fallback. (Embeddings always use OpenAI.)
+- **Accounts** — Firebase auth (Google + Email/Password); single-user dev mode when auth isn't configured.
+- **Graceful degradation** — generation degrades by provider (any one valid key keeps you working); summaries generate on demand if a batch missed them; if embeddings lag, the UI falls back to snippets.
 
 ## Stack
 
 | Layer | Tech |
 |-------|------|
 | Frontend | Next.js 16 (App Router), React 19, Tailwind CSS 4, Framer Motion |
-| Backend | Python, FastAPI, APScheduler |
-| Database | PostgreSQL + pgvector |
-| ML | OpenAI `text-embedding-3-small`, pgvector cosine clustering |
+| Backend | Python, FastAPI, APScheduler, Firebase Admin SDK (auth) |
+| Database | PostgreSQL + pgvector (+ row-level security on per-user tables) |
+| ML | OpenAI `text-embedding-3-small` (embeddings) + multi-provider generation (OpenAI / Anthropic / Gemini); pgvector cosine clustering |
 | Mobile | Capacitor (Android) + `@capacitor/splash-screen` |
 
 ## Quick start
@@ -29,7 +33,10 @@ Requires Docker (recommended for the DB + backend) and Node.js for the frontend.
 
 ```bash
 # 1. Configure environment
-cp .env.example .env        # then fill in DATABASE_URL, OPENAI_API_KEY, ENCRYPTION_KEY
+cp .env.example .env        # fill in OPENAI_API_KEY (+ ENCRYPTION_KEY for production).
+                            # Optional: GEMINI_API_KEY / ANTHROPIC_API_KEY (other providers),
+                            # FIREBASE_CREDENTIALS_JSON + AUTH_REQUIRED (multi-user auth),
+                            # GRAPH_EXTRACTION_ENABLED / UER_ENABLED (entity graph + personalization)
 
 # 2. Start the database + backend
 docker-compose up -d db      # PostgreSQL + pgvector
@@ -47,12 +54,13 @@ Open http://localhost:3000 and the briefing should load. The frontend proxies `/
 
 ## Data pipeline
 
-Four APScheduler jobs run inside the FastAPI process:
+APScheduler jobs run inside the FastAPI process:
 
 1. **RSS fetcher** (every 10 min) → feedparser → dedup → `articles`
 2. **GDELT fetcher** (every 15 min) → trafilatura extraction → dedup → `articles`
 3. **Embedding backfill** (every 5 min) → OpenAI embeddings → pgvector
 4. **Clustering** (every 10 min) → pgvector cosine distance (threshold 0.15) → `story_clusters`
+5. **Entity extraction** (every 15 min, off by default behind `GRAPH_EXTRACTION_ENABLED`) → LLM extraction over settled clusters → `entities` / `article_entities`
 
 ## Mobile (Android)
 

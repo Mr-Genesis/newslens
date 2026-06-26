@@ -103,14 +103,29 @@ fly open /health
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string (auto-converts to asyncpg) |
-| `OPENAI_API_KEY` | No | OpenAI API key (summaries/embeddings degrade gracefully without it) |
+| `OPENAI_API_KEY` | No* | OpenAI key — *required for embeddings/clustering* and the platform generation fallback |
 | `ENCRYPTION_KEY` | Yes | Fernet encryption key for per-user API key storage |
+| `GENERATION_PROVIDER` | No | Default generation provider: `openai` \| `anthropic` \| `gemini` (per-user `active_provider` wins) |
+| `GEMINI_API_KEY` / `GEMINI_MODEL` | No | Google Gemini platform fallback + model |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | No | Anthropic platform fallback + model (default `claude-haiku-4-5`) |
+| `FIREBASE_CREDENTIALS_JSON` *or* `GOOGLE_APPLICATION_CREDENTIALS` | No | Service account to verify Firebase ID tokens. Omit both → auth disabled (default user) |
+| `AUTH_REQUIRED` | No | `true` rejects unauthenticated requests (multi-user prod). Default `false` |
+| `GRAPH_EXTRACTION_ENABLED` | No | Entity-extraction backfill job (G1). Off by default; needs a platform LLM key |
+| `UER_ENABLED` | No | Per-user entity-relevance personalization (G2). **On by default**; `false` disables it |
+| `REQUIRE_ENCRYPTION` | No | `true` refuses to store secrets without `ENCRYPTION_KEY` (recommended in prod) |
 | `RSS_FETCH_INTERVAL_MINUTES` | No | RSS fetch interval (default: 10) |
 | `GDELT_FETCH_INTERVAL_MINUTES` | No | GDELT fetch interval (default: 15) |
 | `EMBEDDING_BACKFILL_INTERVAL_MINUTES` | No | Embedding backfill interval (default: 5) |
+
+> Tuning knobs (`UER_*` blend ratios, `GRAPH_*` extraction params, clustering thresholds) have sensible
+> defaults in `backend/app/config.py` and rarely need overriding — see that file for the full list.
 
 ## Notes
 
 - **Free tier sleep:** Render free tier spins down after 15 min of inactivity. First request takes ~30s to cold-start.
 - **pgvector:** Required for embeddings and clustering. Neon and Supabase both offer free pgvector. Render's built-in Postgres does not.
-- **Graceful degradation:** The app works without OpenAI — summaries fall back to snippets, topic assignment falls back to keyword matching.
+- **Migrations:** `alembic upgrade head` creates all tables (incl. the entity-graph + per-user tables) and installs the RLS policies. Run it once against the deployment DB.
+- **Multi-user auth (optional):** Set `FIREBASE_CREDENTIALS_JSON` (inline service-account JSON works well for hosted secrets) and `AUTH_REQUIRED=true`. Without it, the app runs single-user (every request is the default user).
+- **Row-level security:** RLS on per-user tables only *enforces* under a non-superuser DB role — create one with `backend/scripts/create_app_role.sql` and point `DATABASE_URL` at it for real multi-tenant isolation. A startup check logs a warning if the connection is a superuser. (The explicit per-user query filter is always on regardless.)
+- **Personalization:** Entity-relevance personalization (G2) is on by default and safe — a brand-new account with no signal sees the neutral ranking. Set `UER_ENABLED=false` to turn it off. Populating the entity graph also needs `GRAPH_EXTRACTION_ENABLED=true` + a platform LLM key.
+- **Graceful degradation:** Generation works with any one provider key (OpenAI/Anthropic/Gemini); summaries generate on demand if a batch missed them; without embeddings, discovery falls back to snippets and keyword matching. **Embeddings always require OpenAI.**

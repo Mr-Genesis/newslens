@@ -48,13 +48,25 @@ Copy `.env.example` and fill in:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `POSTGRES_PASSWORD` | Yes | Database password |
-| `OPENAI_API_KEY` | No | Global fallback API key (users can set their own in Settings) |
-| `ENCRYPTION_KEY` | Yes | Fernet key for encrypting per-user API keys |
+| `OPENAI_API_KEY` | No | Platform fallback key — also the only provider used for embeddings (users can set their own in Settings) |
+| `ENCRYPTION_KEY` | Prod | Fernet key for encrypting the per-user API keys stored in `user_settings` |
+| `GENERATION_PROVIDER` | No | Default LLM provider for generation: `openai` \| `anthropic` \| `gemini` (per-user `active_provider` wins) |
+| `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | No | Platform fallback keys for the other providers (background jobs) |
+| `FIREBASE_CREDENTIALS_JSON` *or* `GOOGLE_APPLICATION_CREDENTIALS` | No | Service account to verify Firebase ID tokens. Omit both → auth disabled, requests use the default user (single-user dev) |
+| `AUTH_REQUIRED` | No | `true` rejects unauthenticated requests with 401 (multi-user prod). Default `false` |
+| `GRAPH_EXTRACTION_ENABLED` | No | Turns on the entity-extraction backfill job (G1). Off by default; needs a platform LLM key |
+| `UER_ENABLED` | No | Per-user entity-relevance personalization (G2). **On by default**; `false` disables it everywhere |
 
 Generate an encryption key:
 ```bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
+
+> **Migrations note:** `alembic upgrade head` also creates the entity-graph tables
+> (`entities`, `entity_aliases`, `article_entities`, `user_entity_relevance`, `follows`,
+> `cluster_edges`) and installs the row-level-security policies on the per-user tables. RLS only
+> *enforces* under a non-superuser DB role (`backend/scripts/create_app_role.sql`); the dev/superuser
+> role bypasses it, so the explicit `current_user_id()` filter is the primary isolation control.
 
 ## Running Tests
 

@@ -7,17 +7,19 @@
 ## Current Status
 
 **Working:**
-- Data pipeline: RSS + GDELT fetching, dedup, embedding, clustering (all on APScheduler)
-- API: ~27 endpoints (feed, briefing, discover, cluster lenses, profile, settings, search, admin, stats)
-- Frontend: Briefing, Discover, Deep Dive, Search, Saved, Settings, Onboarding
-- Real LLM features shipped (E1–E8): provider abstraction (OpenAI + Gemini), real AI summaries,
+- Data pipeline: RSS + GDELT fetching, dedup, embedding, clustering, **entity extraction** (G1, gated) — all on APScheduler
+- API: ~40 endpoints (feed, briefing, discover, cluster lenses, **entities + appears-in**, **follows + digest**, ask/frameworks/consensus/timeline, profile, settings, search, admin, stats, auth)
+- Frontend: Briefing, Discover, Deep Dive, Search, Saved, Settings, Onboarding, **entity cast strip**
+- Real LLM features shipped (E1–E8): provider abstraction (**OpenAI + Anthropic + Gemini**, Wave E BYOM), real AI summaries,
   analysis/5Ws/profession lenses, **per-persona Impact engine v2 (structured + guarded, Wave A)**,
   strategic lens, trivia/daily quiz
+- **Knowledge graph (Wave D Phase 3):** G1 global entity backbone (entities/aliases/article links + cast strip) and G2 per-user entity-relevance overlay; **personalized ranking across cast strip + feed + briefing + search, ON by default (`UER_ENABLED`)** — zero-signal users are a no-op
+- **Auth (Wave D Phase A):** Firebase (Google + Email/Password), `get_current_user` + Postgres RLS on per-user tables; `AUTH_REQUIRED=false` keeps single-user dev
 - Feedback-driven explore/exploit (0.3 is now only a cold-start fallback; swipes move weights)
 - Design system: Full spec + CSS token implementation
 - Mobile: Capacitor Android APK builds
 - Brand: authentic NewsLens launcher icon (adaptive) + native splash (mark + Fraunces wordmark on #0C0C0E) + web/PWA favicons, all from the official brand kit; `@capacitor/splash-screen` controlled splash → WebView fade
-- Per-user OpenAI + Gemini API key management with Fernet encryption
+- Per-user **OpenAI + Anthropic + Gemini** API key + model management with Fernet encryption
 
 **Still stubbed / heuristic:**
 - Cluster `coherence` is still a source-count heuristic (0.95/0.85/0.75/0.65), not a learned score —

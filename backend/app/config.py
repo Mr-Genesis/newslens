@@ -78,8 +78,10 @@ class Settings(BaseSettings):
     graph_extract_interval_minutes: int = 15   # backfill cadence
 
     # G2 per-user entity overlay (Wave D Phase 3). Decay/weight constants are HYPOTHESES — no
-    # single-user data can tune them; treat as knobs, not validated values. Ships off by default.
-    uer_enabled: bool = False
+    # single-user data can tune them; treat as knobs, not validated values.
+    # ON by default (cast strip + feed/briefing/search). Safe with no signal: a user with zero
+    # relevance rows is a no-op on every surface. Set UER_ENABLED=false to disable.
+    uer_enabled: bool = True
     uer_half_life_days: float = 21.0
     uer_follow_weight: float = 1.0
     uer_rank_alpha: float = 0.6   # weight on global salience (cast strip only)
