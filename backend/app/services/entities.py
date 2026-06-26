@@ -25,6 +25,21 @@ logger = structlog.get_logger()
 _LN2 = 0.6931471805599453  # ln(2) for the half-life decay
 
 
+def _decayed_relevance_sql():
+    """The shared half-life decay aggregate: coalesce(max(engagement_raw * exp(-ln2*age/half_life)), 0),
+    age clamped >= 0 (clock-skew guard). Used by BOTH cluster_entities (its beta term) and the surface
+    scorer so the two cannot drift. MUST be used inside a query grouped per entity (max over that
+    entity's single UER row)."""
+    age_days = func.greatest(
+        0.0, func.extract("epoch", func.now() - UserEntityRelevance.last_event_at) / 86400.0
+    )
+    return func.coalesce(
+        func.max(UserEntityRelevance.engagement_raw
+                 * func.exp(-_LN2 * age_days / settings.uer_half_life_days)),
+        0.0,
+    )
+
+
 async def cluster_entities(db: AsyncSession, cluster_id: int, user_id: int | None = None) -> list[dict]:
     """Cast strip: salient entities across this cluster's articles, deduped by entity (max salience),
     capped. With uer_enabled + a user_id, the owner's followed/read entities rank up via
@@ -40,16 +55,7 @@ async def cluster_entities(db: AsyncSession, cluster_id: int, user_id: int | Non
     )
     cap = settings.graph_max_entities_per_cluster
     if settings.uer_enabled and user_id is not None:
-        # Clamp age to >= 0: a future last_event_at (clock skew) would otherwise make exp(positive) > 1
-        # and let a followed entity dominate regardless of salience.
-        age_days = func.greatest(
-            0.0, func.extract("epoch", func.now() - UserEntityRelevance.last_event_at) / 86400.0
-        )
-        decayed = func.coalesce(
-            func.max(UserEntityRelevance.engagement_raw
-                     * func.exp(-_LN2 * age_days / settings.uer_half_life_days)),
-            0.0,
-        )
+        decayed = _decayed_relevance_sql()  # shared clock-skew-clamped half-life decay
         rank = settings.uer_rank_alpha * func.max(ArticleEntity.salience) + settings.uer_rank_beta * decayed
         q = (
             # LEFT JOIN is safe from row fan-out: (user_id, entity_id) is the UER primary key.
@@ -131,6 +137,52 @@ async def bump_relevance_for_article(db: AsyncSession, user_id: int, article_id:
     for eid in ent_ids:
         await bump_relevance(db, user_id, eid, source=source, weight=weight)
     return len(ent_ids)
+
+
+# ── Surface personalization (G2 S5): one shared per-cluster relevance score ──────────
+
+
+async def score_clusters_relevance(
+    db: AsyncSession, cluster_ids: list[int], user_id: int | None
+) -> dict[int, float]:
+    """Per-cluster user affinity = AVG over the cluster's entities of the decayed relevance (the SAME
+    decay as the cast strip, via _decayed_relevance_sql). The ONE primitive that feed / briefing /
+    search consume to personalize their ranking. Returns {cluster_id: score}; clusters with entities
+    but no signal score 0.0, clusters with no entities are absent — callers treat absent as 0.0.
+
+    Fast-returns {} when personalization is off, there is no user, or no ids → a disabled flag or a
+    zero-relevance user is a guaranteed no-op on every surface. Deliberately OMITS alpha*salience
+    (unlike cluster_entities): global salience is the baseline each surface already encodes via
+    recency / search rank / topic weight, so re-injecting it here would reorder a no-signal user by
+    popularity and break the no-op invariant. The user_id filter sits on the LEFT JOIN's ON clause
+    (the primary multi-user isolation control; RLS is defense-in-depth). The join cannot fan out:
+    (user_id, entity_id) is the UER primary key."""
+    if not settings.uer_enabled or user_id is None or not cluster_ids:
+        return {}
+    per_entity = (
+        select(
+            ClusterArticle.cluster_id.label("cid"),
+            ArticleEntity.entity_id.label("eid"),
+            _decayed_relevance_sql().label("decayed"),
+        )
+        .join(ArticleEntity, ArticleEntity.article_id == ClusterArticle.article_id)
+        .outerjoin(
+            UserEntityRelevance,
+            and_(UserEntityRelevance.entity_id == ArticleEntity.entity_id,
+                 UserEntityRelevance.user_id == user_id),
+        )
+        .where(ClusterArticle.cluster_id.in_(cluster_ids))
+        .group_by(ClusterArticle.cluster_id, ArticleEntity.entity_id)
+        .subquery()
+    )
+    q = select(per_entity.c.cid, func.avg(per_entity.c.decayed)).group_by(per_entity.c.cid)
+    rows = (await db.execute(q)).all()
+    return {cid: float(score) for cid, score in rows if score is not None}
+
+
+async def score_cluster_relevance(db: AsyncSession, cluster_id: int, user_id: int | None) -> float:
+    """Single-cluster convenience wrapper over score_clusters_relevance (tests / one-off callers)."""
+    return (await score_clusters_relevance(db, [cluster_id], user_id)).get(cluster_id, 0.0)
 
 
 # ── Extraction + resolution (G1 S3-S4) ──────────────────────────────────────────────

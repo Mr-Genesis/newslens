@@ -12,3 +12,15 @@ def test_g2_config_defaults(monkeypatch):
     assert settings.uer_follow_weight == 1.0
     assert settings.uer_rank_alpha == 0.6
     assert settings.uer_rank_beta == 0.4
+
+
+def test_g2_surface_personalization_defaults():
+    """Surface knobs (feed/briefing/search) — conservative, ship dark behind uer_enabled."""
+    assert settings.uer_feed_pool_size == 500
+    assert settings.uer_feed_blend_ratio == 0.3
+    assert settings.uer_briefing_blend_weight == 0.2
+    assert settings.uer_search_rerank_boost == 10.0
+    assert settings.uer_search_relevance_threshold == 0.3
+    # Invariant: the search boost must stay below the keyword/semantic tier gap (100) or keyword
+    # results could be overtaken by boosted semantic ones.
+    assert settings.uer_search_rerank_boost < 100

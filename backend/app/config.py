@@ -82,8 +82,17 @@ class Settings(BaseSettings):
     uer_enabled: bool = False
     uer_half_life_days: float = 21.0
     uer_follow_weight: float = 1.0
-    uer_rank_alpha: float = 0.6   # weight on global salience
+    uer_rank_alpha: float = 0.6   # weight on global salience (cast strip only)
     uer_rank_beta: float = 0.4    # weight on decayed per-user relevance
+    # Surface personalization (feed/briefing/search). Multipliers/offsets on the shared cluster
+    # relevance score — NOT replacements for the core decay knobs above. Hypothesis-grade; ship dark
+    # behind uer_enabled. The cluster score is AVG(decayed relevance) over a cluster's entities, so a
+    # zero-relevance user scores 0 everywhere → every surface collapses to its baseline (no-op).
+    uer_feed_pool_size: int = 500          # recent-article candidate pool when personalizing the feed
+    uer_feed_blend_ratio: float = 0.3      # weight on relevance vs recency in the feed blend [0..1]
+    uer_briefing_blend_weight: float = 0.2  # additive scaler on cluster relevance into story_weights
+    uer_search_rerank_boost: float = 10.0   # max within-tier rank improvement (must stay < the 100 gap)
+    uer_search_relevance_threshold: float = 0.3  # min relevance before any search boost applies
 
     # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
     # chain genuinely can't be verified in your environment.

@@ -94,6 +94,7 @@ async def get_feed(
     db: AsyncSession = Depends(get_db),
 ):
     offset = (page - 1) * per_page
+    from app.config import settings as app_settings
 
     query = (
         select(Article)
@@ -106,13 +107,18 @@ async def get_feed(
             Article.topics.any(topic_id=topic)
         )
 
-    # Get total count
-    count_query = select(func.count()).select_from(query.subquery())
-    total = (await db.execute(count_query)).scalar_one()
-
-    # Get paginated results
-    results = await db.execute(query.offset(offset).limit(per_page))
-    articles = results.scalars().all()
+    # G2: when personalizing, fetch a bounded recent pool and rerank it (recency + entity relevance)
+    # BEFORE paginating, so a high-affinity story can cross page boundaries within the horizon. When
+    # off, take the exact legacy path (count + offset/limit) → byte-identical response.
+    if app_settings.uer_enabled:
+        pool_result = await db.execute(query.limit(app_settings.uer_feed_pool_size))
+        articles = pool_result.scalars().all()
+        total = len(articles)  # personalization horizon = the pool
+    else:
+        count_query = select(func.count()).select_from(query.subquery())
+        total = (await db.execute(count_query)).scalar_one()
+        results = await db.execute(query.offset(offset).limit(per_page))
+        articles = results.scalars().all()
 
     # Resolve cluster membership + per-cluster source count in aggregate (no N+1).
     article_ids = [a.id for a in articles]
@@ -149,8 +155,36 @@ async def get_feed(
             ).all()
             clusters_with_summary = {row[0] for row in sum_rows}
 
+    # G2: rerank the pool by the recency+relevance blend, then slice the requested page. When off,
+    # `articles` is already the legacy page, so page_articles == articles (byte-identical).
+    if app_settings.uer_enabled:
+        from app.services import entities
+
+        rel_cluster_ids = list({cid for cid in art_to_cluster.values()})
+        scores = await entities.score_clusters_relevance(db, rel_cluster_ids, current_user_id())
+        pub_ts = {a.id: (a.published_at.timestamp() if a.published_at else None) for a in articles}
+        present = [t for t in pub_ts.values() if t is not None]
+        lo, hi = (min(present), max(present)) if present else (0.0, 0.0)
+        span = (hi - lo) or 1.0
+        ratio = app_settings.uer_feed_blend_ratio
+
+        def _blend(a: Article) -> float:
+            t = pub_ts[a.id]
+            recency = 0.0 if t is None else (1.0 if hi == lo else (t - lo) / span)
+            rel = min(1.0, scores.get(art_to_cluster.get(a.id), 0.0))
+            return (1 - ratio) * recency + ratio * rel
+
+        blends = {a.id: _blend(a) for a in articles}
+        articles.sort(
+            key=lambda a: (blends[a.id], pub_ts[a.id] if pub_ts[a.id] is not None else float("-inf"), a.id),
+            reverse=True,
+        )
+        page_articles = articles[offset:offset + per_page]
+    else:
+        page_articles = articles
+
     article_outs = []
-    for a in articles:
+    for a in page_articles:
         cl_id = art_to_cluster.get(a.id)
         article_outs.append(
             ArticleOut(
@@ -168,7 +202,6 @@ async def get_feed(
         )
 
     # Compute real explore ratio from recent feedback
-    from app.config import settings as app_settings
     feedback_result = await db.execute(
         select(UserFeedback.feedback_type)
         .where(UserFeedback.user_id == current_user_id())
@@ -439,9 +472,16 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     )
     clusters = result.scalars().all()
 
+    # G2: per-cluster entity relevance for this user (one aggregate; {} when off / zero-signal).
+    from app.services import entities
+
+    cluster_scores = await entities.score_clusters_relevance(
+        db, [c.id for c in clusters], current_user_id()
+    )
+
     # Track stories with their preference weights for explore/exploit sorting
     stories: list[BriefingStory] = []
-    story_weights: dict[int, float] = {}  # cluster_id -> pref_weight
+    story_weights: dict[int, float] = {}  # cluster_id -> blended weight
 
     for cluster in clusters:
         # Count unique sources and gather metadata
@@ -495,9 +535,13 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
         # Check if any article in this cluster has been read
         is_read = any(aid in read_article_ids for aid in cluster_article_ids)
 
-        # Track preference weight for explore/exploit sorting
+        # Track preference weight for explore/exploit sorting. G2: blend entity relevance ADDITIVELY
+        # (orthogonal to the explicit topic preference — a followed-entity story can climb even with
+        # no topic preference; a zero-signal user gets +0, so ordering is identical to today).
         pref_weight = prefs.get(topic_id, 0.0) if topic_id else 0.0
-        story_weights[cluster.id] = pref_weight
+        story_weights[cluster.id] = (
+            pref_weight + app_settings.uer_briefing_blend_weight * cluster_scores.get(cluster.id, 0.0)
+        )
 
         # E6: best-effort WIIFM headline from ALREADY-cached impact_json (no LLM calls).
         impact_headline = _extract_impact_headline(cluster.impact_json)
@@ -1534,7 +1578,7 @@ async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
 
 
 # ── E4: hybrid search (semantic + keyword; keyword ranks above semantic-only) ──
-@router.get("/search")
+@router.get("/search", dependencies=[Depends(get_current_user)])
 async def search(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=50),
@@ -1619,5 +1663,29 @@ async def search(
             "source": SourceOut.model_validate(a.source).model_dump(),
             "cluster_id": cluster_id,
             "matched_on": meta["matched_on"],
+            "_rank": meta["rank"],
         })
+
+    # G2: within-tier relevance boost. Dedup ran on the ORIGINAL rank (so the representative article
+    # per cluster is unchanged); now nudge whole clusters the user has affinity for. The boost is
+    # capped well below the 100-point keyword/semantic tier gap, so a boosted semantic result can
+    # outrank an unboosted semantic one but NEVER crosses a keyword result (rank 0). Off → no reorder.
+    from app.config import settings as app_settings
+
+    if app_settings.uer_enabled:
+        from app.services import entities
+
+        cl_ids = [o["cluster_id"] for o in out if o["cluster_id"] is not None]
+        scores = await entities.score_clusters_relevance(db, cl_ids, current_user_id())
+
+        def _effective_rank(o):
+            rel = min(1.0, scores.get(o["cluster_id"], 0.0))
+            boost = (app_settings.uer_search_rerank_boost * rel
+                     if rel >= app_settings.uer_search_relevance_threshold else 0.0)
+            return o["_rank"] - boost
+
+        out.sort(key=_effective_rank)  # stable: ties keep dedup order
+
+    for o in out:
+        o.pop("_rank", None)
     return {"query": query_str, "results": out}
