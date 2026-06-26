@@ -237,6 +237,38 @@ def init_firebase() -> bool:
         return False
 
 
+async def check_rls_posture(db=None) -> bool:
+    """Log whether the DB connection bypasses Row-Level Security. RLS enforces ONLY under a
+    non-superuser role; the default `newslens` role is a SUPERUSER, so per-user isolation currently
+    relies on the explicit current_user_id() filter (RLS is defense-in-depth, inert under superuser).
+    Returns True when the connection is a superuser (RLS inert). Provision a restricted app role for
+    production — see backend/scripts/create_app_role.sql."""
+    async def _read(s):
+        return (await s.execute(text("SELECT current_setting('is_superuser')"))).scalar()
+
+    try:
+        if db is not None:
+            su = await _read(db)
+        else:
+            async with async_session() as s:
+                su = await _read(s)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("rls_posture_check_failed", error=str(e))
+        return True
+
+    is_super = su == "on"
+    if is_super:
+        detail = (
+            "DB connection is a superuser → per-user RLS is INERT (the explicit current_user_id() "
+            "filter is the only isolation control). Provision a non-superuser app role for "
+            "production — backend/scripts/create_app_role.sql."
+        )
+        (logger.error if settings.auth_required else logger.warning)("rls_posture_warning", detail=detail)
+    else:
+        logger.info("rls_posture_ok")
+    return is_super
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("starting_newslens")
@@ -249,6 +281,11 @@ async def lifespan(app: FastAPI):
         init_firebase()  # one-time Admin SDK init (no-op if no credential configured)
     except Exception as e:
         logger.error("firebase_init_failed", error=str(e))
+
+    try:
+        await check_rls_posture()  # surface whether RLS is actually enforced (non-superuser role)
+    except Exception as e:
+        logger.warning("rls_posture_check_failed", error=str(e))
 
     scheduler = None
     try:

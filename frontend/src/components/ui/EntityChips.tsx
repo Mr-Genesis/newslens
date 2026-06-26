@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
+  addFollow,
   getClusterEntities,
   getEntityClusters,
   type ClusterEntity,
@@ -22,6 +23,16 @@ export function EntityChips({
   const [data, setData] = useState<ClusterEntity[] | "loading">(provided ?? "loading");
   const [openId, setOpenId] = useState<number | null>(null);
   const [appearsIn, setAppearsIn] = useState<EntityCluster[] | "loading">("loading");
+  const [followed, setFollowed] = useState<number[]>([]);
+
+  async function follow(e: ClusterEntity) {
+    try {
+      await addFollow("entity", e.canonical_name, e.id);  // passes entity_id → real graph link + relevance
+      setFollowed((prev) => [...prev, e.id]);
+    } catch {
+      /* non-fatal */
+    }
+  }
 
   useEffect(() => {
     if (provided !== undefined) {
@@ -73,6 +84,17 @@ export function EntityChips({
       </div>
       {openId !== null && (
         <div className="text-small mt-3 pl-3 border-l-2 border-[var(--accent)]">
+          <button
+            type="button"
+            onClick={() => {
+              const e = data.find((x) => x.id === openId);
+              if (e) follow(e);
+            }}
+            disabled={followed.includes(openId)}
+            className="text-mono mb-2 rounded-full border border-[var(--border)] px-3 py-1 text-[var(--text-secondary)] disabled:opacity-50"
+          >
+            {followed.includes(openId) ? "Following" : "Follow"}
+          </button>
           {appearsIn === "loading" ? (
             <span className="text-[var(--text-tertiary)]">Loading…</span>
           ) : appearsIn.length === 0 ? (

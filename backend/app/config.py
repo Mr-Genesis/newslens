@@ -77,6 +77,14 @@ class Settings(BaseSettings):
     graph_use_platform_key: bool = True        # extract on the platform key, never the owner's per-user key
     graph_extract_interval_minutes: int = 15   # backfill cadence
 
+    # G2 per-user entity overlay (Wave D Phase 3). Decay/weight constants are HYPOTHESES — no
+    # single-user data can tune them; treat as knobs, not validated values. Ships off by default.
+    uer_enabled: bool = False
+    uer_half_life_days: float = 21.0
+    uer_follow_weight: float = 1.0
+    uer_rank_alpha: float = 0.6   # weight on global salience
+    uer_rank_beta: float = 0.4    # weight on decayed per-user relevance
+
     # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
     # chain genuinely can't be verified in your environment.
     db_ssl_insecure: bool = False
