@@ -96,7 +96,9 @@ async def test_cluster_entities_personalized_ranks_followed_first(aclient, db_se
 
 
 @pytest.mark.asyncio
-async def test_cluster_entities_identical_when_disabled(db_session):
+async def test_cluster_entities_identical_when_disabled(db_session, monkeypatch):
+    from app.config import settings as s
+    monkeypatch.setattr(s, "uer_enabled", False)  # explicit: the disabled branch, regardless of dev env
     await _ensure_user1(db_session)
     src = await _src(db_session)
     a = await _article(db_session, src)
@@ -153,3 +155,53 @@ async def test_relevance_decay_on_read(db_session, monkeypatch):
     await db_session.flush()
     out = await E.cluster_entities(db_session, cl.id, user_id=1)
     assert out[0]["canonical_name"] == "New"  # fresh engagement decays less → ranks above the stale one
+
+
+@pytest.mark.asyncio
+async def test_future_timestamp_does_not_inflate_rank(db_session, monkeypatch):
+    """Clock skew: a last_event_at in the FUTURE must clamp (age>=0, decay<=1), not explode rank."""
+    from app.config import settings as s
+    monkeypatch.setattr(s, "uer_enabled", True)
+    await _ensure_user1(db_session)
+    src = await _src(db_session)
+    a = await _article(db_session, src)
+    cl = await _cluster(db_session, a)
+    e_future = await _entity(db_session, "Future")  # low salience, but its UER row is future-dated
+    e_now = await _entity(db_session, "Now")        # high salience, fresh
+    db_session.add_all([
+        ArticleEntity(article_id=a.id, entity_id=e_future.id, salience=0.1),
+        ArticleEntity(article_id=a.id, entity_id=e_now.id, salience=0.9),
+    ])
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        UserEntityRelevance(user_id=1, entity_id=e_future.id, source="follow",
+                            engagement_raw=1.0, last_event_at=now + timedelta(days=365)),
+        UserEntityRelevance(user_id=1, entity_id=e_now.id, source="follow",
+                            engagement_raw=1.0, last_event_at=now),
+    ])
+    await db_session.flush()
+    out = await E.cluster_entities(db_session, cl.id, user_id=1)
+    # Without the clamp, exp(+huge) would rocket "Future" to the top despite salience 0.1.
+    assert out[0]["canonical_name"] == "Now"
+
+
+@pytest.mark.asyncio
+async def test_cluster_entities_tiebreak_is_deterministic(db_session, monkeypatch):
+    """Equal-rank entities (common zero-relevance case) must order by a stable key, not heap order."""
+    from app.config import settings as s
+    monkeypatch.setattr(s, "uer_enabled", True)
+    await _ensure_user1(db_session)
+    src = await _src(db_session)
+    a = await _article(db_session, src)
+    cl = await _cluster(db_session, a)
+    e1 = await _entity(db_session, "Tie one")
+    e2 = await _entity(db_session, "Tie two")
+    e3 = await _entity(db_session, "Tie three")
+    db_session.add_all([
+        ArticleEntity(article_id=a.id, entity_id=e1.id, salience=0.5),
+        ArticleEntity(article_id=a.id, entity_id=e2.id, salience=0.5),
+        ArticleEntity(article_id=a.id, entity_id=e3.id, salience=0.5),
+    ])
+    await db_session.flush()
+    ids = [r["id"] for r in await E.cluster_entities(db_session, cl.id, user_id=1)]
+    assert ids == sorted(ids)  # deterministic ascending-id order on equal rank

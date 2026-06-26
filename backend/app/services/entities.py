@@ -40,7 +40,11 @@ async def cluster_entities(db: AsyncSession, cluster_id: int, user_id: int | Non
     )
     cap = settings.graph_max_entities_per_cluster
     if settings.uer_enabled and user_id is not None:
-        age_days = func.extract("epoch", func.now() - UserEntityRelevance.last_event_at) / 86400.0
+        # Clamp age to >= 0: a future last_event_at (clock skew) would otherwise make exp(positive) > 1
+        # and let a followed entity dominate regardless of salience.
+        age_days = func.greatest(
+            0.0, func.extract("epoch", func.now() - UserEntityRelevance.last_event_at) / 86400.0
+        )
         decayed = func.coalesce(
             func.max(UserEntityRelevance.engagement_raw
                      * func.exp(-_LN2 * age_days / settings.uer_half_life_days)),
@@ -48,16 +52,17 @@ async def cluster_entities(db: AsyncSession, cluster_id: int, user_id: int | Non
         )
         rank = settings.uer_rank_alpha * func.max(ArticleEntity.salience) + settings.uer_rank_beta * decayed
         q = (
+            # LEFT JOIN is safe from row fan-out: (user_id, entity_id) is the UER primary key.
             base.outerjoin(
                 UserEntityRelevance,
                 and_(UserEntityRelevance.entity_id == Entity.id,
                      UserEntityRelevance.user_id == user_id),
             )
-            .order_by(rank.desc())
+            .order_by(rank.desc(), Entity.id.asc())  # stable tiebreak → no cast-strip reshuffle
             .limit(cap)
         )
     else:
-        q = base.order_by(func.max(ArticleEntity.salience).desc()).limit(cap)
+        q = base.order_by(func.max(ArticleEntity.salience).desc(), Entity.id.asc()).limit(cap)
     rows = (await db.execute(q)).all()
     return [
         {"id": r.id, "canonical_name": r.canonical_name, "kind": r.kind, "salience": r.salience}
