@@ -94,6 +94,7 @@ async def get_feed(
     db: AsyncSession = Depends(get_db),
 ):
     offset = (page - 1) * per_page
+    from app.config import settings as app_settings
 
     query = (
         select(Article)
@@ -106,13 +107,18 @@ async def get_feed(
             Article.topics.any(topic_id=topic)
         )
 
-    # Get total count
-    count_query = select(func.count()).select_from(query.subquery())
-    total = (await db.execute(count_query)).scalar_one()
-
-    # Get paginated results
-    results = await db.execute(query.offset(offset).limit(per_page))
-    articles = results.scalars().all()
+    # G2: when personalizing, fetch a bounded recent pool and rerank it (recency + entity relevance)
+    # BEFORE paginating, so a high-affinity story can cross page boundaries within the horizon. When
+    # off, take the exact legacy path (count + offset/limit) → byte-identical response.
+    if app_settings.uer_enabled:
+        pool_result = await db.execute(query.limit(app_settings.uer_feed_pool_size))
+        articles = pool_result.scalars().all()
+        total = len(articles)  # personalization horizon = the pool
+    else:
+        count_query = select(func.count()).select_from(query.subquery())
+        total = (await db.execute(count_query)).scalar_one()
+        results = await db.execute(query.offset(offset).limit(per_page))
+        articles = results.scalars().all()
 
     # Resolve cluster membership + per-cluster source count in aggregate (no N+1).
     article_ids = [a.id for a in articles]
@@ -149,8 +155,36 @@ async def get_feed(
             ).all()
             clusters_with_summary = {row[0] for row in sum_rows}
 
+    # G2: rerank the pool by the recency+relevance blend, then slice the requested page. When off,
+    # `articles` is already the legacy page, so page_articles == articles (byte-identical).
+    if app_settings.uer_enabled:
+        from app.services import entities
+
+        rel_cluster_ids = list({cid for cid in art_to_cluster.values()})
+        scores = await entities.score_clusters_relevance(db, rel_cluster_ids, current_user_id())
+        pub_ts = {a.id: (a.published_at.timestamp() if a.published_at else None) for a in articles}
+        present = [t for t in pub_ts.values() if t is not None]
+        lo, hi = (min(present), max(present)) if present else (0.0, 0.0)
+        span = (hi - lo) or 1.0
+        ratio = app_settings.uer_feed_blend_ratio
+
+        def _blend(a: Article) -> float:
+            t = pub_ts[a.id]
+            recency = 0.0 if t is None else (1.0 if hi == lo else (t - lo) / span)
+            rel = min(1.0, scores.get(art_to_cluster.get(a.id), 0.0))
+            return (1 - ratio) * recency + ratio * rel
+
+        blends = {a.id: _blend(a) for a in articles}
+        articles.sort(
+            key=lambda a: (blends[a.id], pub_ts[a.id] if pub_ts[a.id] is not None else float("-inf"), a.id),
+            reverse=True,
+        )
+        page_articles = articles[offset:offset + per_page]
+    else:
+        page_articles = articles
+
     article_outs = []
-    for a in articles:
+    for a in page_articles:
         cl_id = art_to_cluster.get(a.id)
         article_outs.append(
             ArticleOut(
@@ -168,7 +202,6 @@ async def get_feed(
         )
 
     # Compute real explore ratio from recent feedback
-    from app.config import settings as app_settings
     feedback_result = await db.execute(
         select(UserFeedback.feedback_type)
         .where(UserFeedback.user_id == current_user_id())
