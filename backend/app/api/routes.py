@@ -472,9 +472,16 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     )
     clusters = result.scalars().all()
 
+    # G2: per-cluster entity relevance for this user (one aggregate; {} when off / zero-signal).
+    from app.services import entities
+
+    cluster_scores = await entities.score_clusters_relevance(
+        db, [c.id for c in clusters], current_user_id()
+    )
+
     # Track stories with their preference weights for explore/exploit sorting
     stories: list[BriefingStory] = []
-    story_weights: dict[int, float] = {}  # cluster_id -> pref_weight
+    story_weights: dict[int, float] = {}  # cluster_id -> blended weight
 
     for cluster in clusters:
         # Count unique sources and gather metadata
@@ -528,9 +535,13 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
         # Check if any article in this cluster has been read
         is_read = any(aid in read_article_ids for aid in cluster_article_ids)
 
-        # Track preference weight for explore/exploit sorting
+        # Track preference weight for explore/exploit sorting. G2: blend entity relevance ADDITIVELY
+        # (orthogonal to the explicit topic preference — a followed-entity story can climb even with
+        # no topic preference; a zero-signal user gets +0, so ordering is identical to today).
         pref_weight = prefs.get(topic_id, 0.0) if topic_id else 0.0
-        story_weights[cluster.id] = pref_weight
+        story_weights[cluster.id] = (
+            pref_weight + app_settings.uer_briefing_blend_weight * cluster_scores.get(cluster.id, 0.0)
+        )
 
         # E6: best-effort WIIFM headline from ALREADY-cached impact_json (no LLM calls).
         impact_headline = _extract_impact_headline(cluster.impact_json)
