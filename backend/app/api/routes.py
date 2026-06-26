@@ -1578,7 +1578,7 @@ async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
 
 
 # ── E4: hybrid search (semantic + keyword; keyword ranks above semantic-only) ──
-@router.get("/search")
+@router.get("/search", dependencies=[Depends(get_current_user)])
 async def search(
     q: str = Query(..., min_length=1),
     limit: int = Query(20, ge=1, le=50),
@@ -1663,5 +1663,29 @@ async def search(
             "source": SourceOut.model_validate(a.source).model_dump(),
             "cluster_id": cluster_id,
             "matched_on": meta["matched_on"],
+            "_rank": meta["rank"],
         })
+
+    # G2: within-tier relevance boost. Dedup ran on the ORIGINAL rank (so the representative article
+    # per cluster is unchanged); now nudge whole clusters the user has affinity for. The boost is
+    # capped well below the 100-point keyword/semantic tier gap, so a boosted semantic result can
+    # outrank an unboosted semantic one but NEVER crosses a keyword result (rank 0). Off → no reorder.
+    from app.config import settings as app_settings
+
+    if app_settings.uer_enabled:
+        from app.services import entities
+
+        cl_ids = [o["cluster_id"] for o in out if o["cluster_id"] is not None]
+        scores = await entities.score_clusters_relevance(db, cl_ids, current_user_id())
+
+        def _effective_rank(o):
+            rel = min(1.0, scores.get(o["cluster_id"], 0.0))
+            boost = (app_settings.uer_search_rerank_boost * rel
+                     if rel >= app_settings.uer_search_relevance_threshold else 0.0)
+            return o["_rank"] - boost
+
+        out.sort(key=_effective_rank)  # stable: ties keep dedup order
+
+    for o in out:
+        o.pop("_rank", None)
     return {"query": query_str, "results": out}
