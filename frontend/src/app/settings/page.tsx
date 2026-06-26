@@ -10,6 +10,7 @@ import { Chip } from "@/components/ui/Chip";
 import { Badge } from "@/components/ui/Badge";
 import { useTheme } from "@/components/ThemeProvider";
 import { ProfileFields } from "@/components/ProfileFields";
+import { ModelProviderCard } from "@/components/ModelProviderCard";
 import {
   getSettings,
   getStats,
@@ -351,7 +352,12 @@ export default function ProfilePage() {
             </Card>
           </motion.div>
 
-          {/* AI Configuration */}
+          {/* Wave E: provider + model + Anthropic key */}
+          <motion.div variants={fadeUp} className="mb-4">
+            <ModelProviderCard />
+          </motion.div>
+
+          {/* AI Configuration (OpenAI key) */}
           <motion.div variants={fadeUp} className="mb-4">
             <Card variant="raised">
               <div className="p-3.5">

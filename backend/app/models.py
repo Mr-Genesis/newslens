@@ -263,6 +263,14 @@ class UserSetting(Base):
     gemini_key_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    # Wave E (BYOM): per-user Anthropic key (mirrors the trio) + active provider + Anthropic model
+    anthropic_api_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    anthropic_key_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    anthropic_key_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    active_provider: Mapped[str | None] = mapped_column(String(16))  # openai|anthropic|gemini; NULL→env
+    model_prefs: Mapped[dict | None] = mapped_column(JSONB, default=dict)  # {provider: model_id} overrides
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

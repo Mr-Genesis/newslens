@@ -89,12 +89,16 @@ async def extract_entities(cluster: StoryCluster, articles: list) -> EntityExtra
     """One JSON-mode LLM pass over the cluster's full bodies (D1 seam). Returns the validated
     extraction, or None when the model returns valid JSON of the wrong shape (logged + skipped)."""
     text_ = retrieval.cluster_text(cluster, articles, depth_pref="standard")
-    raw = await llm.generate(
-        build_extraction_prompt(text_),
-        schema={"entities": []},  # truthy → JSON mode; contents ignored by llm.generate
-        model=settings.graph_extraction_model,
-        force_platform_key=settings.graph_use_platform_key,  # bill the platform, not the owner's key
-    )
+    try:
+        # No model= → generate() resolves the OWNER's active provider + that provider's model
+        # (never a hardcoded gpt-* id sent to Claude). force_platform_key bills the platform key.
+        raw = await llm.generate(
+            build_extraction_prompt(text_),
+            schema={"entities": []},  # truthy → JSON mode; contents ignored by llm.generate
+            force_platform_key=settings.graph_use_platform_key,
+        )
+    except llm.LLMUnavailable:
+        return None  # no platform key for the active provider → skip; never crash the backfill loop
     try:
         return EntityExtraction.model_validate(raw)
     except Exception as e:  # noqa: BLE001 — wrong-shape JSON is skipped, never fatal

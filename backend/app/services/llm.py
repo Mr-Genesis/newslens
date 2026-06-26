@@ -95,6 +95,84 @@ async def _resolve_gemini_key() -> str | None:
     return key
 
 
+# ── Per-user Anthropic key resolver (own cache slot, mirrors gemini) ──
+_anth_key_cache: str | None = None
+_anth_key_ts: float = 0.0
+
+
+async def _resolve_anthropic_key() -> str | None:
+    global _anth_key_cache, _anth_key_ts
+    now = time.time()
+    if _anth_key_cache is not None and (now - _anth_key_ts) < _GEM_TTL:
+        return _anth_key_cache
+    key = None
+    try:
+        from sqlalchemy import select
+        from app.database import async_session
+        from app.models import UserSetting
+        from app.services.encryption import decrypt_value
+
+        async with async_session() as s:
+            row = (
+                await s.execute(
+                    select(UserSetting).where(
+                        UserSetting.user_id == 1,
+                        UserSetting.anthropic_api_key_encrypted.isnot(None),
+                        UserSetting.anthropic_key_verified.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+            if row and row.anthropic_api_key_encrypted:
+                key = decrypt_value(row.anthropic_api_key_encrypted)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("anthropic_key_lookup_failed", error=str(e))
+    if not key:
+        key = settings.anthropic_api_key or None
+    _anth_key_cache, _anth_key_ts = key, now
+    return key
+
+
+# ── Active provider + per-provider model overrides (own cache slot) ──
+_active_cache: tuple[str, dict] | None = None
+_active_ts: float = 0.0
+
+
+async def _active_settings() -> tuple[str, dict]:
+    """(active_provider, model_prefs) for the owner (user 1), cached 300s. Falls back to the env
+    generation_provider when no per-user choice is stored. Independent of the key caches."""
+    global _active_cache, _active_ts
+    now = time.time()
+    if _active_cache is not None and (now - _active_ts) < _GEM_TTL:
+        return _active_cache
+    provider = (settings.generation_provider or "openai").lower()
+    prefs: dict = {}
+    try:
+        from sqlalchemy import select
+        from app.database import async_session
+        from app.models import UserSetting
+
+        async with async_session() as s:
+            row = (
+                await s.execute(select(UserSetting).where(UserSetting.user_id == 1))
+            ).scalar_one_or_none()
+            if row:
+                if row.active_provider:
+                    provider = row.active_provider.lower()
+                prefs = row.model_prefs or {}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("active_provider_lookup_failed", error=str(e))
+    _active_cache, _active_ts = (provider, prefs), now
+    return _active_cache
+
+
+def _model_default(provider: str) -> str:
+    return {
+        "openai": settings.summary_model,
+        "gemini": settings.gemini_model,
+        "anthropic": settings.anthropic_model,
+    }.get(provider, settings.summary_model)
+
+
 async def _generate_openai(prompt: str, *, system: str | None = None,
                            schema=None, model: str | None = None,
                            max_tokens: int | None = None,
@@ -150,22 +228,60 @@ async def _generate_gemini(prompt: str, *, system: str | None = None,
     return extract_json(resp.text) if schema is not None else resp.text.strip()
 
 
+async def _generate_anthropic(prompt: str, *, system: str | None = None,
+                              schema=None, model: str | None = None,
+                              max_tokens: int | None = None,
+                              force_platform_key: bool = False):
+    key = settings.anthropic_api_key if force_platform_key else await _resolve_anthropic_key()
+    if not key:
+        raise LLMUnavailable("no Anthropic key configured")
+    import anthropic  # lazy — only on the real anthropic path
+
+    client = anthropic.AsyncAnthropic(api_key=key)
+    messages = [{"role": "user", "content": prompt}]
+    if schema is not None:
+        # Prefill the assistant turn with "{" → forces pure-JSON output (Anthropic has no
+        # response_format); we parse "{" + the returned text. Deterministic, no prose sandwich.
+        messages.append({"role": "assistant", "content": "{"})
+    kwargs = {
+        "model": model or settings.anthropic_model,
+        "max_tokens": max_tokens or 800,
+        "messages": messages,
+    }
+    if system:
+        kwargs["system"] = system  # top-level, not a message role
+    resp = await client.messages.create(**kwargs)
+    text = "".join(
+        getattr(b, "text", "") for b in resp.content if getattr(b, "type", None) == "text"
+    )
+    if schema is not None:
+        return extract_json("{" + text)
+    return text.strip()
+
+
 async def generate(prompt: str, *, system: str | None = None,
                    schema=None, model: str | None = None,
                    max_tokens: int | None = None,
                    force_platform_key: bool = False):
-    """Generate text (or parsed JSON when ``schema`` is given) via the configured provider.
+    """Generate text (or parsed JSON when ``schema`` is given) via the owner's chosen provider+model.
 
-    ``force_platform_key`` routes to the platform/env key (background jobs), never a per-user key.
-    Raises ``LLMUnavailable`` when no key is configured.
+    Provider = per-user active_provider (else env generation_provider). Model = explicit arg →
+    per-user model_prefs[provider] → provider config default. ``force_platform_key`` routes to the
+    platform/env key (background jobs), never a per-user key. Raises ``LLMUnavailable`` when no key.
     """
-    provider = (settings.generation_provider or "openai").lower()
+    provider, prefs = await _active_settings()
+    resolved_model = model or prefs.get(provider) or _model_default(provider)
     if provider == "gemini":
         return await _generate_gemini(
-            prompt, system=system, schema=schema, model=model, max_tokens=max_tokens,
+            prompt, system=system, schema=schema, model=resolved_model, max_tokens=max_tokens,
+            force_platform_key=force_platform_key,
+        )
+    if provider == "anthropic":
+        return await _generate_anthropic(
+            prompt, system=system, schema=schema, model=resolved_model, max_tokens=max_tokens,
             force_platform_key=force_platform_key,
         )
     return await _generate_openai(
-        prompt, system=system, schema=schema, model=model, max_tokens=max_tokens,
+        prompt, system=system, schema=schema, model=resolved_model, max_tokens=max_tokens,
         force_platform_key=force_platform_key,
     )

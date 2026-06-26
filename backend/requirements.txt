@@ -19,6 +19,7 @@ httpx==0.28.1
 # AI/ML
 openai==1.59.5
 google-generativeai==0.8.3
+anthropic>=0.40
 
 # Scheduling
 apscheduler==3.10.4
@@ -38,4 +39,3 @@ structlog==24.4.0
 # Testing
 pytest==8.3.4
 pytest-asyncio==0.25.0
-httpx==0.28.1

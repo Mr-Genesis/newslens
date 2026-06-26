@@ -36,6 +36,7 @@ from app.schemas import (
     FeedbackCreate,
     FeedbackOut,
     FeedResponse,
+    AnthropicKeyUpdate,
     GeminiKeyUpdate,
     HealthResponse,
     KeyTestResult,
@@ -760,39 +761,43 @@ async def get_topic_cards(
 # ── Settings ─────────────────────────────────────────────
 
 
-@router.get("/settings", response_model=UserSettingsOut, dependencies=[Depends(get_current_user)])
-async def get_settings(db: AsyncSession = Depends(get_db)):
-    """Return current user settings (API key masked)."""
-    result = await db.execute(
-        select(UserSetting).where(UserSetting.user_id == current_user_id())
-    )
-    setting = result.scalar_one_or_none()
-
-    if not setting:
-        return UserSettingsOut(has_openai_key=False, has_gemini_key=False)
-
+def _settings_out(setting) -> UserSettingsOut:
+    """Mask every saved key (last-4 only) + surface provider/model prefs. NEVER returns a raw key."""
+    if setting is None:
+        return UserSettingsOut(has_openai_key=False)
     from app.services.encryption import decrypt_value
 
-    openai_last4 = None
-    if setting.openai_api_key_encrypted:
-        raw_openai = decrypt_value(setting.openai_api_key_encrypted)
-        openai_last4 = raw_openai[-4:] if len(raw_openai) >= 4 else "****"
-
-    gemini_last4 = None
-    if setting.gemini_api_key_encrypted:
-        raw_gemini = decrypt_value(setting.gemini_api_key_encrypted)
-        gemini_last4 = raw_gemini[-4:] if len(raw_gemini) >= 4 else "****"
+    def _last4(enc):
+        if not enc:
+            return None
+        raw = decrypt_value(enc)
+        return raw[-4:] if len(raw) >= 4 else "****"
 
     return UserSettingsOut(
         has_openai_key=bool(setting.openai_api_key_encrypted),
-        openai_key_verified=setting.openai_key_verified,
-        openai_key_last4=openai_last4,
+        openai_key_verified=bool(setting.openai_key_verified),  # bool() — transient ORM objs default unset→None
+        openai_key_last4=_last4(setting.openai_api_key_encrypted),
         openai_key_verified_at=setting.openai_key_verified_at,
         has_gemini_key=bool(setting.gemini_api_key_encrypted),
-        gemini_key_verified=setting.gemini_key_verified,
-        gemini_key_last4=gemini_last4,
+        gemini_key_verified=bool(setting.gemini_key_verified),
+        gemini_key_last4=_last4(setting.gemini_api_key_encrypted),
         gemini_key_verified_at=setting.gemini_key_verified_at,
+        has_anthropic_key=bool(setting.anthropic_api_key_encrypted),
+        anthropic_key_verified=bool(setting.anthropic_key_verified),
+        anthropic_key_last4=_last4(setting.anthropic_api_key_encrypted),
+        anthropic_key_verified_at=setting.anthropic_key_verified_at,
+        active_provider=setting.active_provider,
+        model_prefs=setting.model_prefs or {},
     )
+
+
+@router.get("/settings", response_model=UserSettingsOut, dependencies=[Depends(get_current_user)])
+async def get_settings(db: AsyncSession = Depends(get_db)):
+    """Return current user settings (keys masked)."""
+    setting = (
+        await db.execute(select(UserSetting).where(UserSetting.user_id == current_user_id()))
+    ).scalar_one_or_none()
+    return _settings_out(setting)
 
 
 @router.put("/settings", response_model=UserSettingsOut, dependencies=[Depends(get_current_user)])
@@ -800,45 +805,38 @@ async def update_settings(
     body: UserSettingsUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """Save or remove the OpenAI API key."""
-    result = await db.execute(
-        select(UserSetting).where(UserSetting.user_id == current_user_id())
-    )
-    setting = result.scalar_one_or_none()
+    """Update settings: OpenAI key (only when present in the request), active provider, and
+    per-provider model overrides. Fields omitted from the request are left untouched (so changing
+    the provider never clobbers the saved key)."""
+    from fastapi import HTTPException
 
+    setting = (
+        await db.execute(select(UserSetting).where(UserSetting.user_id == current_user_id()))
+    ).scalar_one_or_none()
     if not setting:
         setting = UserSetting(user_id=current_user_id())
         db.add(setting)
 
-    if body.openai_api_key:
+    fields = body.model_fields_set
+    if "openai_api_key" in fields:
         from app.services.encryption import encrypt_value
 
-        setting.openai_api_key_encrypted = encrypt_value(body.openai_api_key)
+        setting.openai_api_key_encrypted = encrypt_value(body.openai_api_key.strip()) if body.openai_api_key else None
         setting.openai_key_verified = False
         setting.openai_key_verified_at = None
-        logger.info("settings_api_key_saved")
-    else:
-        setting.openai_api_key_encrypted = None
-        setting.openai_key_verified = False
-        setting.openai_key_verified_at = None
-        logger.info("settings_api_key_removed")
+        logger.info("settings_api_key_saved" if body.openai_api_key else "settings_api_key_removed")
+    if "active_provider" in fields:
+        if body.active_provider not in (None, "openai", "anthropic", "gemini"):
+            raise HTTPException(status_code=400, detail="invalid active_provider")
+        setting.active_provider = body.active_provider
+    if "model_prefs" in fields and body.model_prefs is not None:
+        merged = dict(setting.model_prefs or {})
+        merged.update(body.model_prefs)  # per-provider merge, never a full clobber
+        setting.model_prefs = merged
 
     await db.commit()
     await db.refresh(setting)
-
-    if not setting.openai_api_key_encrypted:
-        return UserSettingsOut(has_openai_key=False)
-
-    from app.services.encryption import decrypt_value
-
-    raw_key = decrypt_value(setting.openai_api_key_encrypted)
-    last4 = raw_key[-4:] if len(raw_key) >= 4 else "****"
-
-    return UserSettingsOut(
-        has_openai_key=True,
-        openai_key_verified=setting.openai_key_verified,
-        openai_key_last4=last4,
-    )
+    return _settings_out(setting)
 
 
 @router.post("/settings/test-key", response_model=KeyTestResult, dependencies=[Depends(get_current_user)])
@@ -1152,6 +1150,69 @@ async def test_gemini_key(db: AsyncSession = Depends(get_db)):
         return KeyTestResult(success=True, models_available=len(models))
     except Exception as e:  # noqa: BLE001
         return KeyTestResult(success=False, error=str(e)[:200])
+
+
+@router.put("/settings/anthropic-key", dependencies=[Depends(get_current_user)])
+async def set_anthropic_key(body: AnthropicKeyUpdate, db: AsyncSession = Depends(get_db)):
+    from app.services.encryption import encrypt_value
+
+    u = (
+        await db.execute(select(User).where(User.id == current_user_id()))
+    ).scalar_one_or_none()
+    if not u:
+        db.add(User(id=current_user_id()))
+        await db.flush()
+    setting = (
+        await db.execute(select(UserSetting).where(UserSetting.user_id == current_user_id()))
+    ).scalar_one_or_none()
+    if not setting:
+        setting = UserSetting(user_id=current_user_id())
+        db.add(setting)
+    if body.anthropic_api_key:
+        setting.anthropic_api_key_encrypted = encrypt_value(body.anthropic_api_key.strip())
+        setting.anthropic_key_verified = False
+        setting.anthropic_key_verified_at = None
+    else:
+        setting.anthropic_api_key_encrypted = None
+        setting.anthropic_key_verified = False
+    await db.commit()
+    return {"has_anthropic_key": bool(setting.anthropic_api_key_encrypted)}
+
+
+@router.post("/settings/test-anthropic-key", response_model=KeyTestResult, dependencies=[Depends(get_current_user)])
+async def test_anthropic_key(db: AsyncSession = Depends(get_db)):
+    from app.config import settings
+    from app.services.encryption import decrypt_value
+
+    setting = (
+        await db.execute(select(UserSetting).where(UserSetting.user_id == current_user_id()))
+    ).scalar_one_or_none()
+    if not setting or not setting.anthropic_api_key_encrypted:
+        return KeyTestResult(success=False, error="No Anthropic key saved")
+    try:
+        key = decrypt_value(setting.anthropic_api_key_encrypted)
+        import anthropic
+
+        client = anthropic.AsyncAnthropic(api_key=key)
+        await client.messages.create(
+            model=settings.anthropic_model, max_tokens=1,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        setting.anthropic_key_verified = True
+        setting.anthropic_key_verified_at = datetime.now(timezone.utc)
+        await db.commit()
+        return KeyTestResult(success=True, models_available=1)
+    except Exception as e:  # noqa: BLE001
+        # REDACT: Anthropic exception text can echo the key / request metadata — never return str(e).
+        msg = "Anthropic key test failed"
+        try:
+            import anthropic as _a
+
+            if isinstance(e, _a.AuthenticationError):
+                msg = "Invalid API key"
+        except Exception:
+            pass
+        return KeyTestResult(success=False, error=msg)
 
 
 # ── E5/E6/E7/E8: cluster lenses ──
