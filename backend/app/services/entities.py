@@ -8,31 +8,56 @@ entity ids + content version + persona/depth (+ user scope at G2), or it will se
 answers. The G1 endpoints are uncached pure-SQL reads, so the trap does not bite yet.
 """
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session
-from app.models import ArticleEntity, ClusterArticle, Entity, EntityAlias, StoryCluster
+from app.models import (
+    ArticleEntity, ClusterArticle, Entity, EntityAlias, StoryCluster, UserEntityRelevance,
+)
 from app.schemas import EntityExtraction
 from app.services import llm, retrieval
 
 logger = structlog.get_logger()
 
 
-async def cluster_entities(db: AsyncSession, cluster_id: int) -> list[dict]:
+_LN2 = 0.6931471805599453  # ln(2) for the half-life decay
+
+
+async def cluster_entities(db: AsyncSession, cluster_id: int, user_id: int | None = None) -> list[dict]:
     """Cast strip: salient entities across this cluster's articles, deduped by entity (max salience),
-    highest-salience first, capped at graph_max_entities_per_cluster."""
+    capped. With uer_enabled + a user_id, the owner's followed/read entities rank up via
+    alpha*salience + beta*decayed_relevance (decay = exp(-ln2 * age_days / half_life), read-time).
+    With uer_enabled off (or no user) the output is byte-identical to G1 (ordered by salience)."""
     sal = func.max(ArticleEntity.salience).label("salience")
-    q = (
+    base = (
         select(Entity.id, Entity.canonical_name, Entity.kind, sal)
         .join(ArticleEntity, ArticleEntity.entity_id == Entity.id)
         .join(ClusterArticle, ClusterArticle.article_id == ArticleEntity.article_id)
         .where(ClusterArticle.cluster_id == cluster_id)
         .group_by(Entity.id, Entity.canonical_name, Entity.kind)
-        .order_by(sal.desc())
-        .limit(settings.graph_max_entities_per_cluster)
     )
+    cap = settings.graph_max_entities_per_cluster
+    if settings.uer_enabled and user_id is not None:
+        age_days = func.extract("epoch", func.now() - UserEntityRelevance.last_event_at) / 86400.0
+        decayed = func.coalesce(
+            func.max(UserEntityRelevance.engagement_raw
+                     * func.exp(-_LN2 * age_days / settings.uer_half_life_days)),
+            0.0,
+        )
+        rank = settings.uer_rank_alpha * func.max(ArticleEntity.salience) + settings.uer_rank_beta * decayed
+        q = (
+            base.outerjoin(
+                UserEntityRelevance,
+                and_(UserEntityRelevance.entity_id == Entity.id,
+                     UserEntityRelevance.user_id == user_id),
+            )
+            .order_by(rank.desc())
+            .limit(cap)
+        )
+    else:
+        q = base.order_by(func.max(ArticleEntity.salience).desc()).limit(cap)
     rows = (await db.execute(q)).all()
     return [
         {"id": r.id, "canonical_name": r.canonical_name, "kind": r.kind, "salience": r.salience}
@@ -66,6 +91,41 @@ async def resolve_existing(db: AsyncSession, value: str) -> int | None:
         return ent.id
     ea = (await db.execute(select(EntityAlias).where(EntityAlias.alias_norm == q))).scalars().first()
     return ea.entity_id if ea is not None else None
+
+
+async def bump_relevance(db: AsyncSession, user_id: int, entity_id: int, *, source: str, weight: float) -> None:
+    """G2: upsert the per-user affinity row for (user, entity) — add `weight`, refresh last_event_at.
+    Called on follow (source='follow') + reading feedback (source='feedback'). Decay is computed at
+    READ time from engagement_raw + last_event_at (no cron), so this only accumulates raw signal."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    row = (
+        await db.execute(
+            select(UserEntityRelevance).where(
+                UserEntityRelevance.user_id == user_id,
+                UserEntityRelevance.entity_id == entity_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        db.add(UserEntityRelevance(user_id=user_id, entity_id=entity_id, source=source,
+                                   engagement_raw=weight, last_event_at=now))
+    else:
+        row.engagement_raw = (row.engagement_raw or 0.0) + weight
+        row.last_event_at = now
+
+
+async def bump_relevance_for_article(db: AsyncSession, user_id: int, article_id: int, *,
+                                     source: str, weight: float) -> int:
+    """G2 S4: bump per-user relevance for every entity mentioned in an article (a feedback signal).
+    Returns the number of entities bumped."""
+    ent_ids = (
+        await db.execute(select(ArticleEntity.entity_id).where(ArticleEntity.article_id == article_id))
+    ).scalars().all()
+    for eid in ent_ids:
+        await bump_relevance(db, user_id, eid, source=source, weight=weight)
+    return len(ent_ids)
 
 
 # ── Extraction + resolution (G1 S3-S4) ──────────────────────────────────────────────

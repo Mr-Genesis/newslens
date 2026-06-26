@@ -361,6 +361,17 @@ async def create_feedback(
         feedback_type=body.feedback_type.value,
     )
 
+    # G2: positive feedback seeds per-user relevance for the article's entities (decay at read time).
+    if body.feedback_type != FeedbackType.less:
+        from app.config import settings
+        from app.services import entities
+
+        n = await entities.bump_relevance_for_article(
+            db, current_user_id(), body.article_id, source="feedback", weight=settings.uer_follow_weight
+        )
+        if n:
+            await db.commit()
+
     return FeedbackOut.model_validate(feedback)
 
 
@@ -1277,10 +1288,11 @@ async def cluster_timeline(cluster_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.get("/clusters/{cluster_id}/entities", dependencies=[Depends(get_current_user)])
 async def cluster_entities_endpoint(cluster_id: int, db: AsyncSession = Depends(get_db)):
-    """G1 cast strip: who/what is in this story (salient entities), highest-salience first."""
+    """G1 cast strip: who/what is in this story (salient entities), highest-salience first.
+    G2: the owner's followed/read entities rank up when uer_enabled."""
     from app.services import entities
 
-    return await entities.cluster_entities(db, cluster_id)
+    return await entities.cluster_entities(db, cluster_id, user_id=current_user_id())
 
 
 @router.get("/entities/{entity_id}/clusters", dependencies=[Depends(get_current_user)])
@@ -1332,17 +1344,27 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     ).scalar_one_or_none()
     if existing is not None:
         return FollowOut.model_validate(existing)
-    f = Follow(user_id=current_user_id(), kind=kind, value=value)
+    f = Follow(
+        user_id=current_user_id(), kind=kind, value=value,
+        entity_id=(body.entity_id if kind == "entity" else None),
+    )
     db.add(f)
     await db.commit()
     await db.refresh(f)
     if kind == "entity":
-        # G1 S7: opportunistically resolve the followed entity to a graph node (resolution only —
-        # no follows.entity_id column, no merge re-point; both are deferred to G2).
+        from app.config import settings
         from app.services import entities
 
-        eid = await entities.resolve_existing(db, value)
-        logger.info("entity_follow_resolved", value=value, entity_id=eid)
+        if f.entity_id is not None:
+            # G2: trustworthy entity id from the tapped chip → persist + seed the relevance overlay.
+            await entities.bump_relevance(
+                db, current_user_id(), f.entity_id, source="follow", weight=settings.uer_follow_weight
+            )
+            await db.commit()
+        else:
+            # String path: resolve_existing is kind-blind, so stays log-only (no UER write).
+            eid = await entities.resolve_existing(db, value)
+            logger.info("entity_follow_resolved", value=value, entity_id=eid)
     return FollowOut.model_validate(f)
 
 

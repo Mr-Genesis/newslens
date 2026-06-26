@@ -506,8 +506,12 @@ export interface FollowItem {
 export async function getFollows(): Promise<FollowItem[]> {
   return fetchJSON("/follows");
 }
-export async function addFollow(kind: string, value: string): Promise<FollowItem> {
-  return fetchJSON("/follows", { method: "POST", body: JSON.stringify({ kind, value }) });
+export async function addFollow(kind: string, value: string, entityId?: number): Promise<FollowItem> {
+  return fetchJSON("/follows", {
+    method: "POST",
+    // G2: pass the tapped chip's entity_id so the follow links to a real graph node (+ seeds relevance).
+    body: JSON.stringify({ kind, value, ...(entityId != null ? { entity_id: entityId } : {}) }),
+  });
 }
 export async function removeFollow(id: number): Promise<void> {
   await fetchJSON(`/follows/${id}`, { method: "DELETE" });

@@ -287,12 +287,16 @@ class Follow(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)  # topic|entity|saved_search
     value: Mapped[str] = mapped_column(String(255), nullable=False)
+    # G2: the resolved entity behind an entity-follow (from the tapped chip). Nullable keeps uq_follow
+    # live with no orphan window; the string-path follow leaves it NULL.
+    entity_id: Mapped[int | None] = mapped_column(ForeignKey("entities.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     __table_args__ = (
         UniqueConstraint("user_id", "kind", "value", name="uq_follow"),
+        Index("ix_follows_entity", "entity_id"),
     )
 
 

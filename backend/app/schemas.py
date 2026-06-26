@@ -325,6 +325,7 @@ class AskAnswer(BaseModel):
 class FollowCreate(BaseModel):
     kind: str  # topic | entity | saved_search
     value: str
+    entity_id: int | None = None  # G2: the tapped chip's entity id (kind=entity) — trustworthy link
 
 
 class FollowOut(BaseModel):
