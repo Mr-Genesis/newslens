@@ -380,13 +380,34 @@ class ArticleEntity(Base):
     )
 
 
+class UserEntityRelevance(Base):
+    """G2: per-user affinity on a GLOBAL entity. The only new RLS-scoped table — JOIN/filter only,
+    never a graph-per-user. Drives personalized cast-strip ranking. Decay is computed AT READ TIME
+    from engagement_raw + last_event_at, so `score` is an optional write-time cache, not the key."""
+
+    __tablename__ = "user_entity_relevance"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    entity_id: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True
+    )
+    source: Mapped[str] = mapped_column(String(16), nullable=False)  # follow | feedback
+    engagement_raw: Mapped[float] = mapped_column(Float, server_default="0", nullable=False)
+    last_event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    score: Mapped[float | None] = mapped_column(Float)  # optional write-time cache (not the ranking key)
+
+    __table_args__ = (
+        Index("ix_uer_user_score", "user_id", "score"),  # serves the WHERE user_id= filter
+    )
+
+
 # ── Row-Level Security (Wave D Phase A) ──────────────────────────────────────────────
 # Per-user tables are isolated by the `app.user_id` GUC, which get_current_user sets per request
 # (SET LOCAL). "Enforce-when-set": when the GUC is unset — background jobs reading the owner's API
 # key, direct-DB tests — the policy is permissive; when set (every real request) rows are filtered
 # to that user. The explicit current_user_id() filter in queries is the PRIMARY control; RLS is
 # defense-in-depth. Defined here (DDL events) so create_all (tests) matches the production migration.
-_RLS_TABLES = ("user_feedback", "user_preferences", "user_settings", "follows")
+_RLS_TABLES = ("user_feedback", "user_preferences", "user_settings", "follows", "user_entity_relevance")
 
 
 def rls_statements(table: str) -> list[str]:

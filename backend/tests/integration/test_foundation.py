@@ -34,6 +34,8 @@ EXPECTED_TABLES = {
     "entities",
     "entity_aliases",
     "article_entities",
+    # G2 per-user overlay
+    "user_entity_relevance",
 }
 
 # backend/ root (contains alembic.ini + migrations/), two levels up from this file.

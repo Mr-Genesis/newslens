@@ -13,22 +13,26 @@ from typing import Sequence, Union
 
 from alembic import op
 
-from app.models import _RLS_TABLES, rls_statements
+from app.models import rls_statements
 
 revision: str = "c9d0e1f2a3b4"
 down_revision: Union[str, None] = "b8c9d0e1f2a3"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+# Pinned to the tables that existed at THIS migration — do NOT import the live models._RLS_TABLES,
+# which later migrations extend (e.g. G2's user_entity_relevance, created in a later revision).
+_TABLES = ("user_feedback", "user_preferences", "user_settings", "follows")
+
 
 def upgrade() -> None:
-    for table in _RLS_TABLES:
+    for table in _TABLES:
         for stmt in rls_statements(table):
             op.execute(stmt)
 
 
 def downgrade() -> None:
-    for table in _RLS_TABLES:
+    for table in _TABLES:
         op.execute(f"DROP POLICY IF EXISTS {table}_user_isolation ON {table}")
         op.execute(f"ALTER TABLE {table} NO FORCE ROW LEVEL SECURITY")
         op.execute(f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY")
