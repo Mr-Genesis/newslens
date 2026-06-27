@@ -22,9 +22,20 @@
 - Per-user **OpenAI + Anthropic + Gemini** API key + model management with Fernet encryption
 
 **Still stubbed / heuristic:**
-- Cluster `coherence` is still a source-count heuristic (0.95/0.85/0.75/0.65), not a learned score —
-  the UI now labels it honestly ("Source overlap"), and a real consensus/divergence metric is Wave B
+- Cluster `coherence` now prefers the **real source-agreement ratio** (agree/total from a cached
+  consensus pass) and only falls back to the source-overlap heuristic (0.95/0.85/0.75/0.65) when no
+  consensus is cached — the UI labels it honestly ("Source overlap")
 - Tension lines on discover cards still fall back to article titles when no AI line exists
+
+**🔜 Deferred / still open (post-G2 hardening — tracked, not blocking):**
+- ⏸️ **§2b — `_source_hash` widening** — deliberately deferred until a lens becomes entity/user-dependent.
+  No lens reads graph/user data yet, so widening now would only add per-user lens-cache cost. Widen the
+  hash to include entity ids + content version + user scope the moment a personalized/graph-reading lens
+  starts caching. Breadcrumb lives in `backend/app/services/entities.py` + `docs/moat/04,07,09`.
+- 🔜 **Still open:** the deferred **G3 graph work** (embedding-NN entity resolution / reversible
+  auto-merge, multi-hop recursive-CTE lenses — correctly gated behind real-user volume + a co-typed-homonym
+  precision fixture, see `docs/moat/09`), the two unbuilt endpoints (**`GET /events`** SSE §1.3,
+  **`GET /admin/breadth`** §2.2), discover **"tension lines"** §3.1, and **native push** (Wave C2 on-device half).
 
 ---
 

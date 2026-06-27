@@ -169,6 +169,9 @@ async def backfill_embeddings():
     """Backfill embeddings for articles with pending/failed status. Called by APScheduler."""
     client = await _get_client_async()
     if not client:
+        # No OpenAI key anywhere → articles ingest but never embed → never cluster → feed/briefing
+        # stay empty while /health is green. Log it so this silent dead-stop is observable in prod.
+        logger.warning("embedding_backfill_skipped_no_openai_key")
         return
 
     async with async_session() as session:

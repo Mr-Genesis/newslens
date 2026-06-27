@@ -32,7 +32,17 @@ def _fix_db_url(url: str, async_driver: bool = True) -> str:
 class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://newslens:newslens_dev@localhost:5432/newslens"
-    database_url_sync: str = "postgresql://newslens:newslens_dev@localhost:5432/newslens"
+    # Empty ⇒ DERIVED from database_url (→ psycopg2) in model_post_init. Critical: prod sets only
+    # DATABASE_URL, so a non-empty default here would win the `or` below and silently point the sync
+    # path (Alembic migrations) at localhost. Set DATABASE_URL_SYNC explicitly only to override.
+    database_url_sync: str = ""
+
+    # Schema authority. Local dev / tests bootstrap the schema with Base.metadata.create_all
+    # (init_db). PROD is migration-only: the Docker start command runs `alembic upgrade head`, and
+    # create_all is DANGEROUS there because it CREATEs missing tables but can never ALTER an existing
+    # table to add a new column — which is exactly how the prod schema silently drifted. Set
+    # INIT_DB_CREATE_ALL=false in any environment whose schema is owned by Alembic.
+    init_db_create_all: bool = True
 
     def model_post_init(self, __context):
         # Auto-fix database URLs from cloud providers
