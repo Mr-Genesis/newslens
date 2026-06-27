@@ -340,12 +340,15 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
     # Free first, then paywalled
     source_cards.sort(key=lambda x: (not x.is_free, x.article.title))
 
+    from app.services import lenses
+
     return ClusterDetailOut(
         id=cluster.id,
         title=cluster.title,
         summary=cluster.summary,
         created_at=cluster.created_at,
-        coherence=getattr(cluster, "coherence", None),  # real coherence; None when not yet computed
+        # Real source-agreement ratio when a consensus pass is cached; else stored value / heuristic.
+        coherence=lenses.cluster_coherence(cluster, [ca.article for ca in cluster.articles]),
         sources=source_cards,
     )
 
@@ -473,7 +476,7 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     clusters = result.scalars().all()
 
     # G2: per-cluster entity relevance for this user (one aggregate; {} when off / zero-signal).
-    from app.services import entities
+    from app.services import entities, lenses
 
     cluster_scores = await entities.score_clusters_relevance(
         db, [c.id for c in clusters], current_user_id()
@@ -520,17 +523,9 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
             if len(sentences) > 2:
                 summary = ". ".join(sentences[:2]) + "."
 
-        # Dynamic coherence from source count if not set
-        if coherence is None:
-            sc = len(source_names)
-            if sc >= 5:
-                coherence = 0.95
-            elif sc >= 3:
-                coherence = 0.85
-            elif sc >= 2:
-                coherence = 0.75
-            else:
-                coherence = 0.65
+        # Coherence: the real source-agreement ratio when a consensus pass is cached for this cluster,
+        # else the stored value, else the honest source-overlap heuristic (all in cluster_coherence).
+        coherence = lenses.cluster_coherence(cluster, [ca.article for ca in cluster.articles])
 
         # Check if any article in this cluster has been read
         is_read = any(aid in read_article_ids for aid in cluster_article_ids)
@@ -1406,8 +1401,15 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
             )
             await db.commit()
         else:
-            # String path: resolve_existing is kind-blind, so stays log-only (no UER write).
+            # String/typed path: resolve_existing is kind-blind (best-effort) — but a typed entity
+            # follow is still an explicit signal, so seed relevance when it resolves to a node. The
+            # follow row keeps entity_id NULL (only the chip path persists the trustworthy id).
             eid = await entities.resolve_existing(db, value)
+            if eid is not None:
+                await entities.bump_relevance(
+                    db, current_user_id(), eid, source="follow", weight=settings.uer_follow_weight
+                )
+                await db.commit()
             logger.info("entity_follow_resolved", value=value, entity_id=eid)
     return FollowOut.model_validate(f)
 

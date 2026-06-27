@@ -78,6 +78,8 @@ class FakeCluster:
         self.title = title
         self.summary = summary
         self.created_at = datetime.now(timezone.utc)
+        self.coherence = None
+        self.extra_json = None  # lens cache column (consensus etc.) — None until populated
         self.articles = cluster_articles or []
 
 

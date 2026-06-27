@@ -67,8 +67,9 @@ class Settings(BaseSettings):
     # default false keeps single-user dev + the rollout window working.
     auth_required: bool = False
 
-    # G1 entity backbone (Wave D Phase 3). Extraction ships DARK (enable after monitoring skip rate).
-    graph_extraction_enabled: bool = False
+    # G1 entity backbone (Wave D Phase 3). Extraction is ON by default — it needs a platform LLM key to
+    # run and skips gracefully (LLMUnavailable) without one. Set GRAPH_EXTRACTION_ENABLED=false to disable.
+    graph_extraction_enabled: bool = True
     graph_extraction_model: str = "gpt-4o-mini"
     graph_max_entities_per_cluster: int = 12   # cast-strip cap + extraction salience cap
     graph_salience_floor: float = 0.3          # drop entities below this salience at extraction

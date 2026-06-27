@@ -54,7 +54,7 @@ Copy `.env.example` and fill in:
 | `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | No | Platform fallback keys for the other providers (background jobs) |
 | `FIREBASE_CREDENTIALS_JSON` *or* `GOOGLE_APPLICATION_CREDENTIALS` | No | Service account to verify Firebase ID tokens. Omit both → auth disabled, requests use the default user (single-user dev) |
 | `AUTH_REQUIRED` | No | `true` rejects unauthenticated requests with 401 (multi-user prod). Default `false` |
-| `GRAPH_EXTRACTION_ENABLED` | No | Turns on the entity-extraction backfill job (G1). Off by default; needs a platform LLM key |
+| `GRAPH_EXTRACTION_ENABLED` | No | Entity-extraction backfill job (G1). **On by default**; needs a platform LLM key (skips without one). Set `false` to disable |
 | `UER_ENABLED` | No | Per-user entity-relevance personalization (G2). **On by default**; `false` disables it everywhere |
 
 Generate an encryption key:

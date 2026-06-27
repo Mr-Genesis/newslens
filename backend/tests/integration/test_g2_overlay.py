@@ -73,6 +73,19 @@ async def test_entity_follow_persists_entity_id_and_seeds_relevance(aclient, db_
     assert uer2.engagement_raw == 1.0
 
 
+@pytest.mark.asyncio
+async def test_typed_entity_follow_seeds_relevance(aclient, db_session):
+    """A typed entity-follow (no chip id) that resolves to a node still seeds relevance (§2a)."""
+    e = await _entity(db_session, "Globex")  # name_norm "globex"
+    r = await aclient.post("/follows", json={"kind": "entity", "value": "Globex"})  # no entity_id
+    assert r.status_code == 201
+    follow = (await db_session.execute(select(Follow).where(Follow.value == "Globex"))).scalar_one()
+    assert follow.entity_id is None  # string path leaves the link NULL (resolution is best-effort)
+    uer = (await db_session.execute(
+        select(UserEntityRelevance).where(UserEntityRelevance.entity_id == e.id))).scalar_one()
+    assert uer.source == "follow" and uer.engagement_raw == 1.0
+
+
 # ── S3 ──
 @pytest.mark.asyncio
 async def test_cluster_entities_personalized_ranks_followed_first(aclient, db_session, monkeypatch):
