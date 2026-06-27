@@ -185,7 +185,7 @@ news-app/
 2. **GDELT Fetcher** (every 15 min) → GDELT API → trafilatura extraction → dedup → articles table
 3. **Embedding Backfill** (every 5 min) → OpenAI text-embedding-3-small → pgvector
 4. **Clustering** (every 10 min) → pgvector cosine distance (threshold 0.15) → story_clusters table
-5. **Entity Extraction Backfill** (every 15 min, gated by `GRAPH_EXTRACTION_ENABLED`, dark by default) → LLM extraction over settled clusters → entities / entity_aliases / article_entities (G1)
+5. **Entity Extraction Backfill** (every 15 min, on by default via `GRAPH_EXTRACTION_ENABLED`; needs a platform LLM key, skips gracefully without one) → LLM extraction over settled clusters → entities / entity_aliases / article_entities (G1)
 
 ## Key Patterns
 

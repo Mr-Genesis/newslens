@@ -110,7 +110,7 @@ fly open /health
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | No | Anthropic platform fallback + model (default `claude-haiku-4-5`) |
 | `FIREBASE_CREDENTIALS_JSON` *or* `GOOGLE_APPLICATION_CREDENTIALS` | No | Service account to verify Firebase ID tokens. Omit both → auth disabled (default user) |
 | `AUTH_REQUIRED` | No | `true` rejects unauthenticated requests (multi-user prod). Default `false` |
-| `GRAPH_EXTRACTION_ENABLED` | No | Entity-extraction backfill job (G1). Off by default; needs a platform LLM key |
+| `GRAPH_EXTRACTION_ENABLED` | No | Entity-extraction backfill job (G1). **On by default**; needs a platform LLM key, skips without one. Set `false` to avoid the extraction LLM cost |
 | `UER_ENABLED` | No | Per-user entity-relevance personalization (G2). **On by default**; `false` disables it |
 | `REQUIRE_ENCRYPTION` | No | `true` refuses to store secrets without `ENCRYPTION_KEY` (recommended in prod) |
 | `RSS_FETCH_INTERVAL_MINUTES` | No | RSS fetch interval (default: 10) |

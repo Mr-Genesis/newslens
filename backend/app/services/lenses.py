@@ -250,6 +250,36 @@ async def _cache_write(db: AsyncSession, cluster: StoryCluster, column: str, sub
     db.expire(cluster, [column])
 
 
+def coherence_heuristic(source_count: int) -> float:
+    """Source-overlap (breadth) fallback when no real agreement metric exists — a coverage proxy,
+    not a learned score. The UI labels it honestly as 'source overlap', never 'agreement'."""
+    if source_count >= 5:
+        return 0.95
+    if source_count >= 3:
+        return 0.85
+    if source_count >= 2:
+        return 0.75
+    return 0.65
+
+
+def cluster_coherence(cluster: StoryCluster, articles: list[Article]) -> float:
+    """Honest coherence for a cluster. Prefers the REAL source-agreement ratio (agree_count / total)
+    from a cached consensus pass for the current sources — so a contested story can score below the
+    heuristic floor — then the stored value, then the source-overlap heuristic. Pure read (no LLM, no
+    extra query): it only inspects the already-loaded cluster + the consensus cache."""
+    try:
+        cons = _cache_read(cluster, "extra_json", "consensus", _source_hash(articles))
+    except AttributeError:
+        cons = None  # cluster-like object without the JSONB column → fall through (never crash a read)
+    if isinstance(cons, dict):
+        total = cons.get("total") or 0
+        if total > 0:
+            return max(0.0, min(1.0, (cons.get("agree_count") or 0) / total))
+    if getattr(cluster, "coherence", None) is not None:
+        return cluster.coherence
+    return coherence_heuristic(len({a.source_id for a in articles}) or len(articles))
+
+
 async def get_lens(
     db: AsyncSession,
     cluster_id: int,

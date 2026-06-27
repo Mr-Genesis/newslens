@@ -381,6 +381,7 @@ class ArticleEntity(Base):
     __table_args__ = (
         UniqueConstraint("article_id", "entity_id", name="uq_article_entity"),  # idempotent re-extract
         Index("ix_article_entities_entity", "entity_id"),  # reverse "appears in" lookup
+        Index("ix_article_entities_article", "article_id"),  # feed-pool + relevance-scorer join (hot path)
     )
 
 
@@ -400,9 +401,10 @@ class UserEntityRelevance(Base):
     last_event_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     score: Mapped[float | None] = mapped_column(Float)  # optional write-time cache (not the ranking key)
 
-    __table_args__ = (
-        Index("ix_uer_user_score", "user_id", "score"),  # serves the WHERE user_id= filter
-    )
+    # No extra index: the (user_id, entity_id) PK already serves the personalization join's
+    # `WHERE user_id =` (leftmost column). The old ix_uer_user_score on (user_id, score) was dead
+    # weight — `score` is never written, so it indexed all-NULL and only cost writes. Re-add a
+    # (user_id, score) index if/when score is materialized for a global-ranking query.
 
 
 # ── Row-Level Security (Wave D Phase A) ──────────────────────────────────────────────
