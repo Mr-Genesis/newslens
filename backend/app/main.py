@@ -22,32 +22,41 @@ async def check_db() -> bool:
 
 
 async def init_db():
-    """Create tables, ensure pgvector extension exists, and seed default user.
+    """Ensure pgvector extension exists, optionally bootstrap tables, and seed default data.
 
-    NOTE: Alembic migrations are the authoritative source of schema for prod
-    (see backend/migrations). Base.metadata.create_all below is a convenience
-    bootstrap for local dev / tests only; the ad-hoc CREATE EXTENSION + ALTER
-    TABLE schema-evolution block was removed now that the Alembic baseline owns
-    the schema.
+    Alembic migrations are the authoritative source of schema for prod (see backend/migrations);
+    the Docker start command runs `alembic upgrade head` before the server boots. `create_all` below
+    is a convenience bootstrap for LOCAL DEV / TESTS ONLY and is gated behind ``init_db_create_all``
+    (env ``INIT_DB_CREATE_ALL``, default true). It is OFF in prod because create_all CREATEs missing
+    tables but can never ALTER an existing table to add a column — that is precisely how the prod
+    schema silently drifted and 500'd every authenticated endpoint. The seeds below stay on in every
+    environment (idempotent; the tables already exist via migrations in prod).
     """
     from app.database import Base
     import app.models  # noqa: F401 — ensure models are registered
 
-    # Create pgvector extension first (create_all needs the vector type for local dev)
+    # Ensure the pgvector extension exists (idempotent; the baseline migration also creates it).
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
-    # Create all tables (local dev bootstrap; Alembic is authoritative for prod)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Bootstrap tables for dev/test only. In prod (INIT_DB_CREATE_ALL=false) Alembic owns the schema.
+    if settings.init_db_create_all:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("init_db_create_all_ran")
+    else:
+        logger.info("init_db_create_all_skipped", reason="alembic_authoritative")
 
-    # Seed default user
+    # Seed the default user via the ORM, not raw SQL: several NOT NULL users columns (locale,
+    # depth_pref, persona_version, watchlist) carry only a MODEL-side default — under a create_all
+    # schema they have no server_default, so a raw `INSERT (id)` NotNullViolation-s and aborts init_db
+    # before topics seed. Constructing User() applies every model default uniformly (and is robust to
+    # any future NOT NULL column), while created_at fills from its server_default.
+    from app.models import User
     async with async_session() as session:
-        result = await session.execute(text("SELECT id FROM users LIMIT 1"))
-        if result.scalar_one_or_none() is None:
-            await session.execute(
-                text("INSERT INTO users (id) VALUES (1)")
-            )
+        existing = await session.execute(text("SELECT id FROM users LIMIT 1"))
+        if existing.scalar_one_or_none() is None:
+            session.add(User(id=1))  # the canonical default/single-user id (auth.DEFAULT_USER_ID)
         await session.commit()
 
     # Seed default topics

@@ -31,9 +31,10 @@ Render's free Postgres does **not** include pgvector. Two options:
    - **Plan:** Free
 4. Environment variables:
    - `DATABASE_URL` — paste the Neon/Supabase connection string (the app auto-converts `postgresql://` to `postgresql+asyncpg://`)
-   - `OPENAI_API_KEY` — your OpenAI API key
-   - `ENCRYPTION_KEY` — any random 32+ char string (for Fernet key encryption)
-5. Click **Deploy**
+   - `OPENAI_API_KEY` — your OpenAI API key (**required**: with no key, embeddings never run → nothing clusters → the feed/briefing stay empty while `/health` is green)
+   - `ENCRYPTION_KEY` — a **Fernet** key: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` (a plain "random string" is rejected by Fernet). Set it **once** and store it — rotating it orphans every stored encrypted key.
+   - `INIT_DB_CREATE_ALL=false` — prod schema is Alembic-only (see **Migrations** below)
+5. Click **Deploy**. The container runs `alembic upgrade head` on start, then serves. **If the database already exists from a pre-Alembic deploy, do the one-time [reconcile](#reconcile-an-existing-pre-alembic-database) first** or the boot-time upgrade fails.
 
 ### 4. Verify
 
@@ -104,7 +105,8 @@ fly open /health
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string (auto-converts to asyncpg) |
 | `OPENAI_API_KEY` | No* | OpenAI key — *required for embeddings/clustering* and the platform generation fallback |
-| `ENCRYPTION_KEY` | Yes | Fernet encryption key for per-user API key storage |
+| `ENCRYPTION_KEY` | Yes | Fernet key (`Fernet.generate_key()` — 32-byte url-safe base64) for per-user API key storage. Set once; rotating it orphans stored keys |
+| `INIT_DB_CREATE_ALL` | No | `false` in prod (schema is Alembic-only). Default `true` bootstraps dev/test via `create_all` |
 | `GENERATION_PROVIDER` | No | Default generation provider: `openai` \| `anthropic` \| `gemini` (per-user `active_provider` wins) |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | No | Google Gemini platform fallback + model |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | No | Anthropic platform fallback + model (default `claude-haiku-4-5`) |
@@ -120,11 +122,56 @@ fly open /health
 > Tuning knobs (`UER_*` blend ratios, `GRAPH_*` extraction params, clustering thresholds) have sensible
 > defaults in `backend/app/config.py` and rarely need overriding — see that file for the full list.
 
+## Reconcile an existing (pre-Alembic) database
+
+The deploy runs `alembic upgrade head` on every start (the backend Docker start command). That is safe
+for a **fresh** database and a **no-op** once the DB is at head. But a database first built by the old
+`init_db` `create_all` path has **no `alembic_version` row** and a schema frozen at whatever code
+created it — so a plain `alembic upgrade head` tries to re-`CREATE` tables that already exist and
+**fails on boot**. Reconcile it **once**, before (or together with) the first migration-running deploy.
+
+> ⚠️ `op.add_column` is **not idempotent** — it raises `DuplicateColumn` and halts the whole upgrade
+> mid-chain if a column already exists. Know the real schema before you upgrade; do not guess.
+
+1. **Snapshot first.** Back up the DB (Render: *Backups → Create*; Neon: a branch; Supabase: a
+   snapshot). There is no automatic down-path if an upgrade halts mid-chain.
+2. **Probe the real schema** with psql against the prod DB:
+   ```sql
+   \d users
+   SELECT to_regclass('alembic_version');   -- NULL ⇒ never Alembic-managed
+   ```
+3. **Choose the path:**
+   - **At the 4-column baseline** (`users` has only `id, profession, locale, created_at`, no
+     `alembic_version`) — it matches baseline `f76aec9da324`, so stamp it there and roll forward (every
+     later migration is additive `ADD COLUMN` / `CREATE TABLE`):
+     ```bash
+     alembic stamp f76aec9da324 && alembic upgrade head
+     ```
+   - **Partially drifted** (some, not all, post-baseline columns present) — a baseline stamp + upgrade
+     would hit `DuplicateColumn`. Hand-apply only the missing delta, then mark it at head:
+     ```sql
+     ALTER TABLE users ADD COLUMN IF NOT EXISTS watchlist JSONB;
+     ALTER TABLE users ADD COLUMN IF NOT EXISTS region VARCHAR(64);
+     -- ...remaining missing columns, read off the migration files...
+     ```
+     ```bash
+     alembic stamp head
+     ```
+   - **Already at head** (full schema + an `alembic_version` row) — nothing to do; the automatic
+     upgrade is a no-op.
+4. **Verify.** Restart/redeploy and confirm a previously-failing authed route returns 200 — e.g.
+   `curl https://<app>.onrender.com/feed` or `/clusters/1` (**not** `/auth/me`: with `AUTH_REQUIRED=false`
+   it 500s on drift but never returns a clean 401, so it is a poor probe). Check the next deploy's logs
+   for the Alembic `Running upgrade` lines.
+
+Run these from a shell holding the prod `DATABASE_URL` (a Render service shell, or `docker run` the
+image with `DATABASE_URL` set). Alembic uses the sync (psycopg2) driver, derived automatically from it.
+
 ## Notes
 
 - **Free tier sleep:** Render free tier spins down after 15 min of inactivity. First request takes ~30s to cold-start.
 - **pgvector:** Required for embeddings and clustering. Neon and Supabase both offer free pgvector. Render's built-in Postgres does not.
-- **Migrations:** `alembic upgrade head` creates all tables (incl. the entity-graph + per-user tables) and installs the RLS policies. Run it once against the deployment DB.
+- **Migrations:** run **automatically** on every deploy — the backend Docker start command is `alembic upgrade head && uvicorn …`, so the schema can never drift behind the code (a failed migration blocks startup rather than serving a broken schema). The baseline migration also enables pgvector and builds the entity-graph + per-user tables + RLS policies. A database that predates Alembic must be [reconciled once first](#reconcile-an-existing-pre-alembic-database), or the boot-time upgrade fails.
 - **Multi-user auth (optional):** Set `FIREBASE_CREDENTIALS_JSON` (inline service-account JSON works well for hosted secrets) and `AUTH_REQUIRED=true`. Without it, the app runs single-user (every request is the default user).
 - **Row-level security:** RLS on per-user tables only *enforces* under a non-superuser DB role — create one with `backend/scripts/create_app_role.sql` and point `DATABASE_URL` at it for real multi-tenant isolation. A startup check logs a warning if the connection is a superuser. (The explicit per-user query filter is always on regardless.)
 - **Personalization:** Entity-relevance personalization (G2) is on by default and safe — a brand-new account with no signal sees the neutral ranking. Set `UER_ENABLED=false` to turn it off. Populating the entity graph also needs `GRAPH_EXTRACTION_ENABLED=true` + a platform LLM key.

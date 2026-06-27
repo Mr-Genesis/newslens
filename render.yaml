@@ -17,17 +17,26 @@ services:
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     healthCheckPath: /health
+    # Schema is migration-owned: the Docker start command runs `alembic upgrade head` before serving
+    # (backend/Dockerfile), and the baseline migration enables pgvector. A pre-Alembic database must be
+    # reconciled once first — see DEPLOY.md → "Reconcile an existing (pre-Alembic) database".
     envVars:
       - key: DATABASE_URL
         fromDatabase:
           name: newslens-db
           property: connectionString
-        # Render provides postgresql:// — we need postgresql+asyncpg://
-        # Override manually after first deploy (see DEPLOY.md)
+        # config.py normalizes postgresql:// → postgresql+asyncpg:// automatically — no manual edit needed.
       - key: OPENAI_API_KEY
-        sync: false  # set manually in dashboard
+        sync: false  # set manually. REQUIRED for the content pipeline (embeddings → clustering → feed/briefing).
       - key: ENCRYPTION_KEY
-        generateValue: true
+        # sync:false (NOT generateValue): regenerating this key orphans every stored encrypted BYOM
+        # key (decrypt hard-fails). Generate ONCE with Fernet.generate_key() and set it in the
+        # dashboard; store it in a password manager. Never rotate without a re-encryption migration.
+        sync: false
+      - key: REQUIRE_ENCRYPTION
+        value: "true"  # refuse to store secrets if ENCRYPTION_KEY is missing (no silent plaintext)
+      - key: INIT_DB_CREATE_ALL
+        value: "false"  # prod schema is Alembic-only; create_all can't ALTER and is how the schema drifted
       - key: RSS_FETCH_INTERVAL_MINUTES
         value: "10"
       - key: GDELT_FETCH_INTERVAL_MINUTES
