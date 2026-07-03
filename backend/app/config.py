@@ -131,6 +131,11 @@ class Settings(BaseSettings):
     # #97 — /admin/breadth default staleness window (a source with no article fetched in this many days
     # is "stale"). Overridable per request via ?days=.
     breadth_stale_days: int = 30
+    # #98 — discover tension-line lens (a one-line story conflict). Backfilled + cached on
+    # extra_json; skips gracefully without a platform LLM key.
+    tension_lines_enabled: bool = True
+    tension_batch_size: int = 20
+    tension_interval_minutes: int = 20
     # Phase 3 · #86 — PubMed personal research feed. E-utilities are usable without a key at a lower
     # rate; an NCBI api_key raises the ceiling to ~10 req/s (we still self-throttle). No key → the
     # job runs unauthenticated (still rate-limited). pubmed_enabled=false disables ingestion.

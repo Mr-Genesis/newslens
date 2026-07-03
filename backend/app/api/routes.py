@@ -879,6 +879,27 @@ async def get_discover_deck(
     )
     articles = list(gated_articles) + list(news_result.scalars().all())
 
+    # #103: resolve each article's cached tension line (extra_json['tension']) — a pure cache lookup,
+    # no LLM in the deck path. The backfill job (#98) generates + refreshes it out of band.
+    art_ids = [a.id for a in articles]
+    tension_by_article: dict[int, str] = {}
+    if art_ids:
+        ca_rows = (await db.execute(
+            select(ClusterArticle.article_id, ClusterArticle.cluster_id)
+            .where(ClusterArticle.article_id.in_(art_ids)))).all()
+        a2c = {aid: cid for aid, cid in ca_rows}
+        cids = list(set(a2c.values()))
+        c2line: dict[int, str] = {}
+        if cids:
+            for cid, extra in (await db.execute(
+                    select(StoryCluster.id, StoryCluster.extra_json)
+                    .where(StoryCluster.id.in_(cids)))).all():
+                entry = (extra or {}).get("tension")
+                line = (entry.get("data") or {}).get("line") if isinstance(entry, dict) else None
+                if line:
+                    c2line[cid] = line
+        tension_by_article = {aid: c2line[cid] for aid, cid in a2c.items() if cid in c2line}
+
     cards: list[DiscoverCardOut] = []
     for i, article in enumerate(articles):
         # Get topic info
@@ -903,7 +924,7 @@ async def get_discover_deck(
                 id=i + 1,
                 article_id=article.id,
                 title=article.title,
-                tension_line=article.title,  # MVP: title as tension line
+                tension_line=tension_by_article.get(article.id) or article.title,  # #103: cached, else title
                 facts=facts,
                 sources=[src.name] if src else [],
                 topic_id=topic_id,
