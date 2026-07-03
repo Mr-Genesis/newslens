@@ -1,8 +1,9 @@
 import { Badge } from "@/components/ui/Badge";
 
 /**
- * Phase 2 · #78 — provenance badges for the gated source tiers.
+ * Provenance badges for the gated source tiers.
  *   research → RESEARCH   ·   expert → EXPERT · <author> · <score>   ·   preprint → PREPRINT · not peer-reviewed
+ *   official → OFFICIAL (regulator/central-bank/gov notices)   ·   filing → FILING (company disclosures)
  * A plain news source (or an unknown/NULL tier) renders nothing, so news cards are visually unchanged.
  */
 interface SourceTierBadgeProps {
@@ -24,7 +25,9 @@ export function SourceTierBadge({
 }: SourceTierBadgeProps) {
   const isResearch = sourceType === "research";
   const isExpert = sourceType === "expert";
-  if (!isResearch && !isExpert) return null;
+  const isOfficial = sourceType === "official";
+  const isFiling = sourceType === "filing";
+  if (!isResearch && !isExpert && !isOfficial && !isFiling) return null;
 
   // Author + score ride alongside the uppercase chip as normal-case mono text (the Badge itself
   // upper-cases, which would mangle a name like "Ben Thompson").
@@ -37,6 +40,16 @@ export function SourceTierBadge({
       {isResearch && (
         <Badge variant="signal" size={size}>
           RESEARCH
+        </Badge>
+      )}
+      {isOfficial && (
+        <Badge variant="free" size={size}>
+          OFFICIAL
+        </Badge>
+      )}
+      {isFiling && (
+        <Badge variant="topic" size={size}>
+          FILING
         </Badge>
       )}
       {isExpert && (

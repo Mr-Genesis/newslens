@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.models import StoryCluster, User
+from app.models import Article, ClusterArticle, Source, SourceType, StoryCluster, User
 
 
 async def _user_lastseen(db, dt):
@@ -17,8 +17,22 @@ async def _user_lastseen(db, dt):
 
 
 async def _cluster(db, title, impact_json=None):
+    # The digest is persona-gated via an EXISTS over cluster articles (officials/filings must not
+    # leak), so a test cluster needs at least one NEWS article — as every real cluster has.
+    slug = "".join(ch for ch in title.lower() if ch.isalnum()) or "x"
+    src = Source(name=f"news-{slug}", url=f"https://{slug}.example",
+                 rss_url=f"https://{slug}.example/rss", source_type=SourceType.wire,
+                 region="global", category="world")
+    db.add(src)
+    await db.flush()
+    art = Article(title=title, url=f"https://{slug}.example/a1", source_id=src.id,
+                  snippet="body", published_at=datetime.now(timezone.utc))
+    db.add(art)
+    await db.flush()
     c = StoryCluster(title=title, summary="s", impact_json=impact_json)
     db.add(c)
+    await db.flush()
+    db.add(ClusterArticle(cluster_id=c.id, article_id=art.id))
     await db.flush()
     return c
 

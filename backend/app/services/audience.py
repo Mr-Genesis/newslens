@@ -107,6 +107,17 @@ async def resolve_tags(profession: str | None, *, user_id=None, persona_version=
     return tags
 
 
+def gated_source_types():
+    """The source tiers subject to the audience/credibility gate. official = regulator/gov notices
+    (audience-gated like research); filing = per-company disclosures (audience=[] ⇒ only ever
+    admitted via the follow/watchlist branch). One constant so the feed/briefing/filter call sites
+    can never drift apart. NOTE: the discover deck deliberately samples a NARROWER set (no filing) —
+    see routes.get_discover_deck."""
+    from app.models import SourceType
+
+    return (SourceType.research, SourceType.expert, SourceType.official, SourceType.filing)
+
+
 def allowed_source_ids(user_tags: set[str], *, floor: int, followed_source_ids=None):
     """A subquery of source ids a user may see, given their audience tags.
 
@@ -121,7 +132,7 @@ def allowed_source_ids(user_tags: set[str], *, floor: int, followed_source_ids=N
     """
     from sqlalchemy import and_, or_, select
 
-    from app.models import Source, SourceType
+    from app.models import Source
 
     if user_tags:
         audience_ok = or_(Source.audience.is_(None), Source.audience.overlap(sorted(user_tags)))
@@ -135,7 +146,7 @@ def allowed_source_ids(user_tags: set[str], *, floor: int, followed_source_ids=N
         audience_ok,
     )
     branches = [
-        Source.source_type.notin_([SourceType.research, SourceType.expert]),
+        Source.source_type.notin_(list(gated_source_types())),
         gated_ok,
     ]
     if followed_source_ids:

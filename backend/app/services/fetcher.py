@@ -95,7 +95,7 @@ async def backfill_topic_assignments():
     """Batch job: assign topics to articles with embeddings but no topic assignments."""
     async with async_session() as session:
         # Find articles with embeddings but no topic assignments
-        from sqlalchemy import exists, and_
+        from sqlalchemy import exists
         from app.models import EmbeddingStatus
 
         result = await session.execute(
@@ -242,6 +242,48 @@ def _best_body(entry) -> str:
     return content if len(content) > len(summary) else summary
 
 
+_DOUBLE_PREFIX = re.compile(r"^https?://[^/]+/(https?://.+)$", re.IGNORECASE)
+
+
+def _normalize_link(link: str) -> str:
+    """Fix double-prefixed item links (SEBI emits https://www.sebi.gov.in/https://www.sebi.gov.in/…).
+
+    Strips ONLY the exact malformation `scheme://host/scheme://…` — the prefix must be a bare host
+    with no real path, so redirect endpoints (/out?next=https://…) and archive links that embed a
+    URL deeper in their path are never touched."""
+    m = _DOUBLE_PREFIX.match(link)
+    return m.group(1) if m else link
+
+
+def _is_probably_english(text: str) -> bool:
+    """Cheap English guard (no LLM), used only for sources flagged credibility_meta.english_guard
+    (PIB serves Hindi today). Majority rule over ALPHABETIC chars only, so currency symbols, dashes
+    and digits never count against a title, and an English headline quoting one Devanagari name
+    survives; a majority-Devanagari title is dropped."""
+    if not text:
+        return True
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return True  # no letters at all → benefit of the doubt
+    ascii_letters = sum(1 for ch in letters if ord(ch) < 128)
+    return (ascii_letters / len(letters)) >= 0.5
+
+
+def _fetch_timeout(source) -> float:
+    """Per-source fetch timeout: credibility_meta.fetch_timeout override clamped to [5, 120]s, else
+    30s (NITI's server needs ~45s — a hard 30s made it flap). Garbage (negative/inf/nan) → default."""
+    import math
+
+    meta = getattr(source, "credibility_meta", None) or {}
+    try:
+        t = float(meta.get("fetch_timeout") or 30.0)
+    except (TypeError, ValueError):
+        return 30.0
+    if not math.isfinite(t) or t <= 0:
+        return 30.0
+    return min(120.0, max(5.0, t))
+
+
 def parse_pub_date(entry) -> datetime | None:
     """Parse publication date from a feed entry, handling various formats."""
     for field in ("published_parsed", "updated_parsed"):
@@ -264,13 +306,16 @@ def parse_pub_date(entry) -> datetime | None:
     return None
 
 
-async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
-    """Fetch and parse a single RSS feed. Returns number of new articles."""
+async def fetch_single_feed(source: Source, client: httpx.AsyncClient, session=None) -> int:
+    """Fetch and parse a single RSS feed. Returns number of new articles.
+
+    Accepts an optional session (tests — the savepoint-wrapped harness session can't share rows
+    with a second connection); production opens its own, as before."""
     if not source.rss_url:
         return 0
 
     try:
-        response = await client.get(source.rss_url, timeout=30.0)
+        response = await client.get(source.rss_url, timeout=_fetch_timeout(source))
         response.raise_for_status()
     except httpx.HTTPError as e:
         logger.warning("rss_fetch_failed", source=source.name, error=str(e))
@@ -286,8 +331,15 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
         logger.warning("rss_parse_error", source=source.name, error=str(feed.bozo_exception))
         return 0
 
+    if session is not None:
+        return await _ingest_feed_entries(session, source, feed)
+    async with async_session() as s:
+        return await _ingest_feed_entries(s, source, feed)
+
+
+async def _ingest_feed_entries(session, source: Source, feed) -> int:
     new_count = 0
-    async with async_session() as session:
+    if True:
         for entry in _capped_entries(feed.entries, source.per_fetch_cap):
             # RSS titles/summaries carry HTML entities (&nbsp; &#8377; &amp;) — decode at
             # ingestion so every downstream consumer (cards, summaries, embeddings) sees clean text.
@@ -297,9 +349,16 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
             if not title or not link:
                 continue
 
+            # English-only guard for flagged sources (PIB currently serves Hindi despite Lang=1;
+            # non-English titles would pollute the English embedding space).
+            if (source.credibility_meta or {}).get("english_guard") and not _is_probably_english(title):
+                continue
+
             # Resolve relative URLs
             if link.startswith("/"):
                 link = source.url.rstrip("/") + link
+            # Fix double-prefixed links (SEBI) — also keeps dedup keys sane.
+            link = _normalize_link(link)
 
             # Card snippet from summary/content; keep the FULL text as the body (Wave D1).
             # Take the richer of summary/content — full-text feeds ship both, and the old

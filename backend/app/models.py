@@ -48,6 +48,9 @@ class SourceType(str, enum.Enum):
     # Phase 1 source expansion — persona-gated tiers.
     research = "research"  # journals / preprints (arXiv, NEJM, medRxiv…)
     expert = "expert"      # individual expert blogs, credibility-scored (Substack…)
+    # Official-sources plan (docs/official-sources-plan.md) — both gated; admission differs:
+    official = "official"  # regulator/central-bank/ministry/exchange notices — audience-gated
+    filing = "filing"      # per-company disclosures (EDGAR, NSE/BSE) — watchlist/follow-only
 
 
 class User(Base):

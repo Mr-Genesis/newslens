@@ -21,7 +21,7 @@ describe("FeedPage (#82)", () => {
   it("renders four chips, All selected, and fetches with no source_type on mount", async () => {
     render(<FeedPage />);
     await waitFor(() => expect(screen.getByText("Story 1")).toBeInTheDocument());
-    for (const label of ["All", "News", "Research", "Experts"]) {
+    for (const label of ["All", "News", "Research", "Experts", "Official"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
     expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
