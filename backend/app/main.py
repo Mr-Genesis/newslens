@@ -150,6 +150,9 @@ async def start_scheduler():
     from app.services.summarizer import backfill_summaries
     from app.services.fetcher import backfill_topic_assignments
     from app.services.entities import backfill_entities
+    from app.services.credibility import review_credibility
+    from app.services.pubmed import ingest_pubmed
+    from app.services.arxiv_gen import generate_arxiv_sources
 
     scheduler = AsyncIOScheduler()
     # One-shot: seed topic embeddings 10s after startup (non-blocking)
@@ -223,6 +226,46 @@ async def start_scheduler():
         max_instances=1,
         coalesce=True,
         misfire_grace_time=300,
+    )
+    # Phase 3 · #90: monthly LLM credibility review (propose-only). 03:00 on the 1st of each month.
+    # Propose-only + admin-lock-preserving, so this never mutates a live score on its own.
+    scheduler.add_job(
+        review_credibility,
+        "cron",
+        day=1,
+        hour=3,
+        id="credibility_review",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    # Phase 3 · #86: weekly PubMed personal research feed. 04:00 Monday. Ingests fresh abstracts for
+    # each medical profession among the users; no-op when pubmed_enabled=false or no medical user.
+    scheduler.add_job(
+        ingest_pubmed,
+        "cron",
+        day_of_week="mon",
+        hour=4,
+        id="pubmed_ingest",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    # Phase 3 · #87: weekly arXiv-by-interest source generation. 04:30 Monday. Idempotent — picks up
+    # new interests (subscribed topics) and adds the matching arXiv category feeds; no-op otherwise.
+    scheduler.add_job(
+        generate_arxiv_sources,
+        "cron",
+        day_of_week="mon",
+        hour=4,
+        minute=30,
+        id="arxiv_generate",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     scheduler.start()
     logger.info("scheduler_started", jobs=len(scheduler.get_jobs()))

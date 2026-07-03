@@ -50,6 +50,56 @@ def tags_for_profession(profession: str | None) -> set[str]:
     return {tag for tag, kws in _KEYWORDS.items() if any(kw in text for kw in kws)}
 
 
+# Phase 3 · #88 — LLM fallback for the long tail of professions the keyword map misses. Cached per
+# user on persona_version (bumped on any profile edit), so the LLM runs at most once per profession.
+# Process-local cache — a restart just re-classifies; no migration, no per-request cost on the hot path.
+_llm_tag_cache: dict[tuple, frozenset] = {}
+_TAG_SCHEMA = {
+    "type": "object",
+    "properties": {"tags": {"type": "array", "items": {"type": "string"}}},
+    "required": ["tags"],
+}
+
+
+async def classify_profession_llm(profession: str) -> set[str]:
+    """Map a profession to the FIXED audience-tag vocabulary via the platform LLM. Empty on failure.
+
+    The result is constrained to `_KEYWORDS` keys so the model can never invent a tag no source uses.
+    """
+    from app.services import llm
+
+    vocab = sorted(_KEYWORDS.keys())
+    prompt = (
+        f"Map this profession to zero or more audience tags from EXACTLY this list: {vocab}. "
+        f"Choose only tags whose news a person in that role would want. "
+        f"Profession: {profession!r}. Return JSON {{\"tags\": [...]}} using only tags from the list."
+    )
+    try:
+        result = await llm.generate(prompt, schema=_TAG_SCHEMA, force_platform_key=True)
+    except Exception:  # noqa: BLE001 — the classifier is a fallback; degrade to keyword-only, never crash
+        return set()
+    raw = result.get("tags") if isinstance(result, dict) else None
+    return {t for t in (raw or []) if t in _KEYWORDS}
+
+
+async def resolve_tags(profession: str | None, *, user_id=None, persona_version=None) -> set[str]:
+    """Audience tags for a profession: keyword map first (fast, offline), LLM fallback for the tail.
+
+    A keyword hit never calls the LLM. The LLM result is cached on (user_id, persona_version).
+    """
+    base = tags_for_profession(profession)
+    if base:
+        return base
+    if not profession or not profession.strip():
+        return set()
+    key = (user_id, persona_version)
+    if key in _llm_tag_cache:
+        return set(_llm_tag_cache[key])
+    tags = await classify_profession_llm(profession)
+    _llm_tag_cache[key] = frozenset(tags)
+    return tags
+
+
 def allowed_source_ids(user_tags: set[str], *, floor: int, followed_source_ids=None):
     """A subquery of source ids a user may see, given their audience tags.
 
