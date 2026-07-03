@@ -62,7 +62,8 @@ export function AISummaryBox({ summary, coherence, clusterId, className }: AISum
     if (!clusterId) return <Unavailable msg="Open a story to see analysis." />;
     if (state === "loading" || state === undefined)
       return <div className="skeleton h-16 w-full" />;
-    if (state.unavailable) return <Unavailable />;
+    if (state.unavailable || state.error)
+      return <Unavailable reason={state.reason ?? state.error} />;
     return (
       <>
         {body(state)}
@@ -233,10 +234,18 @@ export function AISummaryBox({ summary, coherence, clusterId, className }: AISum
   );
 }
 
-function Unavailable({ msg }: { msg?: string }) {
-  return (
-    <p className="text-small text-[var(--text-muted)] italic">
-      {msg ?? "AI analysis unavailable — add an API key in Settings."}
-    </p>
-  );
+function Unavailable({ msg, reason }: { msg?: string; reason?: string }) {
+  // Map the backend's failure reason to honest copy. The old catch-all told everyone to "add an
+  // API key" even when the story simply wasn't clustered/processed yet — misleading when the
+  // platform key is configured and working.
+  const text =
+    msg ??
+    (reason === "no_llm_key"
+      ? "AI analysis unavailable — add an API key in Settings."
+      : reason === "llm_error"
+        ? "AI analysis hit a temporary error — try again shortly."
+        : reason === "profession_unset"
+          ? "Set your profession in Settings to unlock this lens."
+          : "Analysis isn't ready for this story yet — check back soon.");
+  return <p className="text-small text-[var(--text-muted)] italic">{text}</p>;
 }

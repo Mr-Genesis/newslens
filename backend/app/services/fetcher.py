@@ -2,6 +2,7 @@
 
 import html
 import json
+import re
 import structlog
 import feedparser
 import httpx
@@ -33,6 +34,7 @@ async def assign_topics(session, article: Article):
 
         if topics_with_embeddings:
             # Use pgvector cosine distance operator
+            assigned = False
             for topic in topics_with_embeddings:
                 dist_result = await session.execute(
                     text(
@@ -57,7 +59,12 @@ async def assign_topics(session, article: Article):
                                 relevance_score=1.0 - row.distance,
                             )
                         )
-            return
+                        assigned = True
+            # Only stop here if the embedding pass actually assigned something — an unconditional
+            # return stranded every article that cleared no topic at the distance threshold with
+            # zero topics forever (they then rendered as "General" everywhere).
+            if assigned:
+                return
 
     # Fallback: keyword matching
     text_to_match = (article.title or "").lower()
@@ -69,7 +76,9 @@ async def assign_topics(session, article: Article):
 
     for topic in topics:
         keyword = topic.name.lower()
-        if keyword in text_to_match:
+        # Word-boundary match — plain substring made short topic names poison assignment
+        # (e.g. the topic "AI" matched "said", "rain", "email" on every article).
+        if re.search(rf"\b{re.escape(keyword)}\b", text_to_match):
             existing = await session.execute(
                 select(ArticleTopic).where(
                     ArticleTopic.article_id == article.id,

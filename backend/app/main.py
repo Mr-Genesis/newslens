@@ -109,19 +109,22 @@ async def init_db():
 
 
 async def seed_topic_embeddings():
-    """Seed topic embeddings if missing. Run as background task to avoid blocking startup."""
-    async with async_session() as session:
-        result = await session.execute(
-            text("SELECT COUNT(*) FROM topics WHERE embedding IS NOT NULL")
-        )
-        if result.scalar_one() > 0:
-            return  # Already seeded
+    """Seed embeddings for topics that lack one. Run as background task to avoid blocking startup.
 
+    Per-topic (WHERE embedding IS NULL), not all-or-nothing: the old "skip if ANY topic is
+    embedded" early-return left topics created later (e.g. via PUT /profile interests) without
+    embeddings forever, so they could only ever keyword-match.
+    """
+    async with async_session() as session:
         try:
             from app.services.embeddings import generate_embedding
 
-            topic_result = await session.execute(text("SELECT id, name FROM topics"))
+            topic_result = await session.execute(
+                text("SELECT id, name FROM topics WHERE embedding IS NULL")
+            )
             topics = topic_result.all()
+            if not topics:
+                return  # everything already embedded
             seeded = 0
             for topic_id, topic_name in topics:
                 embedding = await generate_embedding(f"News about {topic_name}")
@@ -156,6 +159,15 @@ async def start_scheduler():
         "date",
         run_date=datetime.now(tz.utc) + timedelta(seconds=10),
         id="topic_embedding_seed",
+        replace_existing=True,
+    )
+    # Recurring sweep so topics created AFTER startup (e.g. via PUT /profile interests) get
+    # embeddings without waiting for a restart. No-op when every topic is embedded.
+    scheduler.add_job(
+        seed_topic_embeddings,
+        "interval",
+        hours=1,
+        id="topic_embedding_sweep",
         replace_existing=True,
     )
     scheduler.add_job(

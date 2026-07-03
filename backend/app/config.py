@@ -119,8 +119,14 @@ class Settings(BaseSettings):
     gdelt_fetch_interval_minutes: int = 15
     embedding_backfill_interval_minutes: int = 5
 
-    # GDELT query (parametrized for region/language; default India + English)
-    gdelt_query: str = "sourcecountry:IN"
+    # GDELT query (parametrized for region/language; default India + English).
+    # MUST include at least one keyword term: operator-only queries (e.g. bare "sourcecountry:IN")
+    # make the DOC API return a plain-text notice instead of JSON, so ingestion silently drops to
+    # zero. sourcelang:eng keeps non-English Indian content out of the English embedding space.
+    gdelt_query: str = (
+        "(india OR business OR technology OR startup OR economy OR government OR science) "
+        "sourcecountry:IN sourcelang:eng"
+    )
 
     # Embedding config — Gemini gemini-embedding-001 (current GA model; text-embedding-004 is retired).
     # It is natively 3072-dim but supports Matryoshka truncation via output_dimensionality, so we

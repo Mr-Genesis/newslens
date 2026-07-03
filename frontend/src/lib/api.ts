@@ -66,13 +66,16 @@ export interface Article {
 export interface Topic {
   id: number;
   name: string;
-  slug: string;
+  slug?: string; // not sent by GET /topics (TopicOut is id/name/article_count/is_explore)
+  article_count?: number;
+  is_explore?: boolean;
 }
 
 export interface BriefingStory {
   title: string;
   summary: string;
-  cluster_id: number;
+  /** null on the article-fallback path (article not clustered yet) — no deep-dive to link to. */
+  cluster_id: number | null;
   category: string;
   source_count: number;
   coherence: number;

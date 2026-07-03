@@ -12,6 +12,8 @@ interface HeroStoryCardProps {
 }
 
 export function HeroStoryCard({ story }: HeroStoryCardProps) {
+  // Fallback stories (article not clustered yet) have no deep dive — render inert.
+  const clickable = story.cluster_id != null;
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -20,7 +22,9 @@ export function HeroStoryCard({ story }: HeroStoryCardProps) {
       transition={{ duration: 0.4, ease: "easeOut" }}
     >
       <Link
-        href={storyHref(story.cluster_id)}
+        href={clickable ? storyHref(story.cluster_id as number) : "#"}
+        aria-disabled={!clickable}
+        style={clickable ? undefined : { pointerEvents: "none" }}
         className="block gradient-border rounded-[var(--radius-lg)] p-4 transition-all duration-[var(--duration-short)] hover:shadow-[var(--shadow-md)]"
       >
         <div className="flex items-center gap-2 mb-3">

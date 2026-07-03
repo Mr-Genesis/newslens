@@ -51,7 +51,9 @@ async def fetch_gdelt():
         try:
             data = response.json()
         except Exception:
-            logger.warning("gdelt_json_parse_failed")
+            # The DOC API answers operator-only/invalid queries with a PLAIN-TEXT notice (HTTP 200),
+            # so a bad gdelt_query silently zeroes ingestion. Log the body so it's diagnosable.
+            logger.warning("gdelt_json_parse_failed", body=response.text[:200])
             return
 
         articles = data.get("articles", [])

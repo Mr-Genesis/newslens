@@ -29,6 +29,9 @@ interface StoryCardProps {
 
 export function StoryCard({ story }: StoryCardProps) {
   const topicColor = getTopicColor(story.category || "");
+  // cluster_id is null for fallback stories whose article isn't clustered yet — no deep dive
+  // exists, so the card renders inert instead of linking to a nonexistent cluster.
+  const clickable = story.cluster_id != null;
 
   return (
     <motion.div
@@ -38,8 +41,9 @@ export function StoryCard({ story }: StoryCardProps) {
       transition={{ duration: 0.3, ease: "easeOut" }}
     >
       <Link
-        href={storyHref(story.cluster_id)}
-        className="flex gap-3 py-4 border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--accent-subtle)] -mx-4 px-4 rounded-[var(--radius-md)]"
+        href={clickable ? storyHref(story.cluster_id as number) : "#"}
+        aria-disabled={!clickable}
+        className={`flex gap-3 py-4 border-b border-[var(--border-subtle)] transition-colors hover:bg-[var(--accent-subtle)] -mx-4 px-4 rounded-[var(--radius-md)]${clickable ? "" : " pointer-events-none"}`}
       >
         {/* Category color indicator */}
         <div
