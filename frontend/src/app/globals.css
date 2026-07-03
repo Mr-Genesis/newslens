@@ -350,6 +350,12 @@ body {
 .glow-left { box-shadow: -2px 0 8px var(--dismiss); }
 .glow-up { box-shadow: 0 -2px 8px var(--drill); }
 
+/* ── #104: landscape — cap the discover card stack so it fits the short viewport (design-system.md).
+   Overrides the portrait clamp inline style; sticky nav/layout are preserved. ── */
+@media (orientation: landscape) {
+  .discover-stack { height: min(360px, 60vh) !important; }
+}
+
 /* ── Reduced motion ── */
 @media (prefers-reduced-motion: reduce) {
   *,

@@ -23,6 +23,7 @@ export function Chip({
       whileTap={{ scale: 0.95 }}
       transition={{ duration: 0.1 }}
       onClick={onClick}
+      aria-pressed={selected}
       className={cn(
         // shrink-0: chips must NEVER compress in a scroll row (device-QA #7 — WebViews squeezed
         // pills until adjacent labels collided: "General AI", "BusinessEurope").
