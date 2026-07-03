@@ -106,8 +106,8 @@ fly open /health
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string (auto-converts to asyncpg) |
-| `GEMINI_API_KEY` | **Yes** | Google Gemini key — powers **embeddings** (`text-embedding-004`, 768-dim → clustering) *and* the default generation provider |
-| `GEMINI_MODEL` | No | Gemini generation model (default `gemini-2.0-flash`; embedding model is fixed at `text-embedding-004`) |
+| `GEMINI_API_KEY` | **Yes** | Google Gemini key — powers **embeddings** (`gemini-embedding-001`, 768-dim → clustering) *and* the default generation provider |
+| `GEMINI_MODEL` | No | Gemini generation model (default `gemini-2.0-flash`; embedding model is fixed at `gemini-embedding-001`) |
 | `GENERATION_PROVIDER` | No | Default generation provider: `gemini` \| `openai` \| `anthropic` (per-user `active_provider` wins) |
 | `OPENAI_API_KEY` | No | *Optional* — only for the OpenAI generation provider. **Not used for embeddings.** |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | No | Anthropic platform fallback + model (default `claude-haiku-4-5`) |
@@ -178,4 +178,4 @@ image with `DATABASE_URL` set). Alembic uses the sync (psycopg2) driver, derived
 - **Multi-user auth (optional):** Set `FIREBASE_CREDENTIALS_JSON` (inline service-account JSON works well for hosted secrets) and `AUTH_REQUIRED=true`. Without it, the app runs single-user (every request is the default user).
 - **Row-level security:** RLS on per-user tables only *enforces* under a non-superuser DB role — create one with `backend/scripts/create_app_role.sql` and point `DATABASE_URL` at it for real multi-tenant isolation. A startup check logs a warning if the connection is a superuser. (The explicit per-user query filter is always on regardless.)
 - **Personalization:** Entity-relevance personalization (G2) is on by default and safe — a brand-new account with no signal sees the neutral ranking. Set `UER_ENABLED=false` to turn it off. Populating the entity graph also needs `GRAPH_EXTRACTION_ENABLED=true` + a platform LLM key.
-- **Graceful degradation:** Generation works with any one provider key (Gemini/OpenAI/Anthropic); summaries generate on demand if a batch missed them; without embeddings, discovery falls back to snippets and keyword matching. **Embeddings require the Gemini key** (`text-embedding-004`).
+- **Graceful degradation:** Generation works with any one provider key (Gemini/OpenAI/Anthropic); summaries generate on demand if a batch missed them; without embeddings, discovery falls back to snippets and keyword matching. **Embeddings require the Gemini key** (`gemini-embedding-001`).

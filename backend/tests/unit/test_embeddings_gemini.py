@@ -4,7 +4,7 @@ from app.services import embeddings
 
 
 def test_embedding_config_is_gemini():
-    assert settings.embedding_model == "models/text-embedding-004"
+    assert settings.embedding_model == "models/gemini-embedding-001"
     assert settings.embedding_dimensions == 768
     assert settings.embedding_task_document == "retrieval_document"
     assert settings.embedding_task_query == "retrieval_query"
@@ -16,8 +16,10 @@ def _patch_gemini(monkeypatch, captured):
     def _configure(api_key=None):
         captured["key"] = api_key
 
-    def _embed(model=None, content=None, task_type=None):
-        captured.update(model=model, content=content, task_type=task_type)
+    def _embed(model=None, content=None, task_type=None, output_dimensionality=None):
+        captured.update(
+            model=model, content=content, task_type=task_type, output_dim=output_dimensionality
+        )
         return {"embedding": [0.1, 0.2, 0.3]}
 
     monkeypatch.setattr(genai, "configure", _configure)
@@ -37,9 +39,10 @@ async def test_generate_embedding_calls_gemini_document(monkeypatch):
 
     assert out == [0.1, 0.2, 0.3]
     assert cap["key"] == "test-gemini-key"
-    assert cap["model"] == "models/text-embedding-004"
+    assert cap["model"] == "models/gemini-embedding-001"
     assert cap["content"] == "hello world"
     assert cap["task_type"] == "retrieval_document"  # stored-document default
+    assert cap["output_dim"] == 768                  # truncated to the pgvector column size
 
 
 async def test_query_embedding_uses_query_task_type(monkeypatch):

@@ -13,7 +13,7 @@ An AI-powered news intelligence platform. NewsLens ingests articles from RSS fee
 - **Who's in the story** — a cast strip of the people/orgs/places in each cluster, with an "appears in" rail to other stories about the same entity.
 - **Personalized ranking** — follow entities and read stories, and the entities you care about rise across the cast strip, feed, briefing, and search. On by default; a brand-new account just sees the neutral ranking.
 - **Follows + digest** — follow topics, entities, or saved searches and get a personalized digest.
-- **Bring your own model** — per-user, Fernet-encrypted keys for **Gemini, OpenAI, or Anthropic**, with model selection and an env-var platform fallback. (Embeddings use Gemini `text-embedding-004`.)
+- **Bring your own model** — per-user, Fernet-encrypted keys for **Gemini, OpenAI, or Anthropic**, with model selection and an env-var platform fallback. (Embeddings use Gemini `gemini-embedding-001`.)
 - **Accounts** — Firebase auth (Google + Email/Password); single-user dev mode when auth isn't configured.
 - **Graceful degradation** — generation degrades by provider (any one valid key keeps you working); summaries generate on demand if a batch missed them; if embeddings lag, the UI falls back to snippets.
 
@@ -24,7 +24,7 @@ An AI-powered news intelligence platform. NewsLens ingests articles from RSS fee
 | Frontend | Next.js 16 (App Router), React 19, Tailwind CSS 4, Framer Motion |
 | Backend | Python, FastAPI, APScheduler, Firebase Admin SDK (auth) |
 | Database | PostgreSQL + pgvector (+ row-level security on per-user tables) |
-| ML | Gemini `text-embedding-004` (embeddings, 768-dim) + multi-provider generation (Gemini / OpenAI / Anthropic); pgvector cosine clustering |
+| ML | Gemini `gemini-embedding-001` (embeddings, 768-dim) + multi-provider generation (Gemini / OpenAI / Anthropic); pgvector cosine clustering |
 | Mobile | Capacitor (Android) + `@capacitor/splash-screen` |
 
 ## Quick start
@@ -58,7 +58,7 @@ APScheduler jobs run inside the FastAPI process:
 
 1. **RSS fetcher** (every 10 min) → feedparser → dedup → `articles`
 2. **GDELT fetcher** (every 15 min) → trafilatura extraction → dedup → `articles`
-3. **Embedding backfill** (every 5 min) → Gemini embeddings (`text-embedding-004`) → pgvector
+3. **Embedding backfill** (every 5 min) → Gemini embeddings (`gemini-embedding-001`) → pgvector
 4. **Clustering** (every 10 min) → pgvector cosine distance (threshold 0.15) → `story_clusters`
 5. **Entity extraction** (every 15 min, off by default behind `GRAPH_EXTRACTION_ENABLED`) → LLM extraction over settled clusters → `entities` / `article_entities`
 
