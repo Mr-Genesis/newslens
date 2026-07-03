@@ -1,5 +1,6 @@
 """RSS feed fetcher service with retry and structured logging."""
 
+import html
 import json
 import structlog
 import feedparser
@@ -238,7 +239,9 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
     new_count = 0
     async with async_session() as session:
         for entry in feed.entries:
-            title = getattr(entry, "title", "").strip()
+            # RSS titles/summaries carry HTML entities (&nbsp; &#8377; &amp;) — decode at
+            # ingestion so every downstream consumer (cards, summaries, embeddings) sees clean text.
+            title = html.unescape(getattr(entry, "title", "").strip())
             link = getattr(entry, "link", "").strip()
 
             if not title or not link:
@@ -256,7 +259,9 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
                 raw = entry.summary
             elif hasattr(entry, "content") and entry.content:
                 raw = entry.content[0].get("value", "")
-            raw = re.sub(r"<[^>]+>", "", raw).strip()
+            # Strip tags FIRST, then unescape — so an encoded "&lt;script&gt;" never becomes a
+            # live tag that the strip would have removed.
+            raw = html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
             snippet = raw[:300]
             body = raw[:16000] if raw else None
 
