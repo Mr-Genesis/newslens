@@ -33,6 +33,10 @@ export const metadata: Metadata = {
   title: "NewsLens",
   description:
     "AI-powered news intelligence — daily briefings, swipable discovery, multi-source deep dives",
+  // Static file in public/ (NOT an app/manifest.ts metadata route): the route-handler form breaks
+  // Next 16's static export ("Failed to collect page data for /manifest.webmanifest"), which the
+  // Capacitor build requires. The explicit link keeps <link rel="manifest"> emitted in both modes.
+  manifest: "/manifest.webmanifest",
 };
 
 export const viewport = {
