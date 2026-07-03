@@ -131,13 +131,39 @@ async def get_feed(
     _tags = await _audience.resolve_tags(_profession, user_id=current_user_id(), persona_version=_pv)
     _user_specialty = _pubmed.term_for_profession(_profession)  # #94: for the specialty rank boost
     _followed = await _audience.followed_source_ids(db, current_user_id())  # #81 opt-in override
-    query = query.where(
-        Article.source_id.in_(
-            _audience.allowed_source_ids(
-                _tags, floor=app_settings.credibility_feed_floor, followed_source_ids=_followed
-            )
+    _base_allowed = Article.source_id.in_(
+        _audience.allowed_source_ids(
+            _tags, floor=app_settings.credibility_feed_floor, followed_source_ids=_followed
         )
     )
+    # Phase 3: filings are audience=[] so the source-gate hides them, but one exchange firehose carries
+    # thousands of companies — a per-source follow can't express "only MY companies". Widen the gate
+    # with a per-ARTICLE branch: a filing is visible iff its company entity is in the caller's OWN
+    # watchlist/follows. Empty set (no watchlist, or feature off) → the OR collapses to the legacy
+    # source-gate → byte-identical feed.
+    from app.services import filings as _filings
+    _filing_ent_ids = await _filings.watchlisted_entity_ids(db, current_user_id())
+    if _filing_ent_ids:
+        from sqlalchemy import and_, or_
+
+        from app.models import ArticleEntity
+        query = query.where(
+            or_(
+                _base_allowed,
+                and_(
+                    Article.source_id.in_(
+                        select(Source.id).where(Source.source_type == SourceType.filing)
+                    ),
+                    Article.id.in_(
+                        select(ArticleEntity.article_id).where(
+                            ArticleEntity.entity_id.in_(sorted(_filing_ent_ids))
+                        )
+                    ),
+                ),
+            )
+        )
+    else:
+        query = query.where(_base_allowed)
 
     # #82: source-type filter chips ("All / News / Research / Experts / Official"). Composes with the
     # persona gate above — filtering to a tier never bypasses it. "news" = the non-gated tiers.
@@ -1654,8 +1680,17 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
             _sid = int(value)
         except ValueError:
             raise HTTPException(status_code=400, detail="source follow value must be a source id")
-        if (await db.execute(select(Source.id).where(Source.id == _sid))).scalar_one_or_none() is None:
+        _stype = (
+            await db.execute(select(Source.source_type).where(Source.id == _sid))
+        ).scalar_one_or_none()
+        if _stype is None:
             raise HTTPException(status_code=404, detail="source not found")
+        # A filing source is an exchange firehose — following it would bypass per-company scoping.
+        # Watchlist the company instead (which is the only way its filings surface).
+        if _stype == SourceType.filing:
+            raise HTTPException(
+                status_code=400, detail="cannot follow a filing source — watchlist the company instead"
+            )
     # Idempotent: a duplicate (user, kind, value) returns the existing row.
     existing = (
         await db.execute(

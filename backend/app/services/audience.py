@@ -155,10 +155,19 @@ def allowed_source_ids(user_tags: set[str], *, floor: int, followed_source_ids=N
 
 
 async def followed_source_ids(db, user_id: int) -> set[int]:
-    """The set of source ids this user follows (follows.kind == "source", value = the id string)."""
+    """The set of source ids this user follows (follows.kind == "source", value = the id string).
+
+    FILING sources are excluded here on purpose: a filing source is one exchange firehose of
+    thousands of companies, and the follow branch in `allowed_source_ids` admits a followed source
+    UNCONDITIONALLY (bypassing floor + audience). Letting a filing source through it would flood the
+    user with every watchlisted company's filings and defeat the per-company scoping in get_feed. So
+    filings are admissible ONLY via the per-article watchlist branch — never as a followed source.
+    This one exclusion closes the leak on every surface that consumes followed_source_ids (feed,
+    briefing, digest) at once.
+    """
     from sqlalchemy import select
 
-    from app.models import Follow
+    from app.models import Follow, Source, SourceType
 
     rows = (
         await db.execute(
@@ -171,4 +180,15 @@ async def followed_source_ids(db, user_id: int) -> set[int]:
             ids.add(int(v))
         except (TypeError, ValueError):
             continue
-    return ids
+    if not ids:
+        return ids
+    filing_ids = set(
+        (
+            await db.execute(
+                select(Source.id).where(
+                    Source.id.in_(sorted(ids)), Source.source_type == SourceType.filing
+                )
+            )
+        ).scalars().all()
+    )
+    return ids - filing_ids

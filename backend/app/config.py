@@ -146,6 +146,12 @@ class Settings(BaseSettings):
     # Phase 2 · #80 — additive story_weights bonus for a persona-matched research/expert cluster, so
     # "research in your field" reliably reaches the briefing top-8 without a singleton dominating.
     credibility_briefing_bonus: float = 0.15
+    # Phase 3 (official-sources) — India exchange filings (NSE per-company feeds). The filing tier is
+    # watchlist-only: on ingest, a `filing_watchlist`-flagged source keeps only items whose company
+    # (matched by name — these feeds carry no symbol) is in the AGGREGATE watchlist, attaches each to
+    # its org entity, and the feed shows it only to a user whose OWN watchlist/follows resolve to that
+    # entity. Off ⇒ those sources ingest nothing AND the read-path widening is skipped (byte-identical).
+    exchange_filings_enabled: bool = True
 
     # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
     # chain genuinely can't be verified in your environment.

@@ -6,13 +6,16 @@ import { Button } from "@/components/ui/Button";
 import { FeedArticleCard } from "@/components/FeedArticleCard";
 import { getFeed, type Article } from "@/lib/api";
 
-type SourceType = "all" | "news" | "research" | "expert" | "official";
+type SourceType = "all" | "news" | "research" | "expert" | "official" | "filing";
 const CHIPS: { label: string; value: SourceType }[] = [
   { label: "All", value: "all" },
   { label: "News", value: "news" },
   { label: "Research", value: "research" },
   { label: "Experts", value: "expert" },
   { label: "Official", value: "official" },
+  // Filings surface only a user's watchlisted companies (audience=[]); the chip is empty until they
+  // watchlist a company — the intended, honest behaviour, not a bug.
+  { label: "Filings", value: "filing" },
 ];
 type State = "loading" | "success" | "empty" | "error";
 

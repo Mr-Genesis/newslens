@@ -9,23 +9,22 @@ The health endpoint is tested separately since it bypasses dependency injection.
 import pytest
 import pytest_asyncio
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch, MagicMock
 
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.main import app
 from app.services.auth import get_current_user
 from app.models import (
     Article,
-    ClusterArticle,
     EmbeddingStatus,
-    FeedbackType,
-    Source,
+    Entity,
+    EntityAlias,
+    Follow,
     SourceType,
     StoryCluster,
     Topic,
+    User,
     UserFeedback,
 )
 
@@ -166,8 +165,6 @@ class MockSession:
         self._last_feedback_id = 100
 
     async def execute(self, stmt, *args, **kwargs):
-        stmt_str = str(stmt)
-
         # Detect which query is being run by inspecting the compiled SQL
         if hasattr(stmt, 'column_descriptions'):
             # Check what the select is targeting
@@ -178,6 +175,11 @@ class MockSession:
                         return MockExecuteResult(scalar=self.cluster)
                     if entity is Topic:
                         return MockExecuteResult(rows=self.topics)
+                    # Per-user gate/graph tables (Phase 3 filings read-path): this fake user has no
+                    # watchlist/follows/entities, so return empty — the feed stays byte-identical and
+                    # the default feed_articles fallback never gets unpacked as (value, entity_id).
+                    if entity in (Follow, Entity, EntityAlias, User):
+                        return MockExecuteResult(rows=[])
                     if entity is Article:
                         return MockExecuteResult(rows=self.feed_articles)
 
@@ -190,6 +192,11 @@ class MockSession:
 
     def add(self, obj):
         self.added_objects.append(obj)
+
+    async def get(self, model, pk, *args, **kwargs):
+        # This fake session has no persisted rows (feed data is served via execute) — return None so
+        # a `db.get(User, ...)` on the feed read-path degrades to "no watchlist" (byte-identical feed).
+        return None
 
     async def commit(self):
         self.committed = True

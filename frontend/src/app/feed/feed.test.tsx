@@ -18,15 +18,29 @@ const resp = (arts: unknown[]) => ({ articles: arts, total: arts.length, page: 1
 describe("FeedPage (#82)", () => {
   beforeEach(() => vi.mocked(getFeed).mockReset().mockResolvedValue(resp([article(1)])));
 
-  it("renders four chips, All selected, and fetches with no source_type on mount", async () => {
+  it("renders all chips, All selected, and fetches with no source_type on mount", async () => {
     render(<FeedPage />);
     await waitFor(() => expect(screen.getByText("Story 1")).toBeInTheDocument());
-    for (const label of ["All", "News", "Research", "Experts", "Official"]) {
+    for (const label of ["All", "News", "Research", "Experts", "Official", "Filings"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
     expect(screen.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
     expect(getFeed).toHaveBeenCalledTimes(1);
     expect(vi.mocked(getFeed).mock.calls[0]).toEqual([1, 20, undefined, undefined]); // 'all' → no filter
+  });
+
+  it("filters to filings and renders the FILING badge when the Filings chip is tapped", async () => {
+    render(<FeedPage />);
+    await waitFor(() => expect(screen.getByText("Story 1")).toBeInTheDocument());
+    vi.mocked(getFeed).mockResolvedValue(resp([article(3, "filing")]));
+
+    await userEvent.click(screen.getByRole("button", { name: "Filings" }));
+
+    await waitFor(() =>
+      expect(vi.mocked(getFeed).mock.calls.at(-1)).toEqual([1, 20, undefined, "filing"])
+    );
+    expect(screen.getByRole("button", { name: "Filings" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByText("FILING")).toBeInTheDocument();
   });
 
   it("filters to research when the Research chip is tapped", async () => {
