@@ -139,15 +139,15 @@ async def get_feed(
         )
     )
 
-    # #82: source-type filter chips ("All / News / Research / Experts"). Composes with the persona
-    # gate above — filtering to a tier never bypasses it. "news" = the non-gated tiers.
+    # #82: source-type filter chips ("All / News / Research / Experts / Official"). Composes with the
+    # persona gate above — filtering to a tier never bypasses it. "news" = the non-gated tiers.
     if source_type and source_type.lower() != "all":
         from fastapi import HTTPException
         st = source_type.lower()
-        _gated_types = [SourceType.research, SourceType.expert]
+        _gated_types = list(_audience.gated_source_types())
         if st == "news":
             type_cond = Source.source_type.notin_(_gated_types)
-        elif st in ("research", "expert"):
+        elif st in ("research", "expert", "official", "filing"):
             type_cond = Source.source_type == SourceType(st)
         else:
             raise HTTPException(status_code=400, detail="invalid source_type")
@@ -705,20 +705,22 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
         # user's profession tags gets a small additive lift so it reliably reaches the top-8. A
         # profession-less user has empty tags → never matches → briefing ordering is unchanged. An
         # audience-null general source (visible to everyone) is NOT "your field" → no bonus.
+        # official counts for the "in your field" bonus too (a Fed decision belongs in a finance
+        # user's top-8); filing never matches (audience=[] overlaps nothing) — safe in the same set.
+        _gated_tiers = _audience.gated_source_types()
         field_match = any(
             ca.article.source
-            and ca.article.source.source_type in (SourceType.research, SourceType.expert)
+            and ca.article.source.source_type in _gated_tiers
             and ca.article.source.audience
             and (set(ca.article.source.audience) & _tags)
             for ca in cluster.articles
         )
-        # #78: expose the gated tier (if any) so the card can show a RESEARCH/EXPERT badge.
+        # #78: expose the gated tier (if any) so the card can show a RESEARCH/EXPERT/OFFICIAL badge.
         tier = next(
             (
                 ca.article.source.source_type.value
                 for ca in cluster.articles
-                if ca.article.source
-                and ca.article.source.source_type in (SourceType.research, SourceType.expert)
+                if ca.article.source and ca.article.source.source_type in _gated_tiers
             ),
             None,
         )
@@ -852,20 +854,25 @@ async def get_discover_deck(
     MVP: returns recent articles with cluster context.
     """
     from app.config import settings as app_settings
+    from app.services import audience as _audience
 
-    _gated_types = [SourceType.research, SourceType.expert]
+    # ALL gated tiers (research/expert/official/filing) are excluded from the news pool, but the
+    # deck's random opt-in sample deliberately EXCLUDES filing — a stranger's 10-Q must never be a
+    # discover card. Filings reach users only via watchlist/follow.
+    _gated_types = list(_audience.gated_source_types())
+    _sample_types = [SourceType.research, SourceType.expert, SourceType.official]
     _opts = (
         selectinload(Article.source),
         selectinload(Article.topics).selectinload(ArticleTopic.topic),
     )
     # #83: the discover deck is the OPT-IN surface for the gated tiers. Reserve up to ~5 slots for
-    # research/expert cards regardless of the user's profession (this is exactly where a non-matching
-    # user discovers and follows them); fill the rest from the NON-gated (news) pool so gated cards
-    # only ever arrive via this flagged reserved sample — never unflagged through the main pool.
+    # research/expert/official cards regardless of the user's profession (this is exactly where a
+    # non-matching user discovers and follows them); fill the rest from the NON-gated (news) pool so
+    # gated cards only ever arrive via this flagged reserved sample — never through the main pool.
     gated_result = await db.execute(
         select(Article).options(*_opts)
         .join(Source, Article.source_id == Source.id)
-        .where(Article.snippet.isnot(None), Source.source_type.in_(_gated_types))
+        .where(Article.snippet.isnot(None), Source.source_type.in_(_sample_types))
         .order_by(func.random())
         .limit(app_settings.discover_gated_slots)
     )
@@ -1832,10 +1839,10 @@ async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="name and url are required")
     rss_url = (body.get("rss_url") or "").strip() or None
 
-    # Gated tiers (research/expert) are admission-controlled: no vetting score, no publish.
+    # Gated tiers are admission-controlled: no vetting score, no publish.
     source_type = body.get("source_type", "other")
     credibility_score = body.get("credibility_score")
-    if source_type in ("research", "expert") and credibility_score is None:
+    if source_type in ("research", "expert", "official", "filing") and credibility_score is None:
         raise HTTPException(
             status_code=400,
             detail="research/expert sources require a credibility_score",

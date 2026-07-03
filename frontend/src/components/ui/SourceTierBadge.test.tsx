@@ -32,4 +32,14 @@ describe("SourceTierBadge (Phase 2 · #78)", () => {
     const { container } = render(<SourceTierBadge sourceType={null} />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("shows an OFFICIAL badge for an official (regulator/gov) source", () => {
+    render(<SourceTierBadge sourceType="official" />);
+    expect(screen.getByText("OFFICIAL")).toBeInTheDocument();
+  });
+
+  it("shows a FILING badge for a per-company disclosure source", () => {
+    render(<SourceTierBadge sourceType="filing" />);
+    expect(screen.getByText("FILING")).toBeInTheDocument();
+  });
 });

@@ -31,3 +31,34 @@ def test_best_body_uses_summary_when_no_content():
 
 def test_best_body_empty_when_neither():
     assert _best_body(SimpleNamespace()) == ""
+
+
+# ── official-sources Phase 1 hygiene ──
+from app.services.fetcher import _fetch_timeout, _is_probably_english, _normalize_link  # noqa: E402
+
+
+def test_normalize_link_fixes_sebi_double_prefix():
+    # SEBI's feed emits https://www.sebi.gov.in/https://www.sebi.gov.in/...pdf
+    bad = "https://www.sebi.gov.in/https://www.sebi.gov.in/enforcement/orders/jul-2026/order.pdf"
+    assert _normalize_link(bad) == "https://www.sebi.gov.in/enforcement/orders/jul-2026/order.pdf"
+
+
+def test_normalize_link_leaves_good_urls_alone():
+    good = "https://www.rbi.org.in/Scripts/NotificationUser.aspx?Id=12898"
+    assert _normalize_link(good) == good
+    # a URL legitimately containing http in a query param must survive
+    q = "https://ex.example/redirect?url=https%3A%2F%2Fother.example"
+    assert _normalize_link(q) == q
+
+
+def test_is_probably_english():
+    assert _is_probably_english("RBI issues Master Direction on digital lending") is True
+    # Devanagari (the PIB Hindi failure mode)
+    assert _is_probably_english("प्रधानमंत्री ने उद्घाटन किया") is False
+
+
+def test_fetch_timeout_honors_slow_source_meta():
+    fast = SimpleNamespace(credibility_meta=None)
+    slow = SimpleNamespace(credibility_meta={"fetch_timeout": 45})  # NITI needs >20s
+    assert _fetch_timeout(fast) == 30.0
+    assert _fetch_timeout(slow) == 45.0

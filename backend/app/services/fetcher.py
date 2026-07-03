@@ -95,7 +95,7 @@ async def backfill_topic_assignments():
     """Batch job: assign topics to articles with embeddings but no topic assignments."""
     async with async_session() as session:
         # Find articles with embeddings but no topic assignments
-        from sqlalchemy import exists, and_
+        from sqlalchemy import exists
         from app.models import EmbeddingStatus
 
         result = await session.execute(
@@ -242,6 +242,37 @@ def _best_body(entry) -> str:
     return content if len(content) > len(summary) else summary
 
 
+def _normalize_link(link: str) -> str:
+    """Fix double-prefixed item links (SEBI emits https://www.sebi.gov.in/https://www.sebi.gov.in/…).
+
+    If a second scheme appears in the PATH (i.e. '/http://' or '/https://'), keep from there — the
+    inner URL is the real one. Encoded schemes in query strings (%3A%2F%2F) are untouched."""
+    for marker in ("/https://", "/http://"):
+        idx = link.find(marker)
+        if idx != -1:
+            return link[idx + 1:]
+    return link
+
+
+def _is_probably_english(text: str) -> bool:
+    """Cheap English guard (no LLM): the ASCII share of a Hindi/CJK title is tiny, an English one
+    is ~1.0. Used only for sources flagged credibility_meta.english_guard (PIB serves Hindi today)."""
+    if not text:
+        return True
+    ascii_chars = sum(1 for ch in text if ord(ch) < 128)
+    return (ascii_chars / len(text)) >= 0.85
+
+
+def _fetch_timeout(source) -> float:
+    """Per-source fetch timeout: credibility_meta.fetch_timeout override, else 30s (NITI's server
+    needs ~45s — a hard 30s made it flap)."""
+    meta = getattr(source, "credibility_meta", None) or {}
+    try:
+        return float(meta.get("fetch_timeout") or 30.0)
+    except (TypeError, ValueError):
+        return 30.0
+
+
 def parse_pub_date(entry) -> datetime | None:
     """Parse publication date from a feed entry, handling various formats."""
     for field in ("published_parsed", "updated_parsed"):
@@ -270,7 +301,7 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
         return 0
 
     try:
-        response = await client.get(source.rss_url, timeout=30.0)
+        response = await client.get(source.rss_url, timeout=_fetch_timeout(source))
         response.raise_for_status()
     except httpx.HTTPError as e:
         logger.warning("rss_fetch_failed", source=source.name, error=str(e))
@@ -297,9 +328,16 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
             if not title or not link:
                 continue
 
+            # English-only guard for flagged sources (PIB currently serves Hindi despite Lang=1;
+            # non-English titles would pollute the English embedding space).
+            if (source.credibility_meta or {}).get("english_guard") and not _is_probably_english(title):
+                continue
+
             # Resolve relative URLs
             if link.startswith("/"):
                 link = source.url.rstrip("/") + link
+            # Fix double-prefixed links (SEBI) — also keeps dedup keys sane.
+            link = _normalize_link(link)
 
             # Card snippet from summary/content; keep the FULL text as the body (Wave D1).
             # Take the richer of summary/content — full-text feeds ship both, and the old

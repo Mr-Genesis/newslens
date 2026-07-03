@@ -6,12 +6,13 @@ import { Button } from "@/components/ui/Button";
 import { FeedArticleCard } from "@/components/FeedArticleCard";
 import { getFeed, type Article } from "@/lib/api";
 
-type SourceType = "all" | "news" | "research" | "expert";
+type SourceType = "all" | "news" | "research" | "expert" | "official";
 const CHIPS: { label: string; value: SourceType }[] = [
   { label: "All", value: "all" },
   { label: "News", value: "news" },
   { label: "Research", value: "research" },
   { label: "Experts", value: "expert" },
+  { label: "Official", value: "official" },
 ];
 type State = "loading" | "success" | "empty" | "error";
 
