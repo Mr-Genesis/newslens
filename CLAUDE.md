@@ -41,7 +41,7 @@ cd frontend && npm run apk:debug               # Build debug APK via Gradle
 
 NewsLens is an AI-powered news intelligence platform. Two-language stack: Python backend (data pipeline + ML) and TypeScript frontend (UI). They communicate via REST JSON — no shared types needed. Mobile builds use Capacitor to wrap the Next.js static export into a native Android WebView app.
 
-**Stack:** Next.js 16 App Router, React 19, Tailwind CSS 4, Framer Motion, Python FastAPI, PostgreSQL + pgvector, multi-provider LLM (OpenAI embeddings + OpenAI/Anthropic/Gemini generation), Firebase Admin SDK (auth), APScheduler, Capacitor (Android) + `@capacitor/splash-screen`
+**Stack:** Next.js 16 App Router, React 19, Tailwind CSS 4, Framer Motion, Python FastAPI, PostgreSQL + pgvector, multi-provider LLM (Gemini embeddings + Gemini/OpenAI/Anthropic generation), Firebase Admin SDK (auth), APScheduler, Capacitor (Android) + `@capacitor/splash-screen`
 
 **Key architectural decisions:**
 - pgvector nearest-neighbor SQL for clustering (not Python pairwise — O(n) vs O(n²))
@@ -50,7 +50,7 @@ NewsLens is an AI-powered news intelligence platform. Two-language stack: Python
 - `rapidfuzz` for title dedup (10-100x faster than python-Levenshtein)
 - `asyncpg` (not psycopg2) to preserve FastAPI's async benefits
 - Multi-user via Firebase Auth + Postgres RLS: `get_current_user` verifies the ID token and sets the GUC `app.user_id`; per-user tables (`user_feedback`, `user_preferences`, `user_settings`, `follows`, `user_entity_relevance`) are RLS-scoped. `AUTH_REQUIRED=false` keeps the single-user dev fallback (`user_id` FK still everywhere)
-- Multi-provider LLM generation (BYOM): OpenAI / Anthropic / Gemini, per-user encrypted key + model selection (`active_provider` + `model_prefs` JSONB), env-var platform fallback for background jobs; embeddings always OpenAI
+- Multi-provider LLM generation (BYOM): Gemini / OpenAI / Anthropic, per-user encrypted key + model selection (`active_provider` + `model_prefs` JSONB), env-var platform fallback for background jobs; embeddings on Gemini (`text-embedding-004`, 768-dim)
 - Knowledge graph: a global entity backbone (G1) + a per-user entity-relevance overlay (G2) personalize ranking across the cast strip, feed, briefing, and search (gated by `UER_ENABLED`, on by default; zero-signal users are a no-op)
 - Per-user API keys Fernet-encrypted in `user_settings` (+ env fallback)
 - Capacitor static export with conditional `next.config.ts` (`BUILD_TARGET=capacitor`)
@@ -78,7 +78,7 @@ news-app/
 │   │       ├── fetcher.py            # RSS feed fetcher (feedparser + httpx)
 │   │       ├── gdelt.py              # GDELT API integration (URL discovery + trafilatura)
 │   │       ├── dedup.py              # Deduplication (URL match + rapidfuzz title similarity)
-│   │       ├── embeddings.py         # OpenAI embedding generation + backfill (always OpenAI)
+│   │       ├── embeddings.py         # Gemini embedding generation + backfill (text-embedding-004)
 │   │       ├── clustering.py         # pgvector nearest-neighbor story clustering
 │   │       ├── encryption.py         # Fernet encryption for per-user API keys
 │   │       ├── llm.py                # Multi-provider LLM generation (OpenAI/Anthropic/Gemini)
@@ -183,7 +183,7 @@ news-app/
 
 1. **RSS Fetcher** (every 10 min) → feedparser → dedup → articles table
 2. **GDELT Fetcher** (every 15 min) → GDELT API → trafilatura extraction → dedup → articles table
-3. **Embedding Backfill** (every 5 min) → OpenAI text-embedding-3-small → pgvector
+3. **Embedding Backfill** (every 5 min) → Gemini text-embedding-004 (768-dim) → pgvector
 4. **Clustering** (every 10 min) → pgvector cosine distance (threshold 0.15) → story_clusters table
 5. **Entity Extraction Backfill** (every 15 min, on by default via `GRAPH_EXTRACTION_ENABLED`; needs a platform LLM key, skips gracefully without one) → LLM extraction over settled clusters → entities / entity_aliases / article_entities (G1)
 
@@ -195,7 +195,7 @@ news-app/
 - **Explore/exploit:** Feed is 70% exploit (user's topics) + 30% explore (new topics). Ratio adjusts 10-50% based on feedback.
 - **G1 entity backbone:** LLM extraction (gated by `GRAPH_EXTRACTION_ENABLED`) populates `entities` / `entity_aliases` / `article_entities`. Resolution is exact-then-alias on normalized (`*_norm`) columns with plain b-tree indexes (no functional `lower()` index — avoids autogenerate drift). No embedding NN / auto-merge in G1 (deferred). Cast strip = `GET /clusters/{id}/entities`; reverse "appears in" rail = `GET /entities/{id}/clusters`.
 - **G2 per-user overlay + personalization:** `follows.entity_id` + the RLS-scoped `user_entity_relevance` table capture per-user affinity (follow + positive feedback → `bump_relevance`), decayed at read time (half-life `exp(-ln2·age/half_life)`, age clamped ≥0). One shared scorer `entities.score_clusters_relevance` (= `AVG(decayed)`, no salience term → zero-signal users are a no-op) personalizes the cast strip, feed (recency+relevance blend over a bounded pool), briefing (additive into story_weights), and search (within-tier boost). Gated by `UER_ENABLED` (on by default); each surface is byte-identical when off.
-- **BYOM (multi-provider LLM):** `generate()` resolves the per-user `active_provider` → OpenAI/Anthropic/Gemini, model via `model_prefs` JSONB → config default. Per-provider Fernet-encrypted keys in `user_settings`; env keys are the platform fallback for background jobs. Embeddings stay on OpenAI. Anthropic uses assistant-prefill `"{"` for deterministic JSON.
+- **BYOM (multi-provider LLM):** `generate()` resolves the per-user `active_provider` → Gemini/OpenAI/Anthropic, model via `model_prefs` JSONB → config default (env default `gemini`). Per-provider Fernet-encrypted keys in `user_settings`; env keys are the platform fallback for background jobs. Embeddings run on Gemini (`text-embedding-004`). Anthropic uses assistant-prefill `"{"` for deterministic JSON.
 - **Auth + RLS:** `get_current_user` verifies the Firebase ID token and sets `SET LOCAL app.user_id` per request; RLS policies on per-user tables are enforce-when-set (permissive for background jobs). `AUTH_REQUIRED=false` falls back to the default user (single-user dev). RLS only bites under a non-superuser DB role (`backend/scripts/create_app_role.sql`); the explicit `current_user_id()` filter is the primary control. A startup `check_rls_posture` logs a warning when the connection is a superuser.
 - **Graceful degradation:** LLM generation degrades by provider — a user with any one valid provider key keeps working if another is down. Summaries fail soft: `get_cluster` / `get_briefing` call `summarize_cluster` on demand when a cluster lacks a cached summary (logged, no user-facing error). If embeddings lag, articles ingest without them and fall back to snippet discovery.
 - **Per-user API key:** Fernet-encrypted in `user_settings` (OpenAI/Gemini/Anthropic). Falls back to the matching `*_API_KEY` env var if no per-user key.

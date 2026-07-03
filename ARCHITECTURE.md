@@ -4,7 +4,7 @@
 
 NewsLens is a two-language AI news intelligence platform: Python backend (data pipeline + ML) and TypeScript frontend (UI), communicating via REST JSON. Mobile builds use Capacitor to wrap the frontend into a native Android WebView.
 
-Beyond the ingest→cluster→summarize core, the platform now layers on: **multi-provider LLM generation** (BYOM — OpenAI/Anthropic/Gemini, per-user key + model; embeddings stay OpenAI), **Firebase auth + Postgres RLS** for multi-user identity (single-user dev fallback), a **knowledge graph** (G1 global entity backbone + G2 per-user entity-relevance overlay), and **on-by-default personalization** that re-ranks the cast strip, feed, briefing, and search from one shared relevance scorer (a zero-signal user is a no-op). See the Decision Log for the rationale behind each.
+Beyond the ingest→cluster→summarize core, the platform now layers on: **multi-provider LLM generation** (BYOM — Gemini/OpenAI/Anthropic, per-user key + model; embeddings on Gemini `text-embedding-004`), **Firebase auth + Postgres RLS** for multi-user identity (single-user dev fallback), a **knowledge graph** (G1 global entity backbone + G2 per-user entity-relevance overlay), and **on-by-default personalization** that re-ranks the cast strip, feed, briefing, and search from one shared relevance scorer (a zero-signal user is a no-op). See the Decision Log for the rationale behind each.
 
 ## System Diagram
 
@@ -26,10 +26,10 @@ graph TB
 
         subgraph "Services"
             DEDUP[Dedup Service<br/>URL + rapidfuzz]
-            EMB[Embedding Service<br/>OpenAI text-embedding-3-small]
+            EMB[Embedding Service<br/>Gemini text-embedding-004]
             CLUST[Clustering Service<br/>pgvector cosine distance]
             ENC[Encryption Service<br/>Fernet]
-            LLM[LLM Generation<br/>OpenAI/Anthropic/Gemini]
+            LLM[LLM Generation<br/>Gemini/OpenAI/Anthropic]
             AUTH[Auth + RLS<br/>Firebase / app.user_id]
             REL[Relevance Scorer<br/>G2 personalization]
         end
@@ -113,7 +113,7 @@ sequenceDiagram
 
     loop Every 5 min
         DB->>Embed: SELECT WHERE embedding_status IN (pending, failed)
-        Embed->>Embed: OpenAI text-embedding-3-small
+        Embed->>Embed: Gemini text-embedding-004
         Embed->>DB: UPDATE embedding + status=complete
     end
 

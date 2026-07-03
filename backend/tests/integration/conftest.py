@@ -208,7 +208,7 @@ def fake_llm(monkeypatch):
             return "STUB SUMMARY"
         return _schema_shape(prompt)
 
-    async def _embed(_text):
+    async def _embed(_text, *, task_type=None):
         calls["embed"] += 1
         from app.config import settings as _s
         v = [0.0] * _s.embedding_dimensions

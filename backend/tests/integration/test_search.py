@@ -112,7 +112,7 @@ async def test_query_embedding_cached(aclient, db_session, monkeypatch):
 
     calls = {"n": 0}
 
-    async def _spy_embed(_text):
+    async def _spy_embed(_text, *, task_type=None):
         calls["n"] += 1
         v = [0.0] * settings.embedding_dimensions
         v[0] = 1.0
