@@ -86,6 +86,9 @@ async def run_clustering():
         assigned_to_existing=assigned,
         new_clusters=new_clusters,
     )
+    if new_clusters > 0:
+        from app.services import events  # #96: signal live clients that new stories formed
+        events.publish("new_cluster", {"count": new_clusters})
 
 
 async def link_cluster(session: AsyncSession, cluster_id: int, max_background: int = 3) -> None:

@@ -1972,6 +1972,25 @@ async def admin_breadth(days: int = Query(None, ge=1, le=365), db: AsyncSession 
     }
 
 
+async def _sse_stream():
+    """#101: yield hub events as SSE frames. On client disconnect, sse-starlette cancels this
+    generator → the hub subscription's finally unregisters the queue (no leak)."""
+    import json as _json
+
+    from app.services import events as _events
+    async for evt in _events.hub.subscribe():
+        yield {"event": evt["type"], "data": _json.dumps(evt["data"])}
+
+
+@router.get("/events")
+async def sse_events():
+    """Unauthenticated global signal channel (ids/counts only, never per-user data) — a client uses
+    it to know WHEN to re-fetch, then hits the normal (authenticated) endpoints for the content."""
+    from sse_starlette.sse import EventSourceResponse
+
+    return EventSourceResponse(_sse_stream())
+
+
 # ── E4: hybrid search (semantic + keyword; keyword ranks above semantic-only) ──
 @router.get("/search", dependencies=[Depends(get_current_user)])
 async def search(
