@@ -14,6 +14,7 @@
   analysis/5Ws/profession lenses, **per-persona Impact engine v2 (structured + guarded, Wave A)**,
   strategic lens, trivia/daily quiz
 - **Knowledge graph (Wave D Phase 3):** G1 global entity backbone (entities/aliases/article links + cast strip) and G2 per-user entity-relevance overlay; **personalized ranking across cast strip + feed + briefing + search, ON by default (`UER_ENABLED`)** — zero-signal users are a no-op
+- **Source expansion (Phases 1–3, PR #77/#84/#91):** persona-gated **research + expert** source tiers with credibility scoring, tier badges, credibility-weighted feed rank, follow-a-source opt-in, admin + monthly-LLM credibility review, and weekly **PubMed / arXiv** personal research feeds — 117-source union (45 gated). See **Source Expansion** section below.
 - **Auth (Wave D Phase A):** Firebase (Google + Email/Password), `get_current_user` + Postgres RLS on per-user tables; `AUTH_REQUIRED=false` keeps single-user dev
 - Feedback-driven explore/exploit (0.3 is now only a cold-start fallback; swipes move weights)
 - Design system: Full spec + CSS token implementation
@@ -35,7 +36,11 @@
 - 🔜 **Still open:** the deferred **G3 graph work** (embedding-NN entity resolution / reversible
   auto-merge, multi-hop recursive-CTE lenses — correctly gated behind real-user volume + a co-typed-homonym
   precision fixture, see `docs/moat/09`), the two unbuilt endpoints (**`GET /events`** SSE §1.3,
-  **`GET /admin/breadth`** §2.2), discover **"tension lines"** §3.1, and **native push** (Wave C2 on-device half).
+  **`GET /admin/breadth`** §2.2), the **`/feed?source_type=…` filter-chip UI** (#82 — the API filter +
+  `getFeed(sourceType)` shipped; the chip UI waits on a rendered feed screen), the **PubMed `source_hash`
+  cache-widening** (§2b, tracked above), discover **"tension lines"** §3.1, and **native push** (Wave C2
+  on-device half). The plan's **PubMed RSS GUID path was rejected** (403 from NCBI) — PubMed ingest uses
+  E-utilities esearch/efetch instead.
 
 ---
 
@@ -60,7 +65,7 @@ Implement `GET /events` for real-time feed updates. Events: `new_article`, `new_
 Required for the APK to work on real devices (currently points to `10.0.2.2:8000` which only works in emulator). Options: Fly.io, Render, or Railway. Docker setup already exists.
 
 ### 2.2 Admin Endpoints
-Implement `GET /admin/sources` (source health: last fetch time, error rate, article count) and `GET /admin/breadth` (evaluation metrics: topic coverage, source diversity).
+`GET`/`POST /admin/sources` shipped (list + upsert; upsert requires a `credibility_score` for research/expert tiers, 0–100), plus `PUT /admin/sources/{id}/credibility` (#85 — admin applies a score + rationale, stamps `reviewed_by="admin"` to lock the row against the seed re-upsert). Still open: `GET /admin/breadth` (evaluation metrics: topic coverage, source diversity).
 
 ### 2.3 Test Coverage Gaps
 Current tests cover API layer + encryption + settings. Missing:
@@ -92,6 +97,35 @@ Landscape card sizing per design-system.md: `min(360px, 60vh)` card height, perc
 
 ### 3.5 Custom App Icon ✅ Shipped
 The default Capacitor robot is gone — adaptive launcher icon, native splash, and web/PWA favicons are regenerated from the official NewsLens brand kit. See [Brand & App Identity](design-system.md#brand--app-identity).
+
+---
+
+## Source Expansion (Phases 1–3) ✅ Shipped
+
+Adds persona-gated **research** + **expert** source tiers on top of the news feed: high-credibility sources are shown only to a matching profession or an explicit follower, with credibility scoring, badges, ranking, and personal research feeds.
+
+### Phase 1 — Tiers + persona gating (PR #77)
+- `SourceType` gains **research** / **expert**; migration `b2c3d4e5f6a7` adds 6 nullable `sources` columns: `author_name`, `credibility_score` (0–100), `credibility_meta` (JSONB), `audience` (text[]), `is_preprint`, `per_fetch_cap`.
+- `services/audience.py`: `tags_for_profession()` → tags; `allowed_source_ids(tags, floor, followed)` → subquery. A gated source is shown only above a credibility floor **and** with a matching audience (feed floor **55**, briefing floor **70** — `credibility_feed_floor` / `credibility_briefing_floor`).
+- `fetcher._upsert_sources` admin-lock: a `credibility_meta.reviewed_by == "admin"` row survives the 10-min seed re-upsert; `per_fetch_cap` enforced; `_best_body` takes the longer of summary vs `content:encoded`.
+- `POST /admin/sources` requires `credibility_score` for research/expert (400) and validates 0–100. `sources.json` is a **117-source union (45 gated)**; `SourceOut` exposes `author_name` / `credibility_score` / `is_preprint`.
+
+### Phase 2 — Badges + ranking + follow-source (PR #84)
+- Frontend `SourceTierBadge` (RESEARCH / EXPERT + author + score; PREPRINT + "not peer-reviewed") on StoryCard / SourceCard / DiscoverCard; `BriefingStory` gains a `tier` field (#78).
+- Feed-rank credibility multiplier ×`(0.9 + 0.2·score/100)`, bounded `[0.9, 1.1]`; NULL (news) → neutral **75** (`credibility_rank_neutral`), clamped 0–100 (#79).
+- Briefing **+0.15** `story_weights` bonus for a persona-matched gated cluster (`credibility_briefing_bonus`) (#80).
+- Follow-a-source opt-in: `follows.kind = "source"` (zero migration); `allowed_source_ids` gains an OR-followed branch that bypasses **both** the floor and the audience match; frontend `FollowButton` "source" kind on SourceCard (#81).
+- `GET /feed?source_type=news|research|expert` filter (invalid → 400); `getFeed(sourceType)` in the API client (#82). **The filter-chip UI is deferred** — no rendered feed screen yet.
+- Discover deck reserves up to **5** gated cards (`discover_gated_slots`) + a follow affordance; `DiscoverCardOut` gains `source_id` / `source_type` / `is_gated` / `is_preprint` / `author_name` / `credibility_score` (#83).
+
+### Phase 3 — Credibility ops + personal research feeds (PR #91, backend-only, no new migration)
+- `PUT /admin/sources/{id}/credibility` — admin applies a score + rationale, stamps `reviewed_by="admin"`; 400 out-of-range, 404 unknown (#85).
+- `services/credibility.py` `review_credibility()` — **monthly** cron, **propose-only**: writes `credibility_meta.proposed_score` + `reviewed_by="llm-proposed"` for gated rows unreviewed >90d (`credibility_review_stale_days`); never touches the live score, preserves the admin lock, no-ops without a platform LLM key (#90).
+- `services/pubmed.py` — NCBI E-utilities adapter (esearch JSON, efetch XML) + `ingest_pubmed()` **weekly** cron: maps a medical profession → search term, ingests recent abstracts as gated research articles (`audience=["medicine"]`), ≤3 req/s throttle, optional `ncbi_api_key`, deduped by PMID (`pubmed_enabled` / `pubmed_min_request_interval` 0.34 / `pubmed_retmax` 25) (#86).
+- `services/arxiv_gen.py` — maps subscribed-topic interests → arXiv categories (cs.CV, cs.RO, q-bio, …) and idempotently ensures those research sources; **weekly** cron (#87).
+- `audience.resolve_tags()` — keyword map fast path + LLM classifier fallback constrained to the fixed tag vocabulary, cached per user on `persona_version`; wired into the feed + briefing gates; no key → keyword-only (#88).
+- `entities._extraction_candidates()` — research-tier clusters extract at **1** source (`graph_extract_research_min_sources`); news keeps the min-2 "settled" bar (#89).
+- Three new APScheduler cron jobs in `main.py`: `credibility_review` (monthly, 1st @ 03:00), `pubmed_ingest` (weekly Mon 04:00), `arxiv_generate` (weekly Mon 04:30).
 
 ---
 

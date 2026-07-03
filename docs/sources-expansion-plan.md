@@ -1,5 +1,11 @@
 # NewsLens Source Expansion — Final Plan (for approval)
 
+> **STATUS — SHIPPED (all three phases merged to master).** This document is the record of intent; the plan below was executed largely as written.
+> - **Phase 1 — Seed + gate** → **PR #77.** `research`/`expert` enum + 6 nullable `sources` columns (migration `b2c3d4e5f6a7`); `audience.py` persona gate (feed floor 55, briefing floor 70); `_upsert_sources` admin-lock + `per_fetch_cap` + `_best_body` fetcher fixes; expert-score validation on `POST /admin/sources`. `sources.json` is a 117-source union (45 gated).
+> - **Phase 2 — Badges + ranking + opt-in** → **PR #84.** `SourceTierBadge` (RESEARCH/EXPERT/PREPRINT) on StoryCard/SourceCard/DiscoverCard; feed-rank credibility multiplier ×[0.9, 1.1]; briefing +0.15 story-weight bonus; follow-source (`follows.kind="source"`); discover deck reserves up to 5 gated cards; `GET /feed?source_type=` filter + `getFeed(sourceType)` client.
+> - **Phase 3 — Credibility ops + personal research feeds** → **PR #91** (backend-only, no new migration). `PUT /admin/sources/{id}/credibility` (apply + lock); monthly propose-only LLM review (`credibility.py`); weekly PubMed E-utilities adapter (`pubmed.py`) + arXiv-by-interest generator (`arxiv_gen.py`); LLM profession→tags fallback (`resolve_tags`); research clusters extract entities at 1 source. Three new APScheduler crons in `main.py`.
+> - **DEFERRED (not shipped):** the §5.5/Phase-2 feed filter **chip UI** — the `?source_type=` API and `getFeed(sourceType)` client shipped, but there is no rendered `/feed` screen to host the chips yet.
+
 **Date:** 2026-07-03 · **Scope:** 3 new source tiers on top of the current 39 seeds · **Verification standard:** every proposed feed was fetched live with `curl --max-time 25 -A "NewsLens/0.1 (RSS Reader)"`; VERIFIED = HTTP 200 + XML/RSS/Atom marker in first 2KB (freshness spot-checked; identity confirmed via feed `<title>` for all Substacks). Unverified feeds are in Appendix A, not the seed list.
 
 ---

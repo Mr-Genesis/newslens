@@ -56,6 +56,17 @@ Copy `.env.example` and fill in:
 | `AUTH_REQUIRED` | No | `true` rejects unauthenticated requests with 401 (multi-user prod). Default `false` |
 | `GRAPH_EXTRACTION_ENABLED` | No | Entity-extraction backfill job (G1). **On by default**; needs a platform LLM key (skips without one). Set `false` to disable |
 | `UER_ENABLED` | No | Per-user entity-relevance personalization (G2). **On by default**; `false` disables it everywhere |
+| `NCBI_API_KEY` | No | PubMed (NCBI E-utilities) key for the weekly research-ingest cron. Raises the rate ceiling; the job self-throttles either way and runs unauthenticated without it |
+| `PUBMED_ENABLED` | No | PubMed research-ingest cron (maps a medical persona → search term → gated research articles). **On by default**; `false` disables ingestion |
+
+> **Source-expansion knobs (Phase 1-3):** the credibility floors (`credibility_feed_floor` 55 /
+> `credibility_briefing_floor` 70 — below the floor a gated source is discover/search-only or kept out of
+> the briefing), `discover_gated_slots` (5 reserved research/expert cards in the discover deck),
+> `graph_extract_research_min_sources` (1 — research clusters are singletons, so they get entity extraction
+> without the news min-2 "settled" bar), `credibility_review_stale_days` (90 — monthly LLM re-proposal
+> window) and the `pubmed_*` throttle/retmax all have working defaults in `backend/app/config.py`.
+> Each is the uppercased field name as an env var (`env_prefix=""`). Override in `.env` only to tune;
+> **don't duplicate the full list here — read `config.py`.**
 
 Generate an encryption key:
 ```bash
@@ -80,6 +91,13 @@ cd backend && pytest -v             # Verbose output
 cd frontend && npx vitest run       # Unit tests
 cd frontend && npx playwright test  # E2E tests (requires running servers)
 ```
+
+> **Source-expansion suites (Phase 1-3):** the research/expert tiers, persona gating, credibility
+> ranking, PubMed/arXiv ingest and the credibility-ops endpoints are covered under
+> `backend/tests/unit/` (`test_audience.py`, `test_pubmed_adapter.py`, `test_arxiv_gen.py`,
+> `test_config_g2.py`) and `backend/tests/integration/` (`test_source_expansion.py`, the
+> `test_phase2_*.py` ranking/discover/follow-source/filter tests, and the `test_phase3_*.py`
+> credibility-ops/pubmed/arxiv/classifier/entity-relax tests). Run the whole thing with `pytest`.
 
 ## Building Android APK
 

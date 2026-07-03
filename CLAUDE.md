@@ -83,7 +83,11 @@ news-app/
 │   │       ├── encryption.py         # Fernet encryption for per-user API keys
 │   │       ├── llm.py                # Multi-provider LLM generation (OpenAI/Anthropic/Gemini)
 │   │       ├── auth.py               # Firebase ID-token verify + get_current_user (sets GUC app.user_id)
-│   │       └── entities.py           # G1/G2 entity backbone: extraction, resolution, relevance scorer
+│   │       ├── entities.py           # G1/G2 entity backbone: extraction, resolution, relevance scorer
+│   │       ├── audience.py           # Source-expansion gate: profession→tags, allowed_source_ids subquery
+│   │       ├── credibility.py        # Monthly propose-only LLM credibility review (writes proposed_score)
+│   │       ├── pubmed.py             # NCBI E-utilities adapter + weekly PubMed research ingestion
+│   │       └── arxiv_gen.py          # Weekly arXiv-by-interest research source generation
 │   ├── tests/
 │   │   ├── conftest.py               # Pytest fixtures + test DB setup
 │   │   ├── test_api.py               # API endpoint tests
@@ -119,6 +123,7 @@ news-app/
 │   │   │       ├── AISummaryBox.tsx  # AI-generated summary display
 │   │   │       ├── Badge.tsx         # Topic/category badge
 │   │   │       ├── ConfidenceScore.tsx # src:N · coh:0.XX display
+│   │   │       ├── SourceTierBadge.tsx # RESEARCH / EXPERT (+author +score) / PREPRINT tier badge
 │   │   │       └── Skeleton.tsx      # Skeletons: StoryCard / DeepDive / StoryLoading
 │   │   └── lib/
 │   │       ├── api.ts                # API client (env-aware base URL)
@@ -142,6 +147,7 @@ news-app/
 | GET | /health | Health check (DB status) |
 | GET | /feed | Paginated feed with explore/exploit mix |
 | GET | /feed?topic={id} | Topic-filtered feed |
+| GET | /feed?source_type={news\|research\|expert} | Source-tier-filtered feed (invalid → 400; chip UI deferred) |
 | GET | /clusters/{id} | Story cluster with all source articles (free first) |
 | GET | /topics | All topics grouped: your_topics, explore, trending |
 | POST | /feedback | Record user feedback (interesting/less/save/share) |
@@ -171,9 +177,10 @@ news-app/
 | GET | /clusters/{id}/strategic | Game-theory lens (geopolitics-gated) |
 | GET | /clusters/{id}/trivia | Story quiz (easy/medium/hard) |
 | GET | /trivia/daily | Daily quiz by topic |
-| GET/POST/DELETE | /follows[ /{id}] | List / add / remove a follow (topic, entity, or saved search) (Wave C) |
+| GET/POST/DELETE | /follows[ /{id}] | List / add / remove a follow (topic, entity, saved search, or source) (Wave C; `kind=source` value = source id) |
 | GET | /digest | Personalized digest of followed topics/entities (Wave C) |
-| GET/POST | /admin/sources | List / upsert sources |
+| GET/POST | /admin/sources | List / upsert sources (research/expert require credibility_score, 0-100 → else 400) |
+| PUT | /admin/sources/{id}/credibility | Admin applies a score + rationale; stamps reviewed_by="admin" (400 out-of-range, 404 unknown) |
 | GET | /search | Hybrid semantic + keyword search (G2 within-tier relevance boost) |
 | GET | /auth/me | Current authenticated user (Firebase) |
 
@@ -186,6 +193,9 @@ news-app/
 3. **Embedding Backfill** (every 5 min) → Gemini gemini-embedding-001 (768-dim) → pgvector
 4. **Clustering** (every 10 min) → pgvector cosine distance (threshold 0.15) → story_clusters table
 5. **Entity Extraction Backfill** (every 15 min, on by default via `GRAPH_EXTRACTION_ENABLED`; needs a platform LLM key, skips gracefully without one) → LLM extraction over settled clusters → entities / entity_aliases / article_entities (G1)
+6. **Credibility Review** (monthly, 03:00 on the 1st) → propose-only LLM pass over gated rows unreviewed >90d → writes `credibility_meta.proposed_score` + `reviewed_by="llm-proposed"`; never touches the live score, preserves the admin lock, no-ops without a platform LLM key
+7. **PubMed Ingest** (weekly, Mon 04:00; gated by `PUBMED_ENABLED`) → NCBI E-utilities → recent abstracts for each medical profession as gated research articles (`audience=["medicine"]`), deduped by PMID, ≤3 req/s
+8. **arXiv Generate** (weekly, Mon 04:30) → maps subscribed-topic interests to arXiv categories and idempotently ensures those research sources
 
 ## Key Patterns
 
@@ -195,6 +205,10 @@ news-app/
 - **Explore/exploit:** Feed is 70% exploit (user's topics) + 30% explore (new topics). Ratio adjusts 10-50% based on feedback.
 - **G1 entity backbone:** LLM extraction (gated by `GRAPH_EXTRACTION_ENABLED`) populates `entities` / `entity_aliases` / `article_entities`. Resolution is exact-then-alias on normalized (`*_norm`) columns with plain b-tree indexes (no functional `lower()` index — avoids autogenerate drift). No embedding NN / auto-merge in G1 (deferred). Cast strip = `GET /clusters/{id}/entities`; reverse "appears in" rail = `GET /entities/{id}/clusters`.
 - **G2 per-user overlay + personalization:** `follows.entity_id` + the RLS-scoped `user_entity_relevance` table capture per-user affinity (follow + positive feedback → `bump_relevance`), decayed at read time (half-life `exp(-ln2·age/half_life)`, age clamped ≥0). One shared scorer `entities.score_clusters_relevance` (= `AVG(decayed)`, no salience term → zero-signal users are a no-op) personalizes the cast strip, feed (recency+relevance blend over a bounded pool), briefing (additive into story_weights), and search (within-tier boost). Gated by `UER_ENABLED` (on by default); each surface is byte-identical when off.
+- **Source expansion (research/expert tiers + gating):** `SourceType` adds `research` / `expert`. Gated sources carry `credibility_score` (0-100), `audience` tags, `author_name`, `is_preprint`, `per_fetch_cap`. `audience.allowed_source_ids(tags, floor, followed_source_ids)` shows a gated source only to a matching profession or a follower, above a credibility floor (feed 55 / briefing 70, config `credibility_feed_floor` / `credibility_briefing_floor`). `resolve_tags()` is keyword-map fast path → LLM classifier fallback (fixed tag vocab, cached per user on `persona_version`; no key → keyword-only). News (NULL credibility) is never floored. `SourceTierBadge` renders the tier on StoryCard / SourceCard / DiscoverCard; `BriefingStory` carries a `tier` field. `_upsert_sources` admin-lock: a row with `credibility_meta.reviewed_by=="admin"` survives the 10-min seed re-upsert. `POST /admin/sources` requires `credibility_score` for research/expert (400) and validates 0-100. `sources.json` is a 117-source union (45 gated).
+- **Credibility ranking + briefing bonus:** feed rank multiplies by `×(0.9 + 0.2·score/100)` bounded to `[0.9, 1.1]` (NULL news → neutral `credibility_rank_neutral=75`); briefing adds `credibility_briefing_bonus=0.15` into `story_weights` for a persona-matched gated cluster. Both are curation nudges that can't drown fresher news.
+- **Follow a source (opt-in):** `follows.kind="source"` (value = source id, no migration). `allowed_source_ids` gains an OR-followed branch that bypasses BOTH the floor and the audience match. `FollowButton` supports the `source` kind on SourceCard. Discover deck reserves up to `discover_gated_slots=5` gated cards.
+- **Personal research feeds (Phase 3, backend-only):** PubMed (`pubmed.py`, weekly) maps a medical profession to a search term and ingests recent abstracts as gated research articles; arXiv (`arxiv_gen.py`, weekly) maps subscribed-topic interests to arXiv categories and ensures those sources. Credibility review (`credibility.py`, monthly) is propose-only (writes `proposed_score`, preserves the admin lock). Research-tier clusters get entity extraction at 1 source (`graph_extract_research_min_sources=1`); news keeps the min-2 "settled" bar.
 - **BYOM (multi-provider LLM):** `generate()` resolves the per-user `active_provider` → Gemini/OpenAI/Anthropic, model via `model_prefs` JSONB → config default (env default `gemini`). Per-provider Fernet-encrypted keys in `user_settings`; env keys are the platform fallback for background jobs. Embeddings run on Gemini (`gemini-embedding-001`). Anthropic uses assistant-prefill `"{"` for deterministic JSON.
 - **Auth + RLS:** `get_current_user` verifies the Firebase ID token and sets `SET LOCAL app.user_id` per request; RLS policies on per-user tables are enforce-when-set (permissive for background jobs). `AUTH_REQUIRED=false` falls back to the default user (single-user dev). RLS only bites under a non-superuser DB role (`backend/scripts/create_app_role.sql`); the explicit `current_user_id()` filter is the primary control. A startup `check_rls_posture` logs a warning when the connection is a superuser.
 - **Graceful degradation:** LLM generation degrades by provider — a user with any one valid provider key keeps working if another is down. Summaries fail soft: `get_cluster` / `get_briefing` call `summarize_cluster` on demand when a cluster lacks a cached summary (logged, no user-facing error). If embeddings lag, articles ingest without them and fall back to snippet discovery.
