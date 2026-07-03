@@ -123,7 +123,10 @@ class BreadthMetricsOut(BaseModel):
 class BriefingStory(BaseModel):
     title: str
     summary: str
-    cluster_id: int
+    # None on the article-fallback path when the article has no cluster yet. It must NEVER carry an
+    # article id: cluster and article ids are separate sequences, so a masqueraded id points the
+    # deep-dive/lenses at a nonexistent or WRONG cluster as the sequences race past each other.
+    cluster_id: int | None
     category: str
     source_count: int
     coherence: float

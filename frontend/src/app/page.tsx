@@ -13,7 +13,7 @@ import { DailyTriviaCard } from "@/components/ui/DailyTriviaCard";
 import { PersonalizeBanner } from "@/components/ui/PersonalizeBanner";
 import { WhileAwayCard } from "@/components/ui/WhileAwayCard";
 import { LaunchScreen } from "@/components/LaunchScreen";
-import { getBriefing, type Briefing, type BriefingStory } from "@/lib/api";
+import { getBriefing, getTopics, type Briefing, type BriefingStory, type Topic } from "@/lib/api";
 import { isStale } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
@@ -46,7 +46,16 @@ export default function BriefingPage() {
   const [error, setError] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string>("All");
   const [rechecking, setRechecking] = useState(false);
+  const [userTopics, setUserTopics] = useState<Topic[]>([]);
   const router = useRouter();
+
+  // The user's topics (with real article counts) — chips shouldn't be limited to whatever
+  // categories happen to appear in today's 8 briefing stories.
+  useEffect(() => {
+    getTopics()
+      .then((t) => setUserTopics(t.your_topics ?? []))
+      .catch(() => setUserTopics([]));
+  }, []);
 
   // First-run: send new users through the intro (once per browser).
   useEffect(() => {
@@ -105,14 +114,17 @@ export default function BriefingPage() {
     return () => clearInterval(id);
   }, [state, recheckBriefing]);
 
-  // Get unique categories
+  // Chips = union of today's briefing categories AND the user's topics that actually have
+  // articles. Before, chips came only from the ≤8 briefing stories' categories, so the row was
+  // stuck at "All | General | World" no matter what the user followed.
+  const briefingCategories = briefing
+    ? briefing.stories.map((s) => s.category || "General")
+    : [];
+  const topicChips = userTopics
+    .filter((t) => (t.article_count ?? 0) > 0)
+    .map((t) => t.name);
   const categories = briefing
-    ? [
-        "All",
-        ...Array.from(
-          new Set(briefing.stories.map((s) => s.category || "General"))
-        ),
-      ]
+    ? ["All", ...Array.from(new Set([...briefingCategories, ...topicChips]))]
     : [];
 
   // Filter stories by category
@@ -269,6 +281,15 @@ export default function BriefingPage() {
             </div>
           )}
 
+          {/* Empty topic filter: the chip's topic has articles, just none in today's 8-story
+              brief. Say so instead of rendering a blank page. */}
+          {activeCategory !== "All" && filteredStories.length === 0 && (
+            <p className="text-small text-[var(--text-muted)] italic py-8 text-center">
+              No {activeCategory} stories in today&apos;s brief yet — explore the topic in
+              Discover, or check back after the next refresh.
+            </p>
+          )}
+
           {/* Categorized stories */}
           {activeCategory === "All"
             ? Object.entries(grouped).map(([category, stories]) => (
@@ -276,13 +297,13 @@ export default function BriefingPage() {
                   <h2 className="text-category text-[var(--text-muted)] mb-2">
                     {category}
                   </h2>
-                  {stories.map((story) => (
-                    <StoryCard key={story.cluster_id} story={story} />
+                  {stories.map((story, i) => (
+                    <StoryCard key={story.cluster_id ?? `${category}-${i}`} story={story} />
                   ))}
                 </section>
               ))
-            : remainingStories.map((story) => (
-                <StoryCard key={story.cluster_id} story={story} />
+            : remainingStories.map((story, i) => (
+                <StoryCard key={story.cluster_id ?? `story-${i}`} story={story} />
               ))}
 
           {/* Refresh */}

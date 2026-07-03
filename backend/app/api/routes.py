@@ -371,13 +371,25 @@ async def get_topics(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Topic).order_by(Topic.name))
     topics = result.scalars().all()
 
+    # Real per-topic article counts (was hardcoded 0 "for MVP", which forced the home chip row
+    # to guess from briefing categories alone — the "only 3 chips" bug).
+    counts = dict(
+        (
+            await db.execute(
+                select(ArticleTopic.topic_id, func.count(ArticleTopic.article_id)).group_by(
+                    ArticleTopic.topic_id
+                )
+            )
+        ).all()
+    )
+
     topic_outs = []
     for t in topics:
         topic_outs.append(
             TopicOut(
                 id=t.id,
                 name=t.name,
-                article_count=0,
+                article_count=counts.get(t.id, 0),
                 is_explore=False,
             )
         )
@@ -589,6 +601,18 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
         )
         articles = article_result.scalars().all()
 
+        # Resolve each fallback article's REAL cluster id (None when unclustered). Never pass the
+        # article id as cluster_id: the two id sequences race past each other, so a masqueraded id
+        # sends the deep-dive/lenses to a nonexistent or WRONG cluster.
+        ca_rows = (
+            await db.execute(
+                select(ClusterArticle.article_id, ClusterArticle.cluster_id).where(
+                    ClusterArticle.article_id.in_([a.id for a in articles] or [0])
+                )
+            )
+        ).all()
+        article_cluster = {aid: cid for aid, cid in ca_rows}
+
         source_categories = {
             "BBC News": "World",
             "Al Jazeera": "World",
@@ -613,7 +637,7 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
                 BriefingStory(
                     title=a.title,
                     summary=summary,
-                    cluster_id=a.id,
+                    cluster_id=article_cluster.get(a.id),
                     category=category,
                     source_count=1,
                     coherence=0.70,
@@ -1545,7 +1569,7 @@ async def trivia_daily(
 
 
 # ── E2: admin sources ──
-@router.get("/admin/sources")
+@router.get("/admin/sources", dependencies=[Depends(get_current_user)])
 async def list_sources(db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(select(Source).order_by(Source.name))).scalars().all()
     return [
@@ -1559,7 +1583,10 @@ async def list_sources(db: AsyncSession = Depends(get_db)):
     ]
 
 
-@router.post("/admin/sources")
+# Auth-gated (was completely open — anyone could upsert prod sources). With AUTH_REQUIRED=false the
+# dependency still resolves the default user (single-user mode); it starts rejecting the moment
+# AUTH_REQUIRED=true, without another code change.
+@router.post("/admin/sources", dependencies=[Depends(get_current_user)])
 async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
     from fastapi import HTTPException
     from sqlalchemy import or_

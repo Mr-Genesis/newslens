@@ -95,6 +95,10 @@ export function ModelProviderCard() {
       <p className="text-small text-[var(--text-secondary)] mt-1">
         Which AI provider + model powers summaries, lenses, and entity extraction.
       </p>
+      <p className="text-mono text-[var(--text-ghost)] mt-1">
+        Optional — NewsLens includes built-in AI, no key needed. Add your own key only to use
+        your own quota or a specific model.
+      </p>
 
       <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Provider">
         {PROVIDERS.map((p) => (

@@ -27,7 +27,7 @@ describe("SplashScreen — branded app-open reveal", () => {
       render(<SplashScreen />);
       expect(sessionStorage.getItem("newslens-splash-seen")).toBeNull();
       act(() => {
-        vi.advanceTimersByTime(2500);
+        vi.advanceTimersByTime(3100); // hold is 2800ms (full mark choreography) + margin
       });
       expect(sessionStorage.getItem("newslens-splash-seen")).toBe("1");
     } finally {
