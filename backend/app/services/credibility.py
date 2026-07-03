@@ -40,15 +40,17 @@ async def _propose_score(source: Source) -> int | None:
     )
     try:
         result = await llm.generate(prompt, schema=_SCORE_SCHEMA, force_platform_key=True)
+        score = result.get("score") if isinstance(result, dict) else None
+        if score is None:
+            return None
+        # int() is INSIDE the try: an LLM that returns {"score": "high"} / [85] / "85%" must not
+        # abort the whole monthly run and discard the proposals already written for earlier rows.
+        return max(0, min(100, int(score)))
     except llm.LLMUnavailable:
         return None
     except Exception as e:  # noqa: BLE001 — a bad LLM response must not abort the whole run
         logger.warning("credibility_propose_failed", source=source.name, error=str(e))
         return None
-    score = result.get("score") if isinstance(result, dict) else None
-    if score is None:
-        return None
-    return max(0, min(100, int(score)))
 
 
 def _is_stale(meta: dict, cutoff: datetime) -> bool:
@@ -56,9 +58,12 @@ def _is_stale(meta: dict, cutoff: datetime) -> bool:
     if not last:
         return True  # never reviewed
     try:
-        return datetime.fromisoformat(last) <= cutoff
+        dt = datetime.fromisoformat(last)
     except (TypeError, ValueError):
         return True  # unparseable → treat as stale, re-stamp it
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)  # tolerate a naive/date-only stored value vs aware cutoff
+    return dt <= cutoff
 
 
 async def review_credibility(session=None, *, now=None) -> int:

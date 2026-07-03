@@ -73,3 +73,30 @@ async def test_efetch_parses_title_and_joined_abstract():
     assert "Second part." in by_pmid["40000001"]["abstract"]  # multi-section joined
     # A paper with no abstract still returns (abstract empty) — the caller decides whether to keep it.
     assert by_pmid["40000002"]["abstract"] == ""
+
+
+_MARKUP_XML = """<?xml version="1.0"?>
+<PubmedArticleSet><PubmedArticle><MedlineCitation>
+  <PMID>40000009</PMID>
+  <Article><ArticleTitle>Effects of <i>E. coli</i> on CO<sub>2</sub> uptake</ArticleTitle></Article>
+</MedlineCitation></PubmedArticle></PubmedArticleSet>"""
+
+
+@pytest.mark.asyncio
+async def test_efetch_title_keeps_inline_markup_text():
+    """.text would truncate the title at <i>; itertext must keep the full title (species/formulae)."""
+    client = _FakeClient(_FakeResponse(text=_MARKUP_XML))
+    items = await pubmed.efetch(client, ["40000009"], api_key=None)
+    assert items[0]["title"] == "Effects of E. coli on CO2 uptake"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_disabled_when_interval_zero(monkeypatch):
+    import app.services.pubmed as pm
+
+    slept = []
+    monkeypatch.setattr(pm.asyncio, "sleep", lambda s: slept.append(s))
+    monkeypatch.setattr(pm.settings, "pubmed_min_request_interval", 0.0)
+    await pm._rate_limit()
+    await pm._rate_limit()
+    assert slept == []  # throttle off → never sleeps

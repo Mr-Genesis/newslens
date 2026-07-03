@@ -108,7 +108,9 @@ def _parse_efetch(xml_text: str) -> list[dict]:
         if not pmid:
             continue
         title_el = art.find(".//ArticleTitle")
-        title = (title_el.text or "").strip() if title_el is not None else ""
+        # itertext (not .text): PubMed titles carry inline markup (<i> species, <sub>/<sup>, <b>);
+        # .text would truncate the title at the first such child element.
+        title = "".join(title_el.itertext()).strip() if title_el is not None else ""
         parts = ["".join(a.itertext()).strip() for a in art.findall(".//Abstract/AbstractText")]
         abstract = " ".join(p for p in parts if p).strip()
         items.append({"pmid": pmid, "title": title, "abstract": abstract})

@@ -71,3 +71,17 @@ async def test_pubmed_noop_for_non_medical_profession(db_session, monkeypatch):
 
     n = await pubmed.ingest_pubmed(db_session)
     assert n == 0
+
+
+async def test_pubmed_keeps_abstractless_paper_with_null_body(db_session, monkeypatch):
+    """A titled paper with no abstract is still ingested (title carries it), with null snippet/body."""
+    await _set_profession(db_session, "Cardiologist")
+    no_abstract = {"pmid": "40000002", "title": "A titled paper with no abstract", "abstract": ""}
+    monkeypatch.setattr(pubmed, "esearch", _stub_search(["40000002"]))
+    monkeypatch.setattr(pubmed, "efetch", _stub_fetch([no_abstract]))
+
+    n = await pubmed.ingest_pubmed(db_session)
+    assert n == 1
+    art = (await db_session.execute(
+        sa.select(Article).where(Article.title == "A titled paper with no abstract"))).scalar_one()
+    assert art.snippet is None and art.extracted_text is None

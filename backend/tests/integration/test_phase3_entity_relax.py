@@ -62,3 +62,13 @@ async def test_two_source_news_cluster_is_a_candidate(db_session):
 
     candidates = await entities._extraction_candidates(db_session)
     assert cl.id in candidates
+
+
+async def test_expert_singleton_is_not_a_candidate(db_session):
+    """The relax is research-only — a lone expert/Substack cluster still needs the min-2 bar."""
+    expert = await _source(db_session, "Stratechery", SourceType.expert, category="technology",
+                           credibility_score=88, audience=["ai"])
+    cl, _ = await _cluster(db_session, expert, "A lone expert post")
+
+    candidates = await entities._extraction_candidates(db_session)
+    assert cl.id not in candidates

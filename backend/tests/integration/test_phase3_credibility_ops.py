@@ -120,3 +120,42 @@ async def test_review_no_llm_key_is_noop(db_session, monkeypatch):
 
     fresh = (await db_session.execute(select(Source).where(Source.id == s.id))).scalar_one()
     assert "proposed_score" not in (fresh.credibility_meta or {})
+
+
+async def test_review_ignores_news_tier_sources(db_session, monkeypatch):
+    """The propose-only job must only touch expert/research — never burn LLM calls on the news corpus."""
+    from app.services import credibility
+    news = Source(name="Reuters", url="https://reuters.example", rss_url="https://reuters.example/rss",
+                  source_type=SourceType.wire, region="global", category="world")  # stale (meta=None)
+    expert = await _expert(db_session, score=70, meta=None)
+    db_session.add(news)
+    await db_session.flush()
+    monkeypatch.setattr(credibility, "_propose_score", _stub_score(82))
+
+    await credibility.review_credibility(db_session)
+
+    fresh_news = (await db_session.execute(select(Source).where(Source.id == news.id))).scalar_one()
+    fresh_expert = (await db_session.execute(select(Source).where(Source.id == expert.id))).scalar_one()
+    assert "proposed_score" not in (fresh_news.credibility_meta or {})   # news untouched
+    assert fresh_expert.credibility_meta["proposed_score"] == 82          # expert proposed
+
+
+async def test_propose_score_survives_non_integer_llm_response(monkeypatch):
+    """A JSON-parseable but non-numeric score must degrade to None, not crash the whole run."""
+    from types import SimpleNamespace
+
+    from app.services import credibility, llm
+
+    async def _bad(*a, **k):
+        return {"score": "high"}  # not an int
+    monkeypatch.setattr(llm, "generate", _bad)
+    src = SimpleNamespace(name="X", author_name="Y", credibility_score=70)
+    assert await credibility._propose_score(src) is None
+
+
+def test_is_stale_handles_garbage_and_naive_timestamps():
+    from app.services import credibility
+    cutoff = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    assert credibility._is_stale({"last_reviewed": "not-a-date"}, cutoff) is True
+    assert credibility._is_stale({"last_reviewed": "2020-01-01T00:00:00"}, cutoff) is True  # naive + old
+    assert credibility._is_stale({"last_reviewed": "2099-01-01T00:00:00+00:00"}, cutoff) is False

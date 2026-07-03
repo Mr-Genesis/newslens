@@ -61,10 +61,12 @@ _TAG_SCHEMA = {
 }
 
 
-async def classify_profession_llm(profession: str) -> set[str]:
-    """Map a profession to the FIXED audience-tag vocabulary via the platform LLM. Empty on failure.
+async def classify_profession_llm(profession: str) -> set[str] | None:
+    """Map a profession to the FIXED audience-tag vocabulary via the platform LLM.
 
-    The result is constrained to `_KEYWORDS` keys so the model can never invent a tag no source uses.
+    Returns the tag set on success (constrained to `_KEYWORDS` keys, so the model can never invent a
+    tag no source uses), or None when the LLM CALL FAILED — the caller must not cache a failure as an
+    empty result (that would permanently deny the user their sources until a profile edit / restart).
     """
     from app.services import llm
 
@@ -76,16 +78,19 @@ async def classify_profession_llm(profession: str) -> set[str]:
     )
     try:
         result = await llm.generate(prompt, schema=_TAG_SCHEMA, force_platform_key=True)
-    except Exception:  # noqa: BLE001 — the classifier is a fallback; degrade to keyword-only, never crash
-        return set()
+    except Exception:  # noqa: BLE001 — call failed; signal None so resolve_tags degrades WITHOUT caching
+        return None
     raw = result.get("tags") if isinstance(result, dict) else None
-    return {t for t in (raw or []) if t in _KEYWORDS}
+    # isinstance(str) guard: a malformed tags array (a dict/list element) would otherwise raise
+    # TypeError on `t in _KEYWORDS` — on the feed/briefing HOT PATH. Non-string entries are dropped.
+    return {t for t in (raw or []) if isinstance(t, str) and t in _KEYWORDS}
 
 
 async def resolve_tags(profession: str | None, *, user_id=None, persona_version=None) -> set[str]:
     """Audience tags for a profession: keyword map first (fast, offline), LLM fallback for the tail.
 
-    A keyword hit never calls the LLM. The LLM result is cached on (user_id, persona_version).
+    A keyword hit never calls the LLM. A successful LLM result is cached on (user_id, persona_version);
+    a transient LLM failure is NOT cached, so the next request retries.
     """
     base = tags_for_profession(profession)
     if base:
@@ -96,6 +101,8 @@ async def resolve_tags(profession: str | None, *, user_id=None, persona_version=
     if key in _llm_tag_cache:
         return set(_llm_tag_cache[key])
     tags = await classify_profession_llm(profession)
+    if tags is None:
+        return set()  # LLM call failed → keyword-only this time, do not poison the cache
     _llm_tag_cache[key] = frozenset(tags)
     return tags
 
