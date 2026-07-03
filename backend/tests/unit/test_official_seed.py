@@ -38,9 +38,14 @@ def test_pib_is_language_guarded_and_niti_gets_timeout_headroom():
     assert (niti.get("credibility_meta") or {}).get("fetch_timeout", 0) >= 45
 
 
-def test_no_filing_sources_in_the_seed():
-    """Filings are generated per watchlisted ticker (Phase 2) — never bulk-seeded."""
-    assert not [f for f in load_feeds() if f["source_type"] == "filing"]
+def test_seeded_filings_are_watchlist_gated_exchange_firehoses():
+    """Phase 3 reshaped this: the NSE per-company *exchange* feeds ARE bulk-seeded, because they're
+    watchlist-filtered at INGEST (audience=[] + filing_watchlist meta), not per-company sources. A
+    per-company EDGAR-style filing (Phase 2) is still generated per ticker, never seeded — so every
+    seeded filing must carry the ingest-filter flag + empty audience (detail in test_filing_seed.py)."""
+    for f in (f for f in load_feeds() if f["source_type"] == "filing"):
+        assert (f.get("credibility_meta") or {}).get("filing_watchlist") is True
+        assert f.get("audience") == []
 
 
 def test_seed_urls_are_unique():

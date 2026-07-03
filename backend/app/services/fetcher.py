@@ -6,7 +6,7 @@ import re
 import structlog
 import feedparser
 import httpx
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -303,6 +303,22 @@ def parse_pub_date(entry) -> datetime | None:
             except (ValueError, TypeError):
                 continue
 
+    # NSE per-company filing feeds date items as 'DD-Mon-YYYY HH:MM[:SS]' with NO timezone (IST
+    # implied) — feedparser leaves published_parsed unset and RFC-822 rejects it, so parse it
+    # explicitly and convert IST→UTC. Without this, filings would land with published_at=None and
+    # sort to the bottom of the feed (nullslast) despite being fresh.
+    _IST = timezone(timedelta(hours=5, minutes=30))
+    for field in ("published", "updated"):
+        raw = getattr(entry, field, None)
+        if not raw:
+            continue
+        for fmt in ("%d-%b-%Y %H:%M:%S", "%d-%b-%Y %H:%M"):
+            try:
+                naive = datetime.strptime(raw.strip(), fmt)
+            except (ValueError, TypeError):
+                continue
+            return naive.replace(tzinfo=_IST).astimezone(timezone.utc)
+
     return None
 
 
@@ -338,69 +354,101 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient, session=N
 
 
 async def _ingest_feed_entries(session, source: Source, feed) -> int:
+    from app.config import settings
+    from app.services import filings
+
     new_count = 0
-    if True:
-        for entry in _capped_entries(feed.entries, source.per_fetch_cap):
-            # RSS titles/summaries carry HTML entities (&nbsp; &#8377; &amp;) — decode at
-            # ingestion so every downstream consumer (cards, summaries, embeddings) sees clean text.
-            title = html.unescape(getattr(entry, "title", "").strip())
-            link = getattr(entry, "link", "").strip()
+    meta = source.credibility_meta or {}
 
-            if not title or not link:
+    # Filing tier (Phase 3): a `filing_watchlist` source is an exchange firehose that must be reduced
+    # to only companies SOMEONE watchlists. Compute the aggregate name-key set once per fetch. When
+    # the feature flag is off, the set is EMPTY → every item is dropped, so the source never dumps the
+    # raw firehose (dark-launch = ingest nothing, not ingest everything). watch_keys is None for
+    # ordinary (news/official) sources, which skip the filter entirely.
+    watch_keys = None
+    filing_parser = None
+    if meta.get("filing_watchlist"):
+        watch_keys = (
+            await filings.aggregate_watch_keys(session) if settings.exchange_filings_enabled else set()
+        )
+        filing_parser = meta.get("filing_parser", "nse_name")
+
+    # url -> verbatim company name, for the deterministic entity attach after ids are assigned.
+    attach_by_url: dict[str, str] = {}
+
+    for entry in _capped_entries(feed.entries, source.per_fetch_cap):
+        # RSS titles/summaries carry HTML entities (&nbsp; &#8377; &amp;) — decode at
+        # ingestion so every downstream consumer (cards, summaries, embeddings) sees clean text.
+        title = html.unescape(getattr(entry, "title", "").strip())
+        link = getattr(entry, "link", "").strip()
+
+        if not title or not link:
+            continue
+
+        # English-only guard for flagged sources (PIB currently serves Hindi despite Lang=1;
+        # non-English titles would pollute the English embedding space).
+        if meta.get("english_guard") and not _is_probably_english(title):
+            continue
+
+        # Watchlist-gated filing firehose: keep only items whose company (matched by NAME — these
+        # feeds carry no symbol) is in the aggregate watchlist; stash it for the entity attach.
+        filing_company = None
+        if watch_keys is not None:
+            filing_company = filings.filing_company_name(entry, filing_parser)
+            if filing_company is None or filings.norm_company(filing_company) not in watch_keys:
                 continue
 
-            # English-only guard for flagged sources (PIB currently serves Hindi despite Lang=1;
-            # non-English titles would pollute the English embedding space).
-            if (source.credibility_meta or {}).get("english_guard") and not _is_probably_english(title):
-                continue
+        # Resolve relative URLs
+        if link.startswith("/"):
+            link = source.url.rstrip("/") + link
+        # Fix double-prefixed links (SEBI) — also keeps dedup keys sane.
+        link = _normalize_link(link)
 
-            # Resolve relative URLs
-            if link.startswith("/"):
-                link = source.url.rstrip("/") + link
-            # Fix double-prefixed links (SEBI) — also keeps dedup keys sane.
-            link = _normalize_link(link)
+        # Card snippet from summary/content; keep the FULL text as the body (Wave D1).
+        # Take the richer of summary/content — full-text feeds ship both, and the old
+        # summary-first branch discarded content:encoded exactly when it was present.
+        raw = _best_body(entry)
+        # Strip tags FIRST, then unescape — so an encoded "&lt;script&gt;" never becomes a
+        # live tag that the strip would have removed.
+        raw = html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
+        snippet = raw[:300]
+        body = raw[:16000] if raw else None
 
-            # Card snippet from summary/content; keep the FULL text as the body (Wave D1).
-            # Take the richer of summary/content — full-text feeds ship both, and the old
-            # summary-first branch discarded content:encoded exactly when it was present.
-            import re
-            raw = _best_body(entry)
-            # Strip tags FIRST, then unescape — so an encoded "&lt;script&gt;" never becomes a
-            # live tag that the strip would have removed.
-            raw = html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
-            snippet = raw[:300]
-            body = raw[:16000] if raw else None
+        pub_date = parse_pub_date(entry)
 
-            pub_date = parse_pub_date(entry)
+        # Check for duplicates
+        if await is_duplicate(session, source.id, link, title):
+            continue
 
-            # Check for duplicates
-            if await is_duplicate(session, source.id, link, title):
-                continue
+        article = Article(
+            title=title,
+            snippet=snippet if len(snippet) >= 50 else None,
+            extracted_text=body,
+            url=link,
+            source_id=source.id,
+            published_at=pub_date,
+        )
+        session.add(article)
+        new_count += 1
+        if filing_company is not None:
+            attach_by_url[link] = filing_company
 
-            article = Article(
-                title=title,
-                snippet=snippet if len(snippet) >= 50 else None,
-                extracted_text=body,
-                url=link,
-                source_id=source.id,
-                published_at=pub_date,
-            )
-            session.add(article)
-            new_count += 1
+    if new_count > 0:
+        await session.commit()
 
-        if new_count > 0:
-            await session.commit()
-
-            # Assign topics to newly added articles
-            result = await session.execute(
-                select(Article)
-                .where(Article.source_id == source.id)
-                .order_by(Article.id.desc())
-                .limit(new_count)
-            )
-            for art in result.scalars().all():
-                await assign_topics(session, art)
-            await session.commit()
+        # Assign topics to newly added articles (+ attach filing articles to their company entity).
+        result = await session.execute(
+            select(Article)
+            .where(Article.source_id == source.id)
+            .order_by(Article.id.desc())
+            .limit(new_count)
+        )
+        for art in result.scalars().all():
+            await assign_topics(session, art)
+            company = attach_by_url.get(art.url)
+            if company is not None:
+                await filings.attach_filing_entity(session, art, company)
+        await session.commit()
 
     return new_count
 

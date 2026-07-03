@@ -87,3 +87,33 @@ def test_fetch_timeout_clamps_garbage():
     assert _fetch_timeout(SimpleNamespace(credibility_meta={"fetch_timeout": -5})) == 30.0
     assert _fetch_timeout(SimpleNamespace(credibility_meta={"fetch_timeout": "inf"})) == 30.0
     assert _fetch_timeout(SimpleNamespace(credibility_meta={"fetch_timeout": 9999})) == 120.0
+
+
+# ── Phase 3: NSE filing feeds date the item 'DD-Mon-YYYY HH:MM[:SS]' with no timezone (IST). Neither
+#    feedparser nor RFC-822 parses it → without a fallback filings sort to the bottom (nullslast). ──
+from datetime import timezone  # noqa: E402
+
+from app.services.fetcher import parse_pub_date  # noqa: E402
+
+
+def test_parse_pub_date_nse_ist_format():
+    # feedparser leaves published_parsed unset for this format, so parse_pub_date must fall back and
+    # interpret it as IST (UTC+5:30), returning a tz-aware UTC datetime.
+    e = SimpleNamespace(published="03-Jul-2026 19:49:34", published_parsed=None)
+    dt = parse_pub_date(e)
+    assert dt is not None
+    assert dt.tzinfo is not None
+    # 19:49:34 IST == 14:19:34 UTC
+    u = dt.astimezone(timezone.utc)
+    assert (u.hour, u.minute, u.second) == (14, 19, 34)
+    assert (u.year, u.month, u.day) == (2026, 7, 3)
+
+
+def test_parse_pub_date_nse_ist_minute_only():
+    e = SimpleNamespace(published="02-May-2026 16:46", published_parsed=None)
+    u = parse_pub_date(e).astimezone(timezone.utc)
+    assert (u.month, u.day, u.hour, u.minute) == (5, 2, 11, 16)  # 16:46 IST == 11:16 UTC
+
+
+def test_parse_pub_date_still_none_for_unparseable():
+    assert parse_pub_date(SimpleNamespace(published="not a date at all", published_parsed=None)) is None
