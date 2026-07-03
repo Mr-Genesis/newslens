@@ -148,6 +148,11 @@ One chromatic accent (warm amber) + monochrome neutrals. Semantic colors appear 
 - Each card: outlet name (DM Sans 13px bold), excerpt (13px secondary), "Read full article →" link (mono 12px, accent color)
 - Sorted: free first, then paywalled, alphabetical within each group
 
+### Source Tier Badge (RESEARCH / EXPERT / PREPRINT)
+- Provenance chips for gated (`research` / `expert`) sources — `SourceTierBadge` in `frontend/src/components/ui/SourceTierBadge.tsx`, used on StoryCard, SourceCard, DiscoverCard. Plain-news / NULL tier renders nothing (news cards unchanged).
+- Reuses the existing `Badge` chip family — JetBrains Mono, uppercase, `--radius-sm`, no new tokens: RESEARCH = `signal` variant (cyan `--signal`), EXPERT = `accent` variant (amber `--accent`), PREPRINT = `outline` variant (`--border` hairline + `--text-muted`)
+- Trailing metadata rides alongside as normal-case mono: EXPERT shows `author · score` (11px `--text-muted`); PREPRINT shows "not peer-reviewed" (10px `--text-ghost`)
+
 ### AI Summary Box
 - Background: drill-muted (violet tint)
 - Left border: 3px solid drill color

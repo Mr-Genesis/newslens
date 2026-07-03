@@ -12,7 +12,9 @@ An AI-powered news intelligence platform. NewsLens ingests articles from RSS fee
 - **Story lenses** — Key Facts / 5Ws, a profession-aware "what's in it for me" impact, ask-a-question, analytical frameworks, consensus/divergence, a "how we got here" timeline, and a per-story quiz.
 - **Who's in the story** — a cast strip of the people/orgs/places in each cluster, with an "appears in" rail to other stories about the same entity.
 - **Personalized ranking** — follow entities and read stories, and the entities you care about rise across the cast strip, feed, briefing, and search. On by default; a brand-new account just sees the neutral ranking.
-- **Follows + digest** — follow topics, entities, or saved searches and get a personalized digest.
+- **Research + expert sources** — beyond news, a curated union of **research** (journals, preprints) and **expert** tiers, each with a credibility score (0-100) and provenance badges (`RESEARCH` / `EXPERT · author · score` / `PREPRINT · not peer-reviewed`). Gated tiers are shown only to a matching profession or a follower, above a credibility floor, and nudge feed ranking and the briefing.
+- **Personal research feeds** — a doctor's specialty pulls recent **PubMed** abstracts; your subscribed topics generate matching **arXiv** feeds — both ingested as gated research and surfaced through the same persona gate.
+- **Follows + digest** — follow topics, entities, saved searches, **or a source** (opt in to a gated source and it bypasses the floor and audience match for you) and get a personalized digest.
 - **Bring your own model** — per-user, Fernet-encrypted keys for **Gemini, OpenAI, or Anthropic**, with model selection and an env-var platform fallback. (Embeddings use Gemini `gemini-embedding-001`.)
 - **Accounts** — Firebase auth (Google + Email/Password); single-user dev mode when auth isn't configured.
 - **Graceful degradation** — generation degrades by provider (any one valid key keeps you working); summaries generate on demand if a batch missed them; if embeddings lag, the UI falls back to snippets.
@@ -36,7 +38,8 @@ Requires Docker (recommended for the DB + backend) and Node.js for the frontend.
 cp .env.example .env        # fill in GEMINI_API_KEY (embeddings + generation) (+ ENCRYPTION_KEY for production).
                             # Optional: OPENAI_API_KEY / ANTHROPIC_API_KEY (other generation providers),
                             # FIREBASE_CREDENTIALS_JSON + AUTH_REQUIRED (multi-user auth),
-                            # GRAPH_EXTRACTION_ENABLED / UER_ENABLED (entity graph + personalization)
+                            # GRAPH_EXTRACTION_ENABLED / UER_ENABLED (entity graph + personalization),
+                            # PUBMED_ENABLED + NCBI_API_KEY (personal PubMed research feed)
 
 # 2. Start the database + backend
 docker-compose up -d db      # PostgreSQL + pgvector
@@ -60,7 +63,10 @@ APScheduler jobs run inside the FastAPI process:
 2. **GDELT fetcher** (every 15 min) → trafilatura extraction → dedup → `articles`
 3. **Embedding backfill** (every 5 min) → Gemini embeddings (`gemini-embedding-001`) → pgvector
 4. **Clustering** (every 10 min) → pgvector cosine distance (threshold 0.15) → `story_clusters`
-5. **Entity extraction** (every 15 min, off by default behind `GRAPH_EXTRACTION_ENABLED`) → LLM extraction over settled clusters → `entities` / `article_entities`
+5. **Entity extraction** (every 15 min, on by default behind `GRAPH_EXTRACTION_ENABLED`; needs a platform LLM key, skips gracefully without one) → LLM extraction over settled clusters → `entities` / `article_entities`. Research-tier clusters extract at a single source (news keeps the min-2 "settled" bar).
+6. **Credibility review** (monthly) → propose-only: an LLM suggests a `proposed_score` for gated sources unreviewed >90 days, never touching the live score or the admin lock.
+7. **PubMed ingest** (weekly, Mon 04:00) → NCBI E-utilities → recent abstracts for each medical profession among your users, ingested as gated research.
+8. **arXiv sources** (weekly, Mon 04:30) → maps subscribed-topic interests to arXiv categories and idempotently ensures the matching research feeds.
 
 ## Mobile (Android)
 

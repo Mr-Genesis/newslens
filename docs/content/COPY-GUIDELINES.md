@@ -44,6 +44,9 @@ Every internal term has a user-facing translation. The full map is in
 | cluster / story_cluster | **story** |
 | embedding / pgvector | *(hidden)* — say the benefit: "find related stories" |
 | explore/exploit mix | **Your topics** / **Discover new** |
+| source_type = research / expert | **RESEARCH** / **EXPERT** badge (expert adds author · score) |
+| is_preprint | **PREPRINT** · **not peer-reviewed** |
+| follow a source (`follows.kind = source`) | **Follow source** |
 | GDELT, RSS, trafilatura, asyncpg, Fernet, dedup, backfill | *(never surface)* |
 | embedding_status = pending | *(hidden)* — show the snippet instead |
 

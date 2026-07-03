@@ -33,10 +33,10 @@ Next.js static export (`output: "export"`) cannot handle dynamic route segments 
 
 ```
 layout.tsx (NavBar)
-├── page.tsx → StoryCard[]
-├── discover/page.tsx → DiscoverCard[] (Framer Motion swipe)
-├── story/[clusterId]/page.tsx → DeepDiveView → SourceCard[], AISummaryBox,
-│                                  EntityChips (cast strip), ImpactCard, AskBox,
+├── page.tsx → StoryCard[] (SourceTierBadge)
+├── discover/page.tsx → DiscoverCard[] (Framer Motion swipe; SourceTierBadge + "Follow source")
+├── story/[clusterId]/page.tsx → DeepDiveView → SourceCard[] (SourceTierBadge + FollowButton source),
+│                                  AISummaryBox, EntityChips (cast strip), ImpactCard, AskBox,
 │                                  FrameworksCard, ConsensusRow, FollowButton
 ├── story/page.tsx → StoryContent → DeepDiveView
 ├── following/page.tsx → FollowButton[]
@@ -45,6 +45,18 @@ layout.tsx (NavBar)
 
 Most story lenses (impact / ask / frameworks / consensus) and the entity cast strip self-fetch their
 own endpoint and are gated/skeleton-guarded, so the deep-dive renders progressively.
+
+### Source tier badges + follow-source (Phase 2 · #78/#81/#83)
+
+`SourceTierBadge` (`components/ui/SourceTierBadge.tsx`) renders provenance for gated sources:
+`research → RESEARCH`, `expert → EXPERT · <author> · <score>`, plus a `PREPRINT · not peer-reviewed`
+chip. A plain news source (or a NULL/unknown tier) renders **nothing**, so news cards are visually
+unchanged. Used on `StoryCard` (via `story.tier`), `SourceCard`, and `DiscoverCard`.
+
+`FollowButton` (`components/ui/FollowButton.tsx`) takes a `kind` of `topic | entity | saved_search |
+source`. The `source` kind (value = the source id) powers a "Follow source" control on `SourceCard`
+and on gated `DiscoverCard`s — following a source opts you into its tier past the credibility/audience
+gate.
 
 ## API Client
 
@@ -55,6 +67,13 @@ own endpoint and are gated/skeleton-guarded, so the deep-dive renders progressiv
 **Auth:** when Firebase is configured, the client attaches the user's ID token as a Bearer header; the
 backend `get_current_user` verifies it and scopes per-user data. With `AUTH_REQUIRED=false` (default
 dev) the backend falls back to the default user, so the app works unauthenticated.
+
+**Source-tier fields (Phase 2):** `Source` carries `source_type` / `author_name` / `credibility_score`
+/ `is_preprint`; `BriefingStory` carries `tier`; `DiscoverCard` carries `source_id` / `source_type` /
+`is_gated` / `is_preprint` / `author_name` / `credibility_score` (all null/omitted for plain news).
+`getFeed(page?, perPage?, topicId?, sourceType?)` passes `source_type=news|research|expert`
+(`"all"`/omitted = every tier). **Deferred:** the `#82` filter-chip UI is not built — `/feed` has no
+rendered screen yet, so only the `getFeed` param shipped.
 
 ## Design System
 

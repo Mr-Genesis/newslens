@@ -6,6 +6,8 @@ NewsLens is a two-language AI news intelligence platform: Python backend (data p
 
 Beyond the ingest→cluster→summarize core, the platform now layers on: **multi-provider LLM generation** (BYOM — Gemini/OpenAI/Anthropic, per-user key + model; embeddings on Gemini `gemini-embedding-001`), **Firebase auth + Postgres RLS** for multi-user identity (single-user dev fallback), a **knowledge graph** (G1 global entity backbone + G2 per-user entity-relevance overlay), and **on-by-default personalization** that re-ranks the cast strip, feed, briefing, and search from one shared relevance scorer (a zero-signal user is a no-op). See the Decision Log for the rationale behind each.
 
+**Source expansion (Phases 1-3):** two gated source tiers — `research` (journals / preprints) and `expert` (credibility-scored expert blogs) — sit behind a **persona-gate + credibility-floor admission control** (`app/services/audience.py`): a gated source enters a user's feed/briefing only when it clears the tier's credibility floor (feed 55, briefing 70) **and** its `audience` tags overlap the tags implied by the user's profession — or the user explicitly follows the source (`follows.kind == "source"`), which bypasses both the floor and the audience match. Profession→tag resolution is keyword-first with an **LLM classifier fallback** (constrained to the fixed tag vocabulary, cached per user on `persona_version`) for the long tail. Personal research feeds are generated per specialty/interest by weekly jobs (`app/services/pubmed.py`, `app/services/arxiv_gen.py`), and a monthly propose-only job (`app/services/credibility.py`) keeps gated scores fresh without ever mutating a live score.
+
 ## System Diagram
 
 ```mermaid
@@ -22,6 +24,9 @@ graph TB
             EB[Embedding Backfill<br/>every 5min]
             CL[Clustering<br/>every 10min]
             EE[Entity Extraction<br/>every 15min · gated]
+            CR[Credibility Review<br/>monthly · propose-only]
+            PM[PubMed Ingest<br/>weekly Mon 04:00]
+            AX[arXiv Generate<br/>weekly Mon 04:30]
         end
 
         subgraph "Services"
@@ -32,6 +37,7 @@ graph TB
             LLM[LLM Generation<br/>Gemini/OpenAI/Anthropic]
             AUTH[Auth + RLS<br/>Firebase / app.user_id]
             REL[Relevance Scorer<br/>G2 personalization]
+            GATE[Audience Gate<br/>persona + credibility floor]
         end
 
         subgraph "API Layer"
@@ -73,8 +79,12 @@ graph TB
     EB --> EMB --> PG
     CL --> CLUST --> PG
     EE --> LLM --> PG
+    PM --> PG
+    AX --> PG
+    CR --> LLM
     AUTH --> ROUTES
     REL --> ROUTES
+    GATE --> ROUTES
     PG --> ROUTES
     ROUTES --> API_CLIENT
     API_CLIENT --> BRIEF & DISC & DEEP & SETT
@@ -129,7 +139,7 @@ sequenceDiagram
     API->>UI: JSON response
 ```
 
-> **Not shown:** a 5th, gated job (`GRAPH_EXTRACTION_ENABLED`) extracts entities from settled clusters via the provider-aware LLM into `entities` / `article_entities`. On reads, `get_current_user` sets the RLS GUC `app.user_id`, and the personalized surfaces (cast strip, feed, briefing, search) call the shared relevance scorer (`entities.score_clusters_relevance`) before responding.
+> **Not shown:** a 5th, gated job (`GRAPH_EXTRACTION_ENABLED`) extracts entities from settled clusters via the provider-aware LLM into `entities` / `article_entities` (research-tier clusters are extracted at 1 source vs the min-2 "settled" bar for news — `graph_extract_research_min_sources`). Three low-frequency cron jobs feed the gated tiers: **credibility review** (monthly, propose-only — writes `credibility_meta.proposed_score`, never the live score), **PubMed ingest** (weekly Mon 04:00 — per-medical-specialty research abstracts), and **arXiv generate** (weekly Mon 04:30 — ensures arXiv category sources from users' subscribed interests). On reads, `get_current_user` sets the RLS GUC `app.user_id`; the feed and briefing then apply the **audience gate** (`audience.allowed_source_ids` — persona tags + credibility floor + follow-override) before the personalized surfaces (cast strip, feed, briefing, search) call the shared relevance scorer (`entities.score_clusters_relevance`).
 
 ## Database Schema
 
@@ -145,8 +155,14 @@ erDiagram
         string name
         string url UK
         string rss_url
-        enum source_type "newspaper|blog|channel|wire|other"
+        enum source_type "newspaper|blog|channel|wire|other|research|expert"
         bool is_paywalled
+        string author_name "gated tiers (nullable)"
+        smallint credibility_score "0-100 (nullable)"
+        json credibility_meta "review state / admin-lock (nullable)"
+        text_array audience "persona tags (nullable)"
+        bool is_preprint "nullable"
+        smallint per_fetch_cap "nullable"
         timestamp created_at
     }
 
@@ -222,7 +238,7 @@ erDiagram
     follows {
         int id PK
         int user_id FK
-        string kind "topic|entity|saved_search"
+        string kind "topic|entity|saved_search|source"
         string value
         int entity_id FK "G2: resolved entity (nullable)"
         timestamp created_at
@@ -296,6 +312,8 @@ erDiagram
 
 **BYOM columns:** `user_settings` now stores per-provider encrypted keys (OpenAI/Gemini/Anthropic) plus `active_provider` and a `model_prefs` JSONB of per-provider model overrides.
 
+**Gated-source columns (Phase 1, migration `b2c3d4e5f6a7`):** `sources` gained six nullable columns for the `research` / `expert` tiers — `author_name`, `credibility_score` (SMALLINT 0-100), `credibility_meta` (JSONB — review state; `reviewed_by == "admin"` locks the row against the seed re-upsert and the propose-only review job), `audience` (text[] persona tags), `is_preprint`, and `per_fetch_cap`. `follows.kind` gains a `"source"` value (`value` = the source id) for the follow-override, with zero migration.
+
 ## Capacitor Build Pipeline
 
 ```mermaid
@@ -329,6 +347,10 @@ Web builds use `rewrites()` to proxy `/api/*` to the backend. Capacitor builds u
 | Entity graph | Exact + alias resolution on normalized columns (G1); per-user relevance overlay (G2) | Embedding NN dedup / auto-merge | Precision-biased + cheap at MVP scale; embedding-NN merge deferred until it's justified by data |
 | Personalization | One shared `AVG(decayed)` cluster scorer across all surfaces, on by default | Per-surface bespoke ranking / off by default | DRY + consistent; salience omitted so a zero-signal user is a guaranteed no-op (safe to default on) |
 | Decay | Read-time half-life (`exp(-ln2·age/hl)`, age clamped ≥0) | Cron/materialized scores | No background job; always-fresh; clock-skew-safe |
+| Gated-source admission | Persona-tag + credibility-floor gate, with a per-source follow-override | Show all sources to everyone / hard allowlist | Keeps the default feed byte-identical for a no-profession user; a follow is explicit intent so it bypasses both floor and audience match (same principle as ungated search) |
+| Profession→tags | Keyword map first, LLM classifier fallback (fixed vocab, cached on `persona_version`) | LLM-always / keyword-only | Zero LLM cost on the hot path for common professions; the classifier is constrained to existing tags so it can't invent one no source uses; no key ⇒ keyword-only |
+| Credibility review | Monthly, propose-only (writes `proposed_score`, human applies via admin endpoint) | LLM auto-updates the live score | An LLM editorial estimate never silently changes what a user sees; the admin lock is preserved; a human decision always stands |
+| Personal research feeds | PubMed E-utilities JSON/XML + arXiv category RSS, weekly cron | PubMed RSS-GUID path | The session-gated PubMed RSS GUID endpoint 403s for scripts; E-utilities are the verified, throttled path |
 | CSS | Tailwind CSS 4 | CSS Modules / styled-components | Utility-first; design token integration; small bundle |
 | Motion | Framer Motion | CSS animations | Complex gesture physics (swipe cards); declarative API |
 | Brand assets | Single source of truth (official NewsLens brand kit) | Ad-hoc per-surface art | One canonical mark/lockup; icons + splash regenerate from it, no drift |

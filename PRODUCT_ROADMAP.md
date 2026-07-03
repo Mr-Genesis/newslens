@@ -8,7 +8,10 @@
 > Google + Email/Password + RLS)**, **E7 Search** (hybrid keyword+semantic). **Beyond this roadmap:**
 > per-persona Impact engine + story lenses (Wave A/B), follows + digest (Wave C), the cluster timeline
 > (Wave D2), the G1/G2 knowledge graph + on-by-default personalization across feed/briefing/search, and
-> multi-provider BYOM (OpenAI/Anthropic/Gemini). See [ROADMAP.md](ROADMAP.md) and `docs/moat/` for current state.
+> multi-provider BYOM (OpenAI/Anthropic/Gemini). Plus **Source Expansion Phases 1-3** (research/expert
+> tiers with persona-gating + credibility scoring, tier badges, credibility-aware feed/briefing ranking,
+> follow-a-source opt-in, and personal PubMed/arXiv research feeds — see "Source Expansion" below). See
+> [ROADMAP.md](ROADMAP.md) and `docs/moat/` for current state.
 
 ## Strategy Context
 
@@ -69,6 +72,23 @@
 
 ---
 
+## Source Expansion (shipped, beyond original RICE plan)
+
+Three phases, all merged to master (PRs #77, #84, #91). Broadens NewsLens beyond news wires into
+persona-relevant **research** and **expert** sources, with credibility as the trust control.
+
+| Phase | What shipped | Surface |
+|---|---|---|
+| **1** | `research` / `expert` source tiers + per-source `credibility_score`, `author_name`, `audience`, `is_preprint`, `per_fetch_cap`. Persona-gating: gated sources show only to a matching profession or a follower, above a credibility floor (feed 55, briefing 70). Admin-locked seed re-upsert. `sources.json` now a 117-source union (45 gated). | Backend + data |
+| **2** | `SourceTierBadge` (RESEARCH / EXPERT / PREPRINT "not peer-reviewed") on story/source/discover cards; credibility multiplier on feed rank (×[0.9, 1.1], news → neutral 75); +0.15 briefing bonus for a persona-matched gated cluster; **follow-a-source** opt-in (`follows.kind="source"`, bypasses floor + audience); `GET /feed?source_type=news\|research\|expert` filter; discover deck reserves up to 5 gated cards. | Frontend + backend |
+| **3** | Admin credibility endpoint (`PUT /admin/sources/{id}/credibility`); monthly propose-only LLM credibility review (>90d stale, never mutates a live score); **personal research feeds** — weekly PubMed abstract ingest for medical personas + weekly arXiv-by-interest source generation; research-tier clusters extract entities at 1 source. Three new APScheduler crons. | Backend |
+
+**Still deferred:** the `source_type` feed **filter-chip UI** (no feed screen rendered yet — only
+`getFeed(sourceType)` in the API client shipped); `GET /events` (SSE); `GET /admin/breadth`; PubMed
+source_hash cache-widening (§2b); G3 graph work.
+
+---
+
 ## Sequencing
 
 ### Sprint 1 — NOW (This week): Make the AI Real + Deploy
@@ -114,8 +134,8 @@ Data Retention
 
 ## What's NOT on This Roadmap (and Why)
 
-- **SSE real-time updates** — APScheduler refreshes every 10 min, sufficient for MVP
-- **Admin endpoints** — Developer-only monitoring, not user-facing
+- **SSE real-time updates** — APScheduler refreshes every 10 min, sufficient for MVP; `GET /events` still not built
+- **Admin endpoints** — Developer-only monitoring, not user-facing; source-management + credibility admin endpoints (`GET/POST /admin/sources`, `PUT /admin/sources/{id}/credibility`) shipped with Source Expansion, but `GET /admin/breadth` is still not built
 - **Landscape orientation** — Mobile news readers used in portrait 95%+ of the time
 - **Custom app icon** — ✅ shipped anyway: full brand alignment (adaptive launcher icon, native splash, favicons) from the official NewsLens brand kit; the default Capacitor robot is gone
 - **Multi-language** — English-only MVP is appropriate for initial user base
