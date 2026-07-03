@@ -57,6 +57,19 @@ logger = structlog.get_logger()
 router = APIRouter()
 
 
+@router.get("/", include_in_schema=False)
+async def root():
+    """Landing for the bare API host (Render's platform probe + humans hitting the base URL).
+    Without this, GET / 404s and pollutes the logs even though the service is healthy."""
+    return {
+        "service": "NewsLens API",
+        "version": "0.1.0",
+        "status": "ok",
+        "health": "/health",
+        "docs": "/docs",
+    }
+
+
 @router.get("/health", response_model=HealthResponse)
 async def health_check():
     db_ok = False
@@ -1524,7 +1537,10 @@ async def trivia_daily(
         return await llm.generate(prompt, schema={"questions": []})
     except llm.LLMUnavailable:
         return {"unavailable": True, "reason": "no_llm_key"}
-    except Exception:  # noqa: BLE001 — graceful degradation, never 500
+    except Exception as e:  # noqa: BLE001 — graceful degradation, never 500
+        # Log the provider error — a silent swallow here hid the retired-model 404 in prod
+        # (the response said only "llm_error" and the root cause had to be inferred).
+        logger.warning("trivia_daily_llm_failed", error=str(e))
         return {"unavailable": True, "reason": "llm_error"}
 
 

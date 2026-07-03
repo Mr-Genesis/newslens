@@ -35,8 +35,10 @@ async def generate_cluster_summary(
     Returns (summary_text, coherence_score). Coherence is estimated from the number of
     corroborating sources. Falls back to the first snippet if generation is unavailable.
     """
-    # Fallback: first available snippet, trimmed to ~2 sentences.
-    fallback_text = next((s for s in snippets if s), "No summary available.")
+    # Fallback: first available snippet, trimmed to ~2 sentences. Unescape defensively — rows
+    # ingested before the fetcher decoded entities still carry &nbsp;/&#8377; in the DB.
+    import html as _html
+    fallback_text = _html.unescape(next((s for s in snippets if s), "No summary available."))
     sentences = fallback_text.split(". ")
     fallback_summary = ". ".join(sentences[:2]) + "." if len(sentences) > 1 else fallback_text
 

@@ -57,7 +57,10 @@ class Settings(BaseSettings):
     # LLM generation provider. Default gemini (BYOM; env default, per-user active_provider wins).
     generation_provider: str = "gemini"  # "openai" | "gemini" | "anthropic"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    # gemini-2.0-flash was retired for current keys (404 NotFound, same failure vector as
+    # text-embedding-004 → see embedding_model below). 2.5-flash is the current GA workhorse;
+    # override via GEMINI_MODEL if Google rotates names again.
+    gemini_model: str = "gemini-2.5-flash"
     # Wave E (BYOM): Anthropic provider. Env key = platform fallback for background jobs.
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-4-5"  # cheap/fast default; env or per-user override wins

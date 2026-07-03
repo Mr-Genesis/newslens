@@ -107,7 +107,7 @@ fly open /health
 |----------|----------|-------------|
 | `DATABASE_URL` | Yes | PostgreSQL connection string (auto-converts to asyncpg) |
 | `GEMINI_API_KEY` | **Yes** | Google Gemini key — powers **embeddings** (`gemini-embedding-001`, 768-dim → clustering) *and* the default generation provider |
-| `GEMINI_MODEL` | No | Gemini generation model (default `gemini-2.0-flash`; embedding model is fixed at `gemini-embedding-001`) |
+| `GEMINI_MODEL` | No | Gemini generation model (default `gemini-2.5-flash` — `gemini-2.0-flash` is retired/404s; embedding model is fixed at `gemini-embedding-001`) |
 | `GENERATION_PROVIDER` | No | Default generation provider: `gemini` \| `openai` \| `anthropic` (per-user `active_provider` wins) |
 | `OPENAI_API_KEY` | No | *Optional* — only for the OpenAI generation provider. **Not used for embeddings.** |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | No | Anthropic platform fallback + model (default `claude-haiku-4-5`) |

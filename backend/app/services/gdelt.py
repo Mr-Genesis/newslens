@@ -4,6 +4,7 @@ GDELT provides event metadata with links to source articles.
 We use it to discover article URLs, then extract title + snippet via trafilatura.
 """
 
+import html
 import re
 import structlog
 import httpx
@@ -61,7 +62,9 @@ async def fetch_gdelt():
         new_count = 0
         for item in articles:
             url = item.get("url", "").strip()
-            title = item.get("title", "").strip()
+            # GDELT titles arrive raw; decode entities at ingestion (snippet/body come from
+            # trafilatura, which already decodes — don't double-process those).
+            title = html.unescape(item.get("title", "").strip())
             domain = item.get("domain", "").strip()
             seendate = item.get("seendate", "")
 
