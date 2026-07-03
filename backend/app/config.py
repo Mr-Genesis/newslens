@@ -119,11 +119,13 @@ class Settings(BaseSettings):
     # GDELT query (parametrized for region/language; default India + English)
     gdelt_query: str = "sourcecountry:IN"
 
-    # Embedding config — Gemini text-embedding-004 (native 768-dim, task-typed asymmetric retrieval).
-    # Changing the model/dim requires a migration on the pgvector column + a full re-embed (old vectors
-    # live in a different space); see migration a2b3c4d5e6f7. Kept config-driven so models.py's
-    # Vector(embedding_dimensions) and the tests follow automatically.
-    embedding_model: str = "models/text-embedding-004"
+    # Embedding config — Gemini gemini-embedding-001 (current GA model; text-embedding-004 is retired).
+    # It is natively 3072-dim but supports Matryoshka truncation via output_dimensionality, so we
+    # request 768 to match the pgvector column (migration a2b3c4d5e6f7). Truncation needs no L2
+    # normalization here because clustering/search use cosine distance (scale-invariant). Config-driven
+    # so models.py's Vector(embedding_dimensions) and the tests follow automatically; overridable via
+    # EMBEDDING_MODEL if Google rotates the model name again.
+    embedding_model: str = "models/gemini-embedding-001"
     embedding_dimensions: int = 768
     embedding_task_document: str = "retrieval_document"  # stored article/topic vectors
     embedding_task_query: str = "retrieval_query"        # search-query vectors (asymmetric retrieval)

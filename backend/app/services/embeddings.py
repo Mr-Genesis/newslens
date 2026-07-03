@@ -94,11 +94,14 @@ async def _resolve_embedding_key() -> str | None:
     return await _resolve_gemini_key()
 
 
-def _embed_sync(key: str, model: str, content: str, task_type: str) -> list[float]:
+def _embed_sync(key: str, model: str, content: str, task_type: str, output_dim: int) -> list[float]:
     import google.generativeai as genai  # lazy — only on the embedding path
 
     genai.configure(api_key=key)
-    result = genai.embed_content(model=model, content=content, task_type=task_type)
+    # output_dimensionality truncates gemini-embedding-001's native 3072 to the pgvector column size.
+    result = genai.embed_content(
+        model=model, content=content, task_type=task_type, output_dimensionality=output_dim
+    )
     return result["embedding"]
 
 
@@ -120,6 +123,7 @@ async def generate_embedding(text: str, *, task_type: str | None = None) -> list
             settings.embedding_model,
             text,
             task_type or settings.embedding_task_document,
+            settings.embedding_dimensions,
         )
     except Exception as e:
         logger.error("embedding_generation_failed", error=str(e))
