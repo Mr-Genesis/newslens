@@ -8,13 +8,49 @@ import { BrandMark } from "@/components/ui/BrandMark";
 /**
  * SplashScreen — branded cold-start reveal, per the official Splash design.
  *
- * Shows the animated NewsLens mark (the brand GIF) over the wordmark with a
- * resolving progress bar, then fades out and hands off to the app. Mounted once
- * in the root layout and gated by sessionStorage so it appears once per app
- * session (a fresh launch). Reduced-motion users get the static mark instead of
- * the looping GIF.
+ * Plays the OFFICIAL mark choreography (from the brand kit's "NewsLens Mark -
+ * Animated" source: source ticks gather → editorial brackets close in while
+ * drawing on → the amber story-dot pops with a resolution ring → wordmark
+ * rises), then fades out and hands off to the app. Rendered as a native
+ * one-shot SVG animation — NOT the looping GIF export, whose raster loop read
+ * as "lines outside the brackets". Mounted once in the root layout and gated
+ * by sessionStorage so it appears once per app session (a fresh launch).
+ * Reduced-motion users get the static mark.
  */
 const SEEN_KEY = "newslens-splash-seen";
+
+/** One-shot mark animation — kit keyframes retimed from the 5.5s loop to a single ~1.7s reveal. */
+function AnimatedMark({ size = 150 }: { size?: number }) {
+  return (
+    <div style={{ width: size, height: size }}>
+      <style>{`
+        @keyframes nlBracketL{0%{stroke-dashoffset:74;opacity:0;transform:translateX(-7px)}22%{opacity:1}100%{stroke-dashoffset:0;opacity:1;transform:translateX(0)}}
+        @keyframes nlBracketR{0%{stroke-dashoffset:74;opacity:0;transform:translateX(7px)}22%{opacity:1}100%{stroke-dashoffset:0;opacity:1;transform:translateX(0)}}
+        @keyframes nlTickIn{0%{opacity:0}55%{opacity:var(--to)}100%{opacity:calc(var(--to)*0.32)}}
+        @keyframes nlDotPop{0%,62%{transform:scale(0);opacity:0}78%{transform:scale(1.22);opacity:1}90%{transform:scale(1)}100%{transform:scale(1);opacity:1}}
+        @keyframes nlRingOut{0%,64%{transform:scale(1);opacity:0}70%{transform:scale(1.12);opacity:.55}100%{transform:scale(3.4);opacity:0}}
+        .nl-bl{stroke-dasharray:74;transform-box:view-box;animation:nlBracketL .9s cubic-bezier(.5,.05,.18,1) .15s both}
+        .nl-br{stroke-dasharray:74;transform-box:view-box;animation:nlBracketR .9s cubic-bezier(.5,.05,.18,1) .15s both}
+        .nl-t{animation:nlTickIn 1.35s ease-in-out both}
+        .nl-dot{transform-box:fill-box;transform-origin:center;animation:nlDotPop 1.75s cubic-bezier(.34,1.56,.64,1) both}
+        .nl-ring{transform-box:fill-box;transform-origin:center;animation:nlRingOut 1.75s ease-out both}
+      `}</style>
+      <svg viewBox="0 0 100 100" style={{ display: "block", width: "100%", height: "100%", overflow: "visible" }}>
+        {/* source ticks: faint reports waiting to be resolved — always INSIDE the brackets */}
+        <line x1="33" y1="41" x2="44" y2="41" stroke="#3F3F46" strokeWidth="4" strokeLinecap="round" className="nl-t" style={{ ["--to" as string]: 0.85, animationDelay: "0.12s" }} />
+        <line x1="29" y1="50" x2="43" y2="50" stroke="#A1A1AA" strokeWidth="4" strokeLinecap="round" className="nl-t" style={{ ["--to" as string]: 1, animationDelay: "0.05s" }} />
+        <line x1="33" y1="59" x2="44" y2="59" stroke="#3F3F46" strokeWidth="4" strokeLinecap="round" className="nl-t" style={{ ["--to" as string]: 0.85, animationDelay: "0.19s" }} />
+        {/* the resolution ring — expands once at the instant of focus */}
+        <circle cx="50" cy="50" r="8" fill="none" stroke="#F97316" strokeWidth="1.4" className="nl-ring" />
+        {/* editorial brackets closing in */}
+        <path d="M35 26 H22 V74 H35" fill="none" stroke="#E4E4E7" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" className="nl-bl" />
+        <path d="M65 26 H78 V74 H65" fill="none" stroke="#E4E4E7" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" className="nl-br" />
+        {/* the single story, in focus */}
+        <circle cx="50" cy="50" r="7" fill="#F97316" className="nl-dot" />
+      </svg>
+    </div>
+  );
+}
 
 export function SplashScreen() {
   const reduce = useReducedMotion();
@@ -32,7 +68,7 @@ export function SplashScreen() {
     if (seen) return;
 
     setShow(true);
-    const hold = reduce ? 700 : 2200;
+    const hold = reduce ? 700 : 2800; // let the full choreography land (ticks→brackets→dot→wordmark)
     const t = setTimeout(() => {
       setShow(false);
       try {
@@ -72,32 +108,29 @@ export function SplashScreen() {
           initial={{ opacity: 1 }}
           exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.45, ease: "easeIn" } }}
         >
-          {/* Animated mark — the brand GIF (static mark under reduced motion) */}
+          {/* Animated mark — official kit choreography (static mark under reduced motion) */}
           {reduce ? (
             <div className="text-[var(--text-primary)]">
               <BrandMark size={132} />
             </div>
           ) : (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src="/newslens-mark.gif"
-              alt=""
-              width={150}
-              height={150}
-              className="w-[150px] h-[150px] select-none"
-              draggable={false}
-            />
+            <AnimatedMark size={150} />
           )}
 
-          {/* Wordmark */}
-          <div className="flex items-baseline">
+          {/* Wordmark — resolves in beneath the mark once focus is found (kit nlWord timing) */}
+          <motion.div
+            className="flex items-baseline"
+            initial={reduce ? false : { opacity: 0, y: 9 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: reduce ? 0 : 1.15, duration: 0.45, ease: "easeOut" }}
+          >
             <span className="text-[40px] sm:text-[48px] leading-none font-semibold tracking-[-0.02em] text-[var(--text-primary)] font-[family-name:var(--font-fraunces)]">
               News
             </span>
             <span className="text-[40px] sm:text-[48px] leading-none font-semibold tracking-[-0.02em] text-[var(--accent)] font-[family-name:var(--font-fraunces)]">
               Lens
             </span>
-          </div>
+          </motion.div>
 
           {/* Resolving progress + status label */}
           <div className="absolute bottom-[54px] left-0 right-0 flex flex-col items-center gap-3.5">

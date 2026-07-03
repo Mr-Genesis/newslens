@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/Badge";
 import { useTheme } from "@/components/ThemeProvider";
 import { ProfileFields } from "@/components/ProfileFields";
 import { ModelProviderCard } from "@/components/ModelProviderCard";
+import { AccountCard } from "@/components/AccountCard";
 import {
   getSettings,
   getStats,
@@ -257,6 +258,11 @@ export default function ProfilePage() {
               </Card>
             </motion.div>
           )}
+
+          {/* Account — sign-in entry point (the /login page is unreachable without this) */}
+          <motion.div variants={fadeUp} className="mb-4">
+            <AccountCard />
+          </motion.div>
 
           {/* Profile + Gemini key (v2) */}
           <motion.div variants={fadeUp} className="flex flex-col gap-4 mb-4">
