@@ -52,3 +52,30 @@ async def test_deck_surfaces_gated_sources_as_optin(aclient, db_session):
     assert all(c["source_type"] not in ("research", "expert") for c in nongated)
     # Preprint flag rides along for the badge.
     assert any(c["is_preprint"] for c in gated if c["title"] == "AI preprint")
+
+
+async def test_gated_slots_capped_at_five(aclient, db_session):
+    """With more gated sources than the cap, the deck admits exactly discover_gated_slots (5) of
+    them; the remaining ~20 cards are all non-gated news. Guards the LIMIT against a silent widening."""
+    await _profession_less(db_session)
+    for i in range(8):  # 8 gated sources > the cap of 5
+        await _src_with_article(db_session, f"journal{i}", SourceType.research, f"Paper {i}",
+                                category="research", credibility_score=90, audience=["medicine"])
+    for i in range(10):  # plenty of news to fill the rest
+        await _src_with_article(db_session, f"news{i}", SourceType.wire, f"News {i}")
+
+    cards = (await aclient.get("/discover/deck")).json()
+    gated = [c for c in cards if c["is_gated"]]
+    assert len(gated) == 5  # exactly the cap, not all 8
+    assert all(c["source_type"] not in ("research", "expert") for c in cards if not c["is_gated"])
+
+
+async def test_deck_is_all_news_when_no_gated_sources(aclient, db_session):
+    """No research/expert sources at all → a full, non-empty news deck (the 25 - 0 split is valid)."""
+    await _profession_less(db_session)
+    for i in range(6):
+        await _src_with_article(db_session, f"news{i}", SourceType.wire, f"News {i}")
+
+    cards = (await aclient.get("/discover/deck")).json()
+    assert len(cards) == 6
+    assert all(not c["is_gated"] for c in cards)

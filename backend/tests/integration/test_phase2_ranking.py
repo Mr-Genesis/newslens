@@ -75,6 +75,43 @@ async def test_credibility_cannot_drown_fresher_news(aclient, db_session):
     assert titles.index("Breaking wire story") < titles.index("Older expert analysis")
 
 
+async def test_credibility_score_over_100_is_clamped(aclient, db_session):
+    """An out-of-range stored score (e.g. 150) is clamped to 100 → the ×[0.9,1.1] bound still holds,
+    so a much fresher news story is NOT drowned. Without the clamp, ×1.2 would flip the order."""
+    await _ai_engineer(db_session)
+    now = datetime(2026, 7, 3, 12, tzinfo=timezone.utc)
+    filler = await _news(db_session, "filler")
+    await _article(db_session, filler, "Old filler", now - timedelta(hours=100))
+    huge = await _expert(db_session, "overscored", 150)  # out of range; must be clamped
+    await _article(db_session, huge, "Older over-scored take", now - timedelta(hours=10))
+    news = await _news(db_session, "wire")
+    await _article(db_session, news, "Breaking wire story", now)
+
+    r = await aclient.get("/feed?per_page=20")
+    titles = [a["title"] for a in r.json()["articles"]]
+    assert titles.index("Breaking wire story") < titles.index("Older over-scored take")
+
+
+async def test_audience_null_gated_source_gets_no_field_bonus(aclient, db_session, fake_llm):
+    """The +0.15 bonus requires a real audience match. A general (audience-null) research source is
+    visible to everyone but is NOT "your field" → no bonus → it does not jump the fresher news."""
+    await _set_profession(db_session, None)  # profession-less
+    base = datetime(2026, 7, 3, 12, tzinfo=timezone.utc)
+    general = Source(name="Quanta", url="https://quanta.example", rss_url="https://quanta.example/rss",
+                     source_type=SourceType.research, region="global", category="research",
+                     credibility_score=90, audience=None)  # audience-null → shown to all, no field match
+    db_session.add(general)
+    await db_session.flush()
+    await _cluster(db_session, general, "General science piece", base - timedelta(hours=100))  # oldest
+    for i in range(8):
+        news = await _news(db_session, f"news{i}")
+        await _cluster(db_session, news, f"World story {i}", base - timedelta(hours=i))
+
+    r = await aclient.get("/briefing")
+    titles = {s["title"] for s in r.json()["stories"]}
+    assert "General science piece" not in titles  # no bonus → stays dropped as the oldest
+
+
 # ── #80 briefing bonus ──
 async def _cluster(db_session, source, title, created_at):
     from app.models import ClusterArticle, StoryCluster
@@ -120,5 +157,9 @@ async def test_matched_research_cluster_makes_briefing_top8(aclient, db_session,
 
     r = await aclient.get("/briefing")
     assert r.status_code == 200
-    titles = {s["title"] for s in r.json()["stories"]}
-    assert "New cardiology trial" in titles
+    stories = r.json()["stories"]
+    by_title = {s["title"]: s for s in stories}
+    assert "New cardiology trial" in by_title
+    # #78: the API exposes the gated tier for the badge; news stories carry no tier.
+    assert by_title["New cardiology trial"]["tier"] == "research"
+    assert all(s["tier"] is None for s in stories if s["title"].startswith("World story"))

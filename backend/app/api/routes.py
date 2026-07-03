@@ -212,9 +212,12 @@ async def get_feed(
         ratio = app_settings.uer_feed_blend_ratio
 
         def _cred_mult(a: Article) -> float:
-            # #79: bounded ×[0.9, 1.1] credibility nudge. NULL (news) → neutral → ×1.0.
+            # #79: bounded ×[0.9, 1.1] credibility nudge. NULL (news) → neutral → ×1.0. Clamp to
+            # [0,100] so a bad stored score can never break the bound and drown fresher news —
+            # defense at the point of use, independent of the write-side validation.
             score = a.source.credibility_score if (a.source and a.source.credibility_score is not None) \
                 else app_settings.credibility_rank_neutral
+            score = min(100, max(0, score))
             return 0.9 + 0.2 * score / 100
 
         def _blend(a: Article) -> float:
@@ -1800,6 +1803,10 @@ async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
             status_code=400,
             detail="research/expert sources require a credibility_score",
         )
+    # Scores are a 0-100 scale; a value outside it would break the ×[0.9,1.1] feed-rank bound
+    # (the "credibility can never drown fresher news" guarantee). Reject at the write boundary.
+    if credibility_score is not None and not (0 <= credibility_score <= 100):
+        raise HTTPException(status_code=400, detail="credibility_score must be between 0 and 100")
 
     # UPSERT: if a source with the same url OR rss_url exists, update it in place.
     match_clauses = [Source.url == url]

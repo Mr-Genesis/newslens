@@ -93,3 +93,43 @@ async def test_source_follow_nonexistent_returns_404(aclient, db_session):
     await _profession_less(db_session)
     r = await aclient.post("/follows", json={"kind": "source", "value": "999999"})
     assert r.status_code == 404
+
+
+async def test_source_follow_non_integer_value_is_400(aclient, db_session):
+    await _profession_less(db_session)
+    r = await aclient.post("/follows", json={"kind": "source", "value": "not-a-number"})
+    assert r.status_code == 400  # a source-follow value must be a source id
+
+
+async def test_unfollow_reverts_the_briefing_gate(aclient, db_session, fake_llm):
+    """The briefing must symmetrically restore the gate on unfollow (not just the feed)."""
+    from app.models import ClusterArticle, StoryCluster
+    await _profession_less(db_session)
+    nejm = await _gated(db_session, "NEJM", 98, ["medicine"])
+    art = (await db_session.execute(sa.select(Article).where(Article.source_id == nejm.id))).scalar_one()
+    cl = StoryCluster(title="NEJM story", summary="cached summary", coherence=0.9)
+    db_session.add(cl)
+    await db_session.flush()
+    db_session.add(ClusterArticle(cluster_id=cl.id, article_id=art.id))
+    await db_session.flush()
+
+    fid = (await aclient.post("/follows", json={"kind": "source", "value": str(nejm.id)})).json()["id"]
+    assert "NEJM story" in {s["title"] for s in (await aclient.get("/briefing")).json()["stories"]}
+
+    assert (await aclient.delete(f"/follows/{fid}")).status_code == 204
+    assert "NEJM story" not in {s["title"] for s in (await aclient.get("/briefing")).json()["stories"]}
+
+
+async def test_briefing_fallback_path_still_gates_gated_sources(aclient, db_session, fake_llm):
+    """Regression guard for the fallback-leak fix: with NO clusters at all, the briefing's
+    article-fallback must still hide a gated source from a non-matching user — and reveal it on
+    follow. Without the `_allowed` gate on the fallback query, the research article would leak."""
+    await _profession_less(db_session)
+    nejm = await _gated(db_session, "NEJM", 98, ["medicine"])  # article, no cluster
+
+    t0 = {s["title"] for s in (await aclient.get("/briefing")).json()["stories"]}
+    assert "NEJM story" not in t0  # fallback is gated → no leak
+
+    await aclient.post("/follows", json={"kind": "source", "value": str(nejm.id)})
+    t1 = {s["title"] for s in (await aclient.get("/briefing")).json()["stories"]}
+    assert "NEJM story" in t1  # follow reveals it even through the fallback path
