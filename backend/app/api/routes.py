@@ -120,6 +120,17 @@ async def get_feed(
             Article.topics.any(topic_id=topic)
         )
 
+    # Phase 1: persona-gate the research/expert tiers — a source is in the feed only if it's news,
+    # or clears the credibility floor and matches the user's profession-derived audience tags.
+    from app.services import audience as _audience
+    _profession, _ = await _user_profession_locale(db)
+    _tags = _audience.tags_for_profession(_profession)
+    query = query.where(
+        Article.source_id.in_(
+            _audience.allowed_source_ids(_tags, floor=app_settings.credibility_feed_floor)
+        )
+    )
+
     # G2: when personalizing, fetch a bounded recent pool and rerank it (recency + entity relevance)
     # BEFORE paginating, so a high-affinity story can cross page boundaries within the horizon. When
     # off, take the exact legacy path (count + offset/limit) → byte-identical response.
@@ -510,6 +521,15 @@ SOURCE_CATEGORY_DISPLAY = {
     "national": "India",
     "policy": "Policy",
     "startup": "Start-up",
+    # Phase 1 source expansion — new categories introduced by the 80-feed seed.
+    "research": "Research",
+    "health": "Health",
+    "finance": "Finance",
+    "economics": "Economics",
+    "legal": "Legal",
+    "sports": "Sports",
+    "entertainment": "Entertainment",
+    "ai": "AI",
 }
 
 
@@ -537,9 +557,26 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     )
     prefs = {p.topic_id: p.weight for p in pref_result.scalars().all()}
 
+    # Phase 1: persona-gate the candidate window — a cluster is eligible only if at least one of
+    # its articles comes from a source this user may see (news, or a floor-clearing research/expert
+    # source matching their profession). Research/expert clusters are singletons, so this hides a
+    # cardiology paper from everyone except doctors, at the briefing floor.
+    from sqlalchemy import exists as _sa_exists
+    from app.services import audience as _audience
+    _profession, _ = await _user_profession_locale(db)
+    _allowed = _audience.allowed_source_ids(
+        _audience.tags_for_profession(_profession), floor=app_settings.credibility_briefing_floor
+    )
+    _visible = _sa_exists().where(
+        ClusterArticle.cluster_id == StoryCluster.id,
+        ClusterArticle.article_id == Article.id,
+        Article.source_id.in_(_allowed),
+    )
+
     # Get recent clusters with their articles + sources + topics
     result = await db.execute(
         select(StoryCluster)
+        .where(_visible)
         .options(
             selectinload(StoryCluster.articles)
             .selectinload(ClusterArticle.article)
@@ -1668,6 +1705,15 @@ async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="name and url are required")
     rss_url = (body.get("rss_url") or "").strip() or None
 
+    # Gated tiers (research/expert) are admission-controlled: no vetting score, no publish.
+    source_type = body.get("source_type", "other")
+    credibility_score = body.get("credibility_score")
+    if source_type in ("research", "expert") and credibility_score is None:
+        raise HTTPException(
+            status_code=400,
+            detail="research/expert sources require a credibility_score",
+        )
+
     # UPSERT: if a source with the same url OR rss_url exists, update it in place.
     match_clauses = [Source.url == url]
     if rss_url:
@@ -1682,11 +1728,23 @@ async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
         await db.commit()
         return {"id": existing.id, "name": existing.name, "updated": True}
 
+    # An admin publishing through this endpoint IS the human review — stamp it so the 10-min
+    # sources.json re-upsert never clobbers the curated score (see fetcher._upsert_sources).
+    credibility_meta = body.get("credibility_meta") or {}
+    if credibility_score is not None:
+        credibility_meta = {**credibility_meta, "reviewed_by": "admin"}
+
     s = Source(
         name=name, url=url, rss_url=rss_url,
         is_paywalled=bool(body.get("is_paywalled", False)),
-        source_type=body.get("source_type", "other"),
+        source_type=source_type,
         region=body.get("region", "global"), category=body.get("category"),
+        author_name=body.get("author_name"),
+        credibility_score=credibility_score,
+        credibility_meta=credibility_meta or None,
+        audience=body.get("audience"),
+        is_preprint=bool(body.get("is_preprint", False)),
+        per_fetch_cap=body.get("per_fetch_cap"),
     )
     db.add(s)
     await db.commit()

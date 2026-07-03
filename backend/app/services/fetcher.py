@@ -184,6 +184,15 @@ async def _upsert_sources(session, feeds: list[dict]):
                 existing.category = feed.get("category", existing.category)
                 if not existing.rss_url:
                     existing.rss_url = feed["rss_url"]
+                # Backfill the Phase-1 tier fields — UNLESS a human has reviewed this row, in which
+                # case the seed file must not silently overwrite the curated score every 10 minutes.
+                if (existing.credibility_meta or {}).get("reviewed_by") != "admin":
+                    if "source_type" in feed:
+                        existing.source_type = feed["source_type"]
+                    for f in ("author_name", "credibility_score", "credibility_meta",
+                              "audience", "is_preprint", "per_fetch_cap"):
+                        if f in feed:
+                            setattr(existing, f, feed[f])
             else:
                 session.add(
                     Source(
@@ -194,11 +203,43 @@ async def _upsert_sources(session, feeds: list[dict]):
                         source_type=feed.get("source_type", "other"),
                         region=feed.get("region", "global"),
                         category=feed.get("category"),
+                        author_name=feed.get("author_name"),
+                        credibility_score=feed.get("credibility_score"),
+                        credibility_meta=feed.get("credibility_meta"),
+                        audience=feed.get("audience"),
+                        is_preprint=feed.get("is_preprint", False),
+                        per_fetch_cap=feed.get("per_fetch_cap"),
                     )
                 )
                 added += 1
         await session.commit()
     logger.info("sources_ensured", total=len(feeds), added=added)
+
+
+def _capped_entries(entries, cap: int | None):
+    """Trim a feed's entries to a per-source cap (newest-first ⇒ take the first N). None ⇒ all.
+
+    A firehose research feed (arXiv) or a busy wire can otherwise swamp the feed on a single 10-min
+    fetch; per_fetch_cap keeps any one source from crowding out the rest.
+    """
+    if not cap or cap <= 0:
+        return entries
+    return entries[:cap]
+
+
+def _best_body(entry) -> str:
+    """Return the richest available body text for a feed entry (raw HTML, undecoded).
+
+    Many feeds (Substack, WordPress) ship BOTH a short `summary` and the full-text
+    `content:encoded`. Historically we took `summary` and only fell back to `content`, discarding
+    the full text exactly when it existed. Take whichever is longer so deep-dive bodies stay rich.
+    """
+    summary = getattr(entry, "summary", "") or ""
+    content = ""
+    entry_content = getattr(entry, "content", None)
+    if entry_content:
+        content = entry_content[0].get("value", "") or ""
+    return content if len(content) > len(summary) else summary
 
 
 def parse_pub_date(entry) -> datetime | None:
@@ -247,7 +288,7 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
 
     new_count = 0
     async with async_session() as session:
-        for entry in feed.entries:
+        for entry in _capped_entries(feed.entries, source.per_fetch_cap):
             # RSS titles/summaries carry HTML entities (&nbsp; &#8377; &amp;) — decode at
             # ingestion so every downstream consumer (cards, summaries, embeddings) sees clean text.
             title = html.unescape(getattr(entry, "title", "").strip())
@@ -261,13 +302,10 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
                 link = source.url.rstrip("/") + link
 
             # Card snippet from summary/content; keep the FULL text as the body (Wave D1).
-            # RSS often ships only a summary, so body may ≈ snippet — graceful degradation.
+            # Take the richer of summary/content — full-text feeds ship both, and the old
+            # summary-first branch discarded content:encoded exactly when it was present.
             import re
-            raw = ""
-            if hasattr(entry, "summary"):
-                raw = entry.summary
-            elif hasattr(entry, "content") and entry.content:
-                raw = entry.content[0].get("value", "")
+            raw = _best_body(entry)
             # Strip tags FIRST, then unescape — so an encoded "&lt;script&gt;" never becomes a
             # live tag that the strip would have removed.
             raw = html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()

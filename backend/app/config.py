@@ -110,6 +110,12 @@ class Settings(BaseSettings):
     uer_search_rerank_boost: float = 10.0   # max within-tier rank improvement (must stay < the 100 gap)
     uer_search_relevance_threshold: float = 0.3  # min relevance before any search boost applies
 
+    # Phase 1 source expansion — credibility floors for the gated tiers (research/expert). A gated
+    # source below the feed floor is discover/search-only; below the briefing floor it never enters
+    # the briefing. News sources (NULL credibility) are never floored.
+    credibility_feed_floor: int = 55
+    credibility_briefing_floor: int = 70
+
     # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
     # chain genuinely can't be verified in your environment.
     db_ssl_insecure: bool = False

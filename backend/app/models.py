@@ -11,13 +11,14 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
     event,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.config import settings
@@ -44,6 +45,9 @@ class SourceType(str, enum.Enum):
     channel = "channel"
     wire = "wire"
     other = "other"
+    # Phase 1 source expansion — persona-gated tiers.
+    research = "research"  # journals / preprints (arXiv, NEJM, medRxiv…)
+    expert = "expert"      # individual expert blogs, credibility-scored (Substack…)
 
 
 class User(Base):
@@ -100,6 +104,19 @@ class Source(Base):
     # E2: region ("global" | "in") + free-form category for India/topic sourcing
     region: Mapped[str | None] = mapped_column(String(16), default="global")
     category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # ── Phase 1 source expansion (all nullable/additive) ──
+    # Named author for the expert tier; the credibility score (0-100) is the editorial
+    # admission control — below the briefing/feed floors a source is gated out. credibility_meta
+    # holds {affiliation, credentials, rationale, reviewed_by: seed|llm-proposed|admin, ...}; a
+    # reviewed_by="admin" row is locked against the sources.json re-upsert.
+    author_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    credibility_score: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    credibility_meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Persona tags (["medicine","ai"…]); NULL = general audience (shown to everyone).
+    audience: Mapped[list | None] = mapped_column(ARRAY(String), nullable=True)
+    is_preprint: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Newest-first cap per fetch (arXiv emits ~600 papers/day). NULL = no cap.
+    per_fetch_cap: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
