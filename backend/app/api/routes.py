@@ -125,9 +125,11 @@ async def get_feed(
     # Phase 1: persona-gate the research/expert tiers — a source is in the feed only if it's news,
     # or clears the credibility floor and matches the user's profession-derived audience tags.
     from app.services import audience as _audience
+    from app.services import pubmed as _pubmed
     _profession, _, _pv = await _user_profession_locale(db)
     # #88: keyword map first, LLM fallback for the long tail (cached on persona_version).
     _tags = await _audience.resolve_tags(_profession, user_id=current_user_id(), persona_version=_pv)
+    _user_specialty = _pubmed.term_for_profession(_profession)  # #94: for the specialty rank boost
     _followed = await _audience.followed_source_ids(db, current_user_id())  # #81 opt-in override
     query = query.where(
         Article.source_id.in_(
@@ -221,11 +223,19 @@ async def get_feed(
             score = min(100, max(0, score))
             return 0.9 + 0.2 * score / 100
 
+        def _specialty_mult(a: Article) -> float:
+            # #94: a bounded lift when the article's source specialty matches the user's own specialty.
+            # No specialty (non-medical / general) → ×1.0, so ordinary feeds are unchanged.
+            if not _user_specialty or not a.source:
+                return 1.0
+            meta = a.source.credibility_meta or {}
+            return app_settings.specialty_rank_boost if meta.get("specialty") == _user_specialty else 1.0
+
         def _blend(a: Article) -> float:
             t = pub_ts[a.id]
             recency = 0.0 if t is None else (1.0 if hi == lo else (t - lo) / span)
             rel = min(1.0, scores.get(art_to_cluster.get(a.id), 0.0))
-            return ((1 - ratio) * recency + ratio * rel) * _cred_mult(a)
+            return ((1 - ratio) * recency + ratio * rel) * _cred_mult(a) * _specialty_mult(a)
 
         blends = {a.id: _blend(a) for a in articles}
         articles.sort(
@@ -869,6 +879,27 @@ async def get_discover_deck(
     )
     articles = list(gated_articles) + list(news_result.scalars().all())
 
+    # #103: resolve each article's cached tension line (extra_json['tension']) — a pure cache lookup,
+    # no LLM in the deck path. The backfill job (#98) generates + refreshes it out of band.
+    art_ids = [a.id for a in articles]
+    tension_by_article: dict[int, str] = {}
+    if art_ids:
+        ca_rows = (await db.execute(
+            select(ClusterArticle.article_id, ClusterArticle.cluster_id)
+            .where(ClusterArticle.article_id.in_(art_ids)))).all()
+        a2c = {aid: cid for aid, cid in ca_rows}
+        cids = list(set(a2c.values()))
+        c2line: dict[int, str] = {}
+        if cids:
+            for cid, extra in (await db.execute(
+                    select(StoryCluster.id, StoryCluster.extra_json)
+                    .where(StoryCluster.id.in_(cids)))).all():
+                entry = (extra or {}).get("tension")
+                line = (entry.get("data") or {}).get("line") if isinstance(entry, dict) else None
+                if line:
+                    c2line[cid] = line
+        tension_by_article = {aid: c2line[cid] for aid, cid in a2c.items() if cid in c2line}
+
     cards: list[DiscoverCardOut] = []
     for i, article in enumerate(articles):
         # Get topic info
@@ -893,7 +924,7 @@ async def get_discover_deck(
                 id=i + 1,
                 article_id=article.id,
                 title=article.title,
-                tension_line=article.title,  # MVP: title as tension line
+                tension_line=tension_by_article.get(article.id) or article.title,  # #103: cached, else title
                 facts=facts,
                 sources=[src.name] if src else [],
                 topic_id=topic_id,
@@ -1877,6 +1908,87 @@ async def apply_credibility(source_id: int, body: dict, db: AsyncSession = Depen
     source.credibility_meta = meta
     await db.commit()
     return {"id": source.id, "credibility_score": score, "reviewed_by": "admin"}
+
+
+@router.get("/admin/breadth", dependencies=[Depends(get_current_user)])
+async def admin_breadth(days: int = Query(None, ge=1, le=365), db: AsyncSession = Depends(get_db)):
+    """#97 — source-diversity / coverage / staleness metrics for the corpus. Aggregate SQL, no N+1."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.config import settings as app_settings
+
+    window = days or app_settings.breadth_stale_days
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window)
+    _gated = [SourceType.research, SourceType.expert]
+
+    by_type_rows = (await db.execute(
+        select(Source.source_type, func.count()).group_by(Source.source_type))).all()
+    by_type = {(st.value if st else "unknown"): n for st, n in by_type_rows}
+    by_region_rows = (await db.execute(
+        select(Source.region, func.count()).group_by(Source.region))).all()
+    by_region = {(r or "unknown"): n for r, n in by_region_rows}
+
+    total_sources = (await db.execute(select(func.count()).select_from(Source))).scalar_one()
+    gated_sources = (await db.execute(
+        select(func.count()).select_from(Source).where(Source.source_type.in_(_gated)))).scalar_one()
+    total_articles = (await db.execute(select(func.count()).select_from(Article))).scalar_one()
+    gated_articles = (await db.execute(
+        select(func.count()).select_from(Article).join(Source, Source.id == Article.source_id)
+        .where(Source.source_type.in_(_gated)))).scalar_one()
+
+    def _pct(a, b):
+        return round(100.0 * a / b, 1) if b else 0.0
+
+    # One aggregate pass: per-source article count + latest fetch → leaderboard, zero-count, staleness.
+    per_source = (await db.execute(
+        select(Source.id, Source.name, func.count(Article.id), func.max(Article.fetched_at))
+        .outerjoin(Article, Article.source_id == Source.id)
+        .group_by(Source.id, Source.name))).all()
+    ranked = sorted(per_source, key=lambda r: r[2], reverse=True)
+    top = [{"source_id": sid, "name": name, "count": cnt} for sid, name, cnt, _ in ranked[:20]]
+    zero_article_sources = sum(1 for _, _, cnt, _ in per_source if cnt == 0)
+    stale_sources = [
+        {"source_id": sid, "name": name, "last_article_at": last.isoformat() if last else None}
+        for sid, name, cnt, last in per_source
+        if cnt > 0 and last is not None and last < cutoff
+    ]
+
+    per_topic = (await db.execute(
+        select(Topic.id, Topic.name, func.count(ArticleTopic.id))
+        .join(ArticleTopic, ArticleTopic.topic_id == Topic.id)
+        .group_by(Topic.id, Topic.name).order_by(func.count(ArticleTopic.id).desc()))).all()
+    articles_per_topic = [{"topic_id": tid, "name": name, "count": cnt} for tid, name, cnt in per_topic]
+
+    return {
+        "days": window,
+        "sources": {"total": total_sources, "gated": gated_sources,
+                    "by_type": by_type, "by_region": by_region},
+        "articles": {"total": total_articles, "gated": gated_articles},
+        "gated_share": {"sources_pct": _pct(gated_sources, total_sources),
+                        "articles_pct": _pct(gated_articles, total_articles)},
+        "articles_per_source": {"top": top, "zero_article_sources": zero_article_sources},
+        "articles_per_topic": articles_per_topic,
+        "stale_sources": stale_sources,
+    }
+
+
+async def _sse_stream():
+    """#101: yield hub events as SSE frames. On client disconnect, sse-starlette cancels this
+    generator → the hub subscription's finally unregisters the queue (no leak)."""
+    import json as _json
+
+    from app.services import events as _events
+    async for evt in _events.hub.subscribe():
+        yield {"event": evt["type"], "data": _json.dumps(evt["data"])}
+
+
+@router.get("/events")
+async def sse_events():
+    """Unauthenticated global signal channel (ids/counts only, never per-user data) — a client uses
+    it to know WHEN to re-fetch, then hits the normal (authenticated) endpoints for the content."""
+    from sse_starlette.sse import EventSourceResponse
+
+    return EventSourceResponse(_sse_stream())
 
 
 # ── E4: hybrid search (semantic + keyword; keyword ranks above semantic-only) ──

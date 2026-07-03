@@ -141,7 +141,9 @@ async def _ensure_specialty_source(session, term: str) -> Source:
         source_type=SourceType.research, region="global", category="research",
         credibility_score=92, audience=["medicine"], is_preprint=False,
         per_fetch_cap=settings.pubmed_retmax,
-        credibility_meta={"reviewed_by": "seed", "note": "PubMed E-utilities specialty feed"},
+        # #94: record the specialty so the feed can give a doctor's own specialty a rank boost.
+        credibility_meta={"reviewed_by": "seed", "note": "PubMed E-utilities specialty feed",
+                          "specialty": term},
     )
     session.add(source)
     await session.flush()

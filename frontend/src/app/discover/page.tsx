@@ -222,7 +222,7 @@ export default function DiscoverPage() {
           {/* Card stack — the container is the single source of height truth; cards fill it
               (inset-0). 344 ≈ page chrome (top 48 + header 84 + gap 24 + buttons 92 + bottom 72 + slack). */}
           <div
-            className="relative w-full"
+            className="discover-stack relative w-full"
             style={{ height: "clamp(360px, calc(100dvh - 344px), 560px)" }}
             role="group"
             aria-label="Discover card deck"
@@ -235,6 +235,9 @@ export default function DiscoverPage() {
                   onSwipe={handleSwipe}
                   isTop={index === 0}
                   stackIndex={index}
+                  // #104: pass viewport dims so commit thresholds scale with orientation.
+                  viewportWidth={typeof window !== "undefined" ? window.innerWidth : undefined}
+                  cardHeight={typeof window !== "undefined" ? window.innerHeight : undefined}
                 />
               ))}
             </AnimatePresence>

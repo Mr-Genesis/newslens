@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import settings
+from app.database import async_session
 from app.models import Article, ArticleTopic, ClusterArticle, ClusterEdge, StoryCluster, Topic
 from app.schemas import AskAnswer, FinancialDimension, StoryImpact
 from app.services import frameworks as fw
@@ -266,6 +267,75 @@ async def _cache_write(db: AsyncSession, cluster: StoryCluster, column: str, sub
     )
     await db.commit()
     db.expire(cluster, [column])
+
+
+# ── Discover tension line (#98) ──────────────────────────────────────────────────────
+_TENSION_SYSTEM = (
+    "You write the single sharpest 'tension line' for a news story: the core conflict in one clause "
+    "— who or what is pitted against whom, and what is at stake. Neutral, specific, no hype, no "
+    "clickbait, no trailing period. Maximum ~90 characters."
+)
+
+
+def _tension_prompt(cluster: StoryCluster, source_lines: str) -> str:
+    return (
+        f"Story: {cluster.title}\n\nSources:\n{source_lines}\n\n"
+        f'Return JSON {{"tension_line": "<= 90 chars>"}} — the one-line core conflict of this story.'
+    )
+
+
+async def tension_line(db: AsyncSession, cluster_id: int) -> str | None:
+    """The discover tension line for a cluster: cache-read, else generate + cache. Returns the string
+    or None (unavailable). Cached on extra_json['tension'] keyed on the cluster source_hash."""
+    cluster, articles = await _load(db, cluster_id)
+    if cluster is None or not articles:
+        return None
+    sh = _source_hash(articles)
+    cached = _cache_read(cluster, "extra_json", "tension", sh)
+    if cached is not None:
+        return cached.get("line")
+    try:
+        raw = await llm.generate(
+            _tension_prompt(cluster, retrieval.source_lines(articles)),
+            system=_TENSION_SYSTEM, schema={"tension_line": {}}, max_tokens=120,
+            force_platform_key=True,
+        )
+    except llm.LLMUnavailable:
+        return None
+    except Exception as e:  # noqa: BLE001 — a bad LLM response must never break the backfill run
+        logger.warning("tension_line_failed", cluster_id=cluster_id, error=str(e))
+        return None
+    line = ((raw.get("tension_line") if isinstance(raw, dict) else None) or "").strip()[:120]
+    if not line:
+        return None
+    await _cache_write(db, cluster, "extra_json", "tension", sh, {"line": line})
+    return line
+
+
+async def backfill_tension_lines(session=None) -> int:
+    """APScheduler job: generate tension lines for recent clusters lacking a fresh one. Gated by
+    tension_lines_enabled; on-change via source_hash; no-op without a platform LLM key."""
+    if not settings.tension_lines_enabled:
+        return 0
+    if session is not None:
+        return await _backfill_tension(session)
+    async with async_session() as s:
+        return await _backfill_tension(s)
+
+
+async def _backfill_tension(session) -> int:
+    rows = (
+        await session.execute(
+            select(StoryCluster.id).order_by(StoryCluster.created_at.desc())
+            .limit(settings.tension_batch_size)
+        )
+    ).all()
+    made = 0
+    for (cid,) in rows:
+        if await tension_line(session, cid):
+            made += 1
+    logger.info("tension_backfill_complete", processed=len(rows), made=made)
+    return made
 
 
 def coherence_heuristic(source_count: int) -> float:

@@ -371,3 +371,6 @@ async def fetch_all_rss():
                 logger.error("rss_fetch_error", source=source.name, error=str(e))
 
     logger.info("rss_fetch_complete", total_new=total_new, sources_checked=len(sources))
+    if total_new > 0:
+        from app.services import events  # #96: signal live clients that new articles landed
+        events.publish("feed_refresh", {"new_articles": total_new})

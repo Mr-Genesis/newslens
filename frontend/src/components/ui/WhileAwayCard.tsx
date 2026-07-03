@@ -1,24 +1,35 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { getDigest, type Digest } from "@/lib/api";
 import { storyHref } from "@/lib/utils";
+import { useEventStream } from "@/hooks/useEventStream";
 
 /** "While you were away" (Wave C): the in-app return trigger. Shows clusters formed since the
  *  last visit with their cached WIIFM headline. Hidden when caught up. */
 export function WhileAwayCard() {
   const [digest, setDigest] = useState<Digest | null>(null);
 
-  useEffect(() => {
-    let alive = true;
+  const refresh = useCallback(() => {
     getDigest()
-      .then((d) => alive && setDigest(d))
+      .then(setDigest)
       .catch(() => {});
-    return () => {
-      alive = false;
-    };
   }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // #102: live-refresh when the backend signals new content (feed_refresh / new_cluster).
+  useEventStream(
+    useCallback(
+      (type: string) => {
+        if (type === "feed_refresh" || type === "new_cluster") refresh();
+      },
+      [refresh]
+    )
+  );
 
   if (!digest || digest.count === 0) return null;
 

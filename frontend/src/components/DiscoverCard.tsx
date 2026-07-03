@@ -10,6 +10,7 @@ import { useCallback, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { SourceTierBadge } from "@/components/ui/SourceTierBadge";
 import { cn } from "@/lib/utils";
+import { swipeThresholds } from "@/lib/swipe";
 import { addFollow, type DiscoverCard as DiscoverCardType } from "@/lib/api";
 
 interface DiscoverCardProps {
@@ -17,10 +18,12 @@ interface DiscoverCardProps {
   onSwipe: (direction: "right" | "left" | "up") => void;
   isTop: boolean;
   stackIndex: number;
+  // #104: viewport/card dimensions so the commit thresholds scale with orientation (40% w / 25% h).
+  // Passed from the page so the card stays pure/testable; falls back to window when omitted.
+  viewportWidth?: number;
+  cardHeight?: number;
 }
 
-const COMMIT_THRESHOLD_X = 120;
-const COMMIT_THRESHOLD_Y = -100;
 const MAX_ROTATION = 8;
 
 const topicColorMap: Record<string, string> = {
@@ -49,9 +52,17 @@ export function DiscoverCard({
   onSwipe,
   isTop,
   stackIndex,
+  viewportWidth,
+  cardHeight,
 }: DiscoverCardProps) {
   const x = useMotionValue(0);
   const y = useMotionValue(0);
+
+  // #104: percentage-based commit thresholds (40% width / 25% height), so a swipe commits
+  // proportionally in portrait or landscape rather than at fixed pixels.
+  const _w = viewportWidth ?? (typeof window !== "undefined" ? window.innerWidth : 375);
+  const _h = cardHeight ?? (typeof window !== "undefined" ? window.innerHeight : 600);
+  const { x: COMMIT_THRESHOLD_X, y: COMMIT_THRESHOLD_Y } = swipeThresholds(_w, _h);
 
   const rotate = useTransform(x, [-300, 0, 300], [-MAX_ROTATION, 0, MAX_ROTATION]);
   const glowRightOpacity = useTransform(x, [0, COMMIT_THRESHOLD_X], [0, 0.9]);
@@ -73,7 +84,7 @@ export function DiscoverCard({
       if (offset.x > COMMIT_THRESHOLD_X || velocity.x > 500) return onSwipe("right");
       if (offset.x < -COMMIT_THRESHOLD_X || velocity.x < -500) return onSwipe("left");
     },
-    [onSwipe]
+    [onSwipe, COMMIT_THRESHOLD_X, COMMIT_THRESHOLD_Y]
   );
 
   // #83: discover is the opt-in surface for gated tiers. A lightweight, optimistic follow (no

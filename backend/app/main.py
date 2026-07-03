@@ -153,6 +153,7 @@ async def start_scheduler():
     from app.services.credibility import review_credibility
     from app.services.pubmed import ingest_pubmed
     from app.services.arxiv_gen import generate_arxiv_sources
+    from app.services.lenses import backfill_tension_lines
 
     scheduler = AsyncIOScheduler()
     # One-shot: seed topic embeddings 10s after startup (non-blocking)
@@ -266,6 +267,18 @@ async def start_scheduler():
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
+    )
+    # #98: discover tension-line backfill — generates a one-line story conflict per settled cluster,
+    # cached on extra_json (on-change via source_hash). Dark unless tension_lines_enabled + a platform key.
+    scheduler.add_job(
+        backfill_tension_lines,
+        "interval",
+        minutes=settings.tension_interval_minutes,
+        id="tension_backfill",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
     )
     scheduler.start()
     logger.info("scheduler_started", jobs=len(scheduler.get_jobs()))
