@@ -1,7 +1,8 @@
 """Official-sources Phase 1: `official` + `filing` tiers, gating, filters, hygiene.
 
 Plan: docs/official-sources-plan.md. official = regulator/gov notices, audience-gated like
-research; filing = per-company disclosures, watchlist/follow-only (audience=[]), never in discover.
+research; filing = per-company disclosures, watchlist-only (audience=[]; following the source is
+rejected — it would leak the whole firehose), never in discover.
 """
 from datetime import datetime, timezone
 
@@ -88,12 +89,21 @@ async def test_filing_invisible_even_to_finance_user(aclient, db_session):
     assert "NVDA 8-K" not in await _feed_titles(aclient)
 
 
-async def test_filing_visible_when_followed(aclient, db_session):
+async def test_filing_visible_when_watchlisted(aclient, db_session):
+    """A filing surfaces via the per-company WATCHLIST branch — NOT by following the source. Following
+    a filing source is rejected now (it would leak every company's filings — the firehose); see
+    test_filings.test_cannot_follow_a_filing_source."""
+    from app.services import filings as _filings
+
     await _set_profession(db_session, None)
     f = await _filing(db_session)
-    r = await aclient.post("/follows", json={"kind": "source", "value": str(f.id)})
-    assert r.status_code == 201
-    assert "NVDA 8-K" in await _feed_titles(aclient)  # explicit opt-in bypasses the gate
+    art = (await db_session.execute(sa.select(Article).where(Article.source_id == f.id))).scalar_one()
+    await _filings.attach_filing_entity(db_session, art, "NVIDIA Corporation")
+    await db_session.flush()
+
+    assert "NVDA 8-K" not in await _feed_titles(aclient)  # not watchlisted → hidden
+    await aclient.put("/profile", json={"watchlist": [{"type": "ticker", "value": "NVIDIA"}]})
+    assert "NVDA 8-K" in await _feed_titles(aclient)      # watchlist the company → visible
 
 
 # ── filter chip / briefing / discover ──
@@ -280,14 +290,20 @@ async def test_briefing_hides_official_from_profession_less_user(aclient, db_ses
     assert "Reuters story" in titles and "RBI Circulars item" not in titles
 
 
-async def test_filter_filing_roundtrip_with_follow(aclient, db_session):
-    """?source_type=filing: empty for a non-follower; the follower sees exactly their filings."""
+async def test_filter_filing_roundtrip_with_watchlist(aclient, db_session):
+    """?source_type=filing: empty for a non-watchlister; the watchlister sees exactly their filings."""
+    from app.services import filings as _filings
+
     await _set_profession(db_session, None)
     f = await _filing(db_session)
+    art = (await db_session.execute(sa.select(Article).where(Article.source_id == f.id))).scalar_one()
+    await _filings.attach_filing_entity(db_session, art, "NVIDIA Corporation")
+    await db_session.flush()
+
     empty = (await aclient.get("/feed?per_page=50&source_type=filing")).json()["articles"]
     assert empty == []
 
-    await aclient.post("/follows", json={"kind": "source", "value": str(f.id)})
+    await aclient.put("/profile", json={"watchlist": [{"type": "ticker", "value": "NVIDIA"}]})
     titles = {a["title"] for a in
               (await aclient.get("/feed?per_page=50&source_type=filing")).json()["articles"]}
     assert titles == {"NVDA 8-K"}

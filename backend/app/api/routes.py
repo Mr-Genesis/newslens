@@ -1680,8 +1680,17 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
             _sid = int(value)
         except ValueError:
             raise HTTPException(status_code=400, detail="source follow value must be a source id")
-        if (await db.execute(select(Source.id).where(Source.id == _sid))).scalar_one_or_none() is None:
+        _stype = (
+            await db.execute(select(Source.source_type).where(Source.id == _sid))
+        ).scalar_one_or_none()
+        if _stype is None:
             raise HTTPException(status_code=404, detail="source not found")
+        # A filing source is an exchange firehose — following it would bypass per-company scoping.
+        # Watchlist the company instead (which is the only way its filings surface).
+        if _stype == SourceType.filing:
+            raise HTTPException(
+                status_code=400, detail="cannot follow a filing source — watchlist the company instead"
+            )
     # Idempotent: a duplicate (user, kind, value) returns the existing row.
     existing = (
         await db.execute(

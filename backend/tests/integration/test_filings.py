@@ -286,3 +286,25 @@ async def test_dark_launch_off_hides_watchlisted_filing(aclient, db_session, mon
 
     monkeypatch.setattr(cfg, "exchange_filings_enabled", False)
     assert "Reliance Industries Limited" not in await _feed_titles(aclient)  # kill-switch hides it
+
+
+# ── the source-follow escape hatch must NOT bypass per-company filing scoping (review fix) ──
+@pytest.mark.asyncio
+async def test_source_follow_does_not_leak_filings(aclient, db_session):
+    """A filing source is one exchange firehose of thousands of companies. Following it must NOT
+    flood a user with every watchlisted company's filings — the #81 follow-source escape hatch
+    (which bypasses floor+audience) has to exclude filing sources, or per-user isolation is defeated."""
+    src, _ = await _seed_reliance_filing(db_session)
+    await aclient.put("/profile", json={"profession": "poet"})  # user 1, NO watchlist
+    # Even a source-follow that already exists on the account must not admit the firehose.
+    db_session.add(Follow(user_id=1, kind="source", value=str(src.id)))
+    await db_session.flush()
+    assert "Reliance Industries Limited" not in await _feed_titles(aclient)
+
+
+@pytest.mark.asyncio
+async def test_cannot_follow_a_filing_source(aclient, db_session):
+    """And the misleading follow can't be created in the first place — watchlist the company instead."""
+    src, _ = await _seed_reliance_filing(db_session)
+    r = await aclient.post("/follows", json={"kind": "source", "value": str(src.id)})
+    assert r.status_code == 400
