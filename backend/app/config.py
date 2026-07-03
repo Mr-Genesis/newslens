@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     graph_salience_floor: float = 0.3          # drop entities below this salience at extraction
     graph_extract_batch_size: int = 20         # clusters per backfill run
     graph_extract_min_sources: int = 2         # only extract "settled" clusters (>= this many sources)
+    graph_extract_research_min_sources: int = 1  # #89: research clusters are singletons → extract at 1
     graph_use_platform_key: bool = True        # extract on the platform key, never the owner's per-user key
     graph_extract_interval_minutes: int = 15   # backfill cadence
 
@@ -121,6 +122,16 @@ class Settings(BaseSettings):
     credibility_rank_neutral: int = 75
     # Phase 2 · #83 — reserved research/expert slots in the ~25-card discover deck (the opt-in surface).
     discover_gated_slots: int = 5
+    # Phase 3 · #90 — a gated source is re-proposed by the monthly LLM review job once its last
+    # review is older than this many days (propose-only; a human applies via the admin endpoint).
+    credibility_review_stale_days: int = 90
+    # Phase 3 · #86 — PubMed personal research feed. E-utilities are usable without a key at a lower
+    # rate; an NCBI api_key raises the ceiling to ~10 req/s (we still self-throttle). No key → the
+    # job runs unauthenticated (still rate-limited). pubmed_enabled=false disables ingestion.
+    ncbi_api_key: str = ""
+    pubmed_enabled: bool = True
+    pubmed_min_request_interval: float = 0.34  # ≤3 req/s (unauthenticated NCBI limit)
+    pubmed_retmax: int = 25                     # papers/specialty/run (mirrors research per_fetch_cap)
     # Phase 2 · #80 — additive story_weights bonus for a persona-matched research/expert cluster, so
     # "research in your field" reliably reaches the briefing top-8 without a singleton dominating.
     credibility_briefing_bonus: float = 0.15

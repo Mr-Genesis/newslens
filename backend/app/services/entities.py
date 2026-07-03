@@ -8,13 +8,14 @@ entity ids + content version + persona/depth (+ user scope at G2), or it will se
 answers. The G1 endpoints are uncached pure-SQL reads, so the trap does not bite yet.
 """
 import structlog
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session
 from app.models import (
-    ArticleEntity, ClusterArticle, Entity, EntityAlias, StoryCluster, UserEntityRelevance,
+    Article, ArticleEntity, ClusterArticle, Entity, EntityAlias, Source, SourceType,
+    StoryCluster, UserEntityRelevance,
 )
 from app.schemas import EntityExtraction
 from app.services import llm, retrieval
@@ -283,6 +284,36 @@ async def resolve_and_persist(db: AsyncSession, articles: list, extraction: Enti
 
 # ── Decoupled backfill job (G1 S5) ──────────────────────────────────────────────────
 
+async def _extraction_candidates(session) -> list[int]:
+    """Cluster ids eligible for entity extraction.
+
+    News/general clusters must be 'settled' (>= graph_extract_min_sources articles). #89: a
+    research-tier cluster is eligible at just 1 source — a paper's abstract won't cluster with news
+    (cosine 0.15), so it stays a singleton, and we still want its people/institutions extracted.
+    """
+    research_articles = func.count(
+        case((Source.source_type == SourceType.research, 1))
+    )
+    rows = (
+        await session.execute(
+            select(StoryCluster.id)
+            .join(ClusterArticle, ClusterArticle.cluster_id == StoryCluster.id)
+            .join(Article, Article.id == ClusterArticle.article_id)
+            .join(Source, Source.id == Article.source_id)
+            .group_by(StoryCluster.id)
+            .having(
+                or_(
+                    func.count(ClusterArticle.id) >= settings.graph_extract_min_sources,
+                    research_articles >= settings.graph_extract_research_min_sources,
+                )
+            )
+            .order_by(StoryCluster.created_at.desc())
+            .limit(settings.graph_extract_batch_size)
+        )
+    ).all()
+    return [r[0] for r in rows]
+
+
 async def backfill_entities() -> None:
     """APScheduler job: extract entities for SETTLED, CHANGED clusters. Modeled on
     summarizer.backfill_summaries — selects candidate ids in one session, then processes each in
@@ -294,17 +325,7 @@ async def backfill_entities() -> None:
         return
 
     async with async_session() as session:
-        rows = (
-            await session.execute(
-                select(StoryCluster.id)
-                .join(ClusterArticle, ClusterArticle.cluster_id == StoryCluster.id)
-                .group_by(StoryCluster.id)
-                .having(func.count(ClusterArticle.id) >= settings.graph_extract_min_sources)
-                .order_by(StoryCluster.created_at.desc())
-                .limit(settings.graph_extract_batch_size)
-            )
-        ).all()
-        cluster_ids = [r[0] for r in rows]
+        cluster_ids = await _extraction_candidates(session)
 
     if not cluster_ids:
         return

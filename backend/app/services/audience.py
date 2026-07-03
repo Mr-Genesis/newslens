@@ -50,6 +50,63 @@ def tags_for_profession(profession: str | None) -> set[str]:
     return {tag for tag, kws in _KEYWORDS.items() if any(kw in text for kw in kws)}
 
 
+# Phase 3 · #88 — LLM fallback for the long tail of professions the keyword map misses. Cached per
+# user on persona_version (bumped on any profile edit), so the LLM runs at most once per profession.
+# Process-local cache — a restart just re-classifies; no migration, no per-request cost on the hot path.
+_llm_tag_cache: dict[tuple, frozenset] = {}
+_TAG_SCHEMA = {
+    "type": "object",
+    "properties": {"tags": {"type": "array", "items": {"type": "string"}}},
+    "required": ["tags"],
+}
+
+
+async def classify_profession_llm(profession: str) -> set[str] | None:
+    """Map a profession to the FIXED audience-tag vocabulary via the platform LLM.
+
+    Returns the tag set on success (constrained to `_KEYWORDS` keys, so the model can never invent a
+    tag no source uses), or None when the LLM CALL FAILED — the caller must not cache a failure as an
+    empty result (that would permanently deny the user their sources until a profile edit / restart).
+    """
+    from app.services import llm
+
+    vocab = sorted(_KEYWORDS.keys())
+    prompt = (
+        f"Map this profession to zero or more audience tags from EXACTLY this list: {vocab}. "
+        f"Choose only tags whose news a person in that role would want. "
+        f"Profession: {profession!r}. Return JSON {{\"tags\": [...]}} using only tags from the list."
+    )
+    try:
+        result = await llm.generate(prompt, schema=_TAG_SCHEMA, force_platform_key=True)
+    except Exception:  # noqa: BLE001 — call failed; signal None so resolve_tags degrades WITHOUT caching
+        return None
+    raw = result.get("tags") if isinstance(result, dict) else None
+    # isinstance(str) guard: a malformed tags array (a dict/list element) would otherwise raise
+    # TypeError on `t in _KEYWORDS` — on the feed/briefing HOT PATH. Non-string entries are dropped.
+    return {t for t in (raw or []) if isinstance(t, str) and t in _KEYWORDS}
+
+
+async def resolve_tags(profession: str | None, *, user_id=None, persona_version=None) -> set[str]:
+    """Audience tags for a profession: keyword map first (fast, offline), LLM fallback for the tail.
+
+    A keyword hit never calls the LLM. A successful LLM result is cached on (user_id, persona_version);
+    a transient LLM failure is NOT cached, so the next request retries.
+    """
+    base = tags_for_profession(profession)
+    if base:
+        return base
+    if not profession or not profession.strip():
+        return set()
+    key = (user_id, persona_version)
+    if key in _llm_tag_cache:
+        return set(_llm_tag_cache[key])
+    tags = await classify_profession_llm(profession)
+    if tags is None:
+        return set()  # LLM call failed → keyword-only this time, do not poison the cache
+    _llm_tag_cache[key] = frozenset(tags)
+    return tags
+
+
 def allowed_source_ids(user_tags: set[str], *, floor: int, followed_source_ids=None):
     """A subquery of source ids a user may see, given their audience tags.
 

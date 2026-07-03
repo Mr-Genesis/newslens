@@ -125,8 +125,9 @@ async def get_feed(
     # Phase 1: persona-gate the research/expert tiers — a source is in the feed only if it's news,
     # or clears the credibility floor and matches the user's profession-derived audience tags.
     from app.services import audience as _audience
-    _profession, _ = await _user_profession_locale(db)
-    _tags = _audience.tags_for_profession(_profession)
+    _profession, _, _pv = await _user_profession_locale(db)
+    # #88: keyword map first, LLM fallback for the long tail (cached on persona_version).
+    _tags = await _audience.resolve_tags(_profession, user_id=current_user_id(), persona_version=_pv)
     _followed = await _audience.followed_source_ids(db, current_user_id())  # #81 opt-in override
     query = query.where(
         Article.source_id.in_(
@@ -591,8 +592,9 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     # cardiology paper from everyone except doctors, at the briefing floor.
     from sqlalchemy import exists as _sa_exists
     from app.services import audience as _audience
-    _profession, _ = await _user_profession_locale(db)
-    _tags = _audience.tags_for_profession(_profession)  # #80: for the "in your field" bonus below
+    _profession, _, _pv = await _user_profession_locale(db)
+    # #80/#88: keyword map first, LLM fallback for the long tail (cached on persona_version).
+    _tags = await _audience.resolve_tags(_profession, user_id=current_user_id(), persona_version=_pv)
     _followed = await _audience.followed_source_ids(db, current_user_id())  # #81 opt-in override
     _allowed = _audience.allowed_source_ids(
         _tags, floor=app_settings.credibility_briefing_floor, followed_source_ids=_followed
@@ -1272,7 +1274,11 @@ async def _user_profession_locale(db: AsyncSession):
     u = (
         await db.execute(select(User).where(User.id == current_user_id()))
     ).scalar_one_or_none()
-    return (u.profession if u else None), (u.locale if u and u.locale else "IN")
+    return (
+        (u.profession if u else None),
+        (u.locale if u and u.locale else "IN"),
+        (u.persona_version if u and u.persona_version else 1),  # #88 cache key for the LLM classifier
+    )
 
 
 async def _user_persona(db: AsyncSession) -> dict:
@@ -1496,7 +1502,7 @@ async def cluster_analysis(
 
     if lens not in ("key_facts", "5ws", "profession"):
         raise HTTPException(status_code=400, detail="invalid lens")
-    profession, _ = await _user_profession_locale(db)
+    profession, _, _ = await _user_profession_locale(db)
     # Depth toggle (Brief/Standard/Expert) genuinely changes retrieval budget + answer style.
     u = (
         await db.execute(select(User).where(User.id == current_user_id()))
@@ -1843,6 +1849,34 @@ async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(s)
     await db.commit()
     return {"id": s.id, "name": s.name, "updated": False}
+
+
+@router.put("/admin/sources/{source_id}/credibility", dependencies=[Depends(get_current_user)])
+async def apply_credibility(source_id: int, body: dict, db: AsyncSession = Depends(get_db)):
+    """Phase 3 · #85 — the human half of the credibility-review loop. An admin applies a (proposed
+    or corrected) score; we stamp credibility_meta.reviewed_by="admin", which locks the row against
+    the 10-minute seed re-upsert (fetcher._upsert_sources), so a manual correction is never silently
+    clobbered by sources.json."""
+    from fastapi import HTTPException
+
+    score = body.get("credibility_score")
+    if score is None or not (0 <= score <= 100):
+        raise HTTPException(status_code=400, detail="credibility_score must be between 0 and 100")
+
+    source = (await db.execute(select(Source).where(Source.id == source_id))).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(status_code=404, detail="source not found")
+
+    # Merge into existing meta so the LLM proposal / rationale / affiliation history is preserved.
+    meta = dict(source.credibility_meta or {})
+    meta["reviewed_by"] = "admin"
+    meta["applied_score"] = score
+    if body.get("rationale"):
+        meta["rationale"] = body["rationale"]
+    source.credibility_score = score
+    source.credibility_meta = meta
+    await db.commit()
+    return {"id": source.id, "credibility_score": score, "reviewed_by": "admin"}
 
 
 # ── E4: hybrid search (semantic + keyword; keyword ranks above semantic-only) ──
