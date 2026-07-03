@@ -1879,6 +1879,68 @@ async def apply_credibility(source_id: int, body: dict, db: AsyncSession = Depen
     return {"id": source.id, "credibility_score": score, "reviewed_by": "admin"}
 
 
+@router.get("/admin/breadth", dependencies=[Depends(get_current_user)])
+async def admin_breadth(days: int = Query(None, ge=1, le=365), db: AsyncSession = Depends(get_db)):
+    """#97 — source-diversity / coverage / staleness metrics for the corpus. Aggregate SQL, no N+1."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.config import settings as app_settings
+
+    window = days or app_settings.breadth_stale_days
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window)
+    _gated = [SourceType.research, SourceType.expert]
+
+    by_type_rows = (await db.execute(
+        select(Source.source_type, func.count()).group_by(Source.source_type))).all()
+    by_type = {(st.value if st else "unknown"): n for st, n in by_type_rows}
+    by_region_rows = (await db.execute(
+        select(Source.region, func.count()).group_by(Source.region))).all()
+    by_region = {(r or "unknown"): n for r, n in by_region_rows}
+
+    total_sources = (await db.execute(select(func.count()).select_from(Source))).scalar_one()
+    gated_sources = (await db.execute(
+        select(func.count()).select_from(Source).where(Source.source_type.in_(_gated)))).scalar_one()
+    total_articles = (await db.execute(select(func.count()).select_from(Article))).scalar_one()
+    gated_articles = (await db.execute(
+        select(func.count()).select_from(Article).join(Source, Source.id == Article.source_id)
+        .where(Source.source_type.in_(_gated)))).scalar_one()
+
+    def _pct(a, b):
+        return round(100.0 * a / b, 1) if b else 0.0
+
+    # One aggregate pass: per-source article count + latest fetch → leaderboard, zero-count, staleness.
+    per_source = (await db.execute(
+        select(Source.id, Source.name, func.count(Article.id), func.max(Article.fetched_at))
+        .outerjoin(Article, Article.source_id == Source.id)
+        .group_by(Source.id, Source.name))).all()
+    ranked = sorted(per_source, key=lambda r: r[2], reverse=True)
+    top = [{"source_id": sid, "name": name, "count": cnt} for sid, name, cnt, _ in ranked[:20]]
+    zero_article_sources = sum(1 for _, _, cnt, _ in per_source if cnt == 0)
+    stale_sources = [
+        {"source_id": sid, "name": name, "last_article_at": last.isoformat() if last else None}
+        for sid, name, cnt, last in per_source
+        if cnt > 0 and last is not None and last < cutoff
+    ]
+
+    per_topic = (await db.execute(
+        select(Topic.id, Topic.name, func.count(ArticleTopic.id))
+        .join(ArticleTopic, ArticleTopic.topic_id == Topic.id)
+        .group_by(Topic.id, Topic.name).order_by(func.count(ArticleTopic.id).desc()))).all()
+    articles_per_topic = [{"topic_id": tid, "name": name, "count": cnt} for tid, name, cnt in per_topic]
+
+    return {
+        "days": window,
+        "sources": {"total": total_sources, "gated": gated_sources,
+                    "by_type": by_type, "by_region": by_region},
+        "articles": {"total": total_articles, "gated": gated_articles},
+        "gated_share": {"sources_pct": _pct(gated_sources, total_sources),
+                        "articles_pct": _pct(gated_articles, total_articles)},
+        "articles_per_source": {"top": top, "zero_article_sources": zero_article_sources},
+        "articles_per_topic": articles_per_topic,
+        "stale_sources": stale_sources,
+    }
+
+
 # ── E4: hybrid search (semantic + keyword; keyword ranks above semantic-only) ──
 @router.get("/search", dependencies=[Depends(get_current_user)])
 async def search(
