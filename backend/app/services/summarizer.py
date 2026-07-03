@@ -1,6 +1,7 @@
-"""AI summary generation service using GPT-4o-mini.
+"""AI summary generation service via the active LLM provider (llm.generate).
 
-Generates cluster summaries from article titles and snippets.
+Generates cluster summaries from article titles and snippets through the provider abstraction
+(OpenAI / Gemini / Anthropic), so summaries follow the configured provider like every other lens.
 Hybrid strategy: batch job pre-generates + on-demand fallback.
 """
 
@@ -25,78 +26,56 @@ def _staleness_cutoff(now: datetime | None = None) -> datetime:
     return now - timedelta(hours=4)
 
 
-async def _get_client():
-    """Get OpenAI client — reuses embeddings.py pattern."""
-    from app.services.embeddings import _get_client_async
-    return await _get_client_async()
-
-
 async def generate_cluster_summary(
     titles: list[str],
     snippets: list[str],
 ) -> tuple[str, float]:
-    """Generate a summary for a story cluster using GPT-4o-mini.
+    """Generate a summary for a story cluster via the active LLM provider (llm.generate).
 
-    Returns (summary_text, coherence_score).
-    Coherence is estimated from the number of corroborating sources.
-    Falls back to first snippet if OpenAI is unavailable.
+    Returns (summary_text, coherence_score). Coherence is estimated from the number of
+    corroborating sources. Falls back to the first snippet if generation is unavailable.
     """
-    client = await _get_client()
-
-    # Fallback: return first available snippet
+    # Fallback: first available snippet, trimmed to ~2 sentences.
     fallback_text = next((s for s in snippets if s), "No summary available.")
     sentences = fallback_text.split(". ")
     fallback_summary = ". ".join(sentences[:2]) + "." if len(sentences) > 1 else fallback_text
 
-    if not client:
-        return fallback_summary, 0.70
+    # Coherence heuristic (source-count fallback; the real ratio is computed in lenses.cluster_coherence).
+    source_count = len(titles)
+    if source_count >= 5:
+        coherence = 0.95
+    elif source_count >= 3:
+        coherence = 0.85
+    elif source_count >= 2:
+        coherence = 0.75
+    else:
+        coherence = 0.65
 
-    # Build prompt from article data
     articles_text = ""
     for i, (title, snippet) in enumerate(zip(titles, snippets), 1):
         articles_text += f"\n{i}. {title}"
         if snippet:
             articles_text += f"\n   {snippet[:300]}"
 
+    from app.services import llm
     try:
-        response = await client.chat.completions.create(
-            model=settings.summary_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a news analyst. Summarize the following related news articles "
-                        "in 2-3 concise sentences. Focus on key facts, implications, and what "
-                        "makes this story significant. Be neutral and factual."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"Summarize these {len(titles)} related articles:\n{articles_text}",
-                },
-            ],
+        summary = await llm.generate(
+            f"Summarize these {len(titles)} related articles:\n{articles_text}",
+            system=(
+                "You are a news analyst. Summarize the following related news articles in 2-3 "
+                "concise sentences. Focus on key facts, implications, and what makes this story "
+                "significant. Be neutral and factual."
+            ),
             max_tokens=200,
-            temperature=0.3,
         )
-
-        summary = response.choices[0].message.content.strip()
-
-        # Estimate coherence from source count (more sources = higher confidence)
-        source_count = len(titles)
-        if source_count >= 5:
-            coherence = 0.95
-        elif source_count >= 3:
-            coherence = 0.85
-        elif source_count >= 2:
-            coherence = 0.75
-        else:
-            coherence = 0.65
-
-        return summary, coherence
-
-    except Exception as e:
+    except llm.LLMUnavailable:
+        return fallback_summary, 0.70
+    except Exception as e:  # noqa: BLE001 — never let a summary failure crash the caller
         logger.error("summary_generation_failed", error=str(e))
         return fallback_summary, 0.70
+
+    summary = (summary or "").strip()
+    return (summary, coherence) if summary else (fallback_summary, 0.70)
 
 
 async def summarize_cluster(cluster_id: int) -> tuple[str, float] | None:

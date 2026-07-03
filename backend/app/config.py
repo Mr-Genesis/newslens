@@ -54,8 +54,8 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str = ""
 
-    # LLM generation provider (embeddings stay on OpenAI — see embeddings.py)
-    generation_provider: str = "openai"  # "openai" | "gemini" | "anthropic" (env default; per-user active_provider wins)
+    # LLM generation provider. Default gemini (BYOM; env default, per-user active_provider wins).
+    generation_provider: str = "gemini"  # "openai" | "gemini" | "anthropic"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
     # Wave E (BYOM): Anthropic provider. Env key = platform fallback for background jobs.
@@ -119,9 +119,14 @@ class Settings(BaseSettings):
     # GDELT query (parametrized for region/language; default India + English)
     gdelt_query: str = "sourcecountry:IN"
 
-    # Embedding config
-    embedding_model: str = "text-embedding-3-small"
-    embedding_dimensions: int = 1536
+    # Embedding config — Gemini text-embedding-004 (native 768-dim, task-typed asymmetric retrieval).
+    # Changing the model/dim requires a migration on the pgvector column + a full re-embed (old vectors
+    # live in a different space); see migration a2b3c4d5e6f7. Kept config-driven so models.py's
+    # Vector(embedding_dimensions) and the tests follow automatically.
+    embedding_model: str = "models/text-embedding-004"
+    embedding_dimensions: int = 768
+    embedding_task_document: str = "retrieval_document"  # stored article/topic vectors
+    embedding_task_query: str = "retrieval_query"        # search-query vectors (asymmetric retrieval)
 
     # Summary config
     summary_model: str = "gpt-4o-mini"

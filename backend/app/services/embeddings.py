@@ -1,8 +1,11 @@
-"""Embedding generation service using OpenAI text-embedding-3-small.
+"""Embedding generation service — Gemini text-embedding-004 (768-dim, task-typed).
 
-Generates embeddings for article title + snippet.
-Includes backfill job for articles that failed or were ingested when OpenAI was down.
+Generates embeddings for article title + snippet and for search queries; backfill re-embeds
+pending/failed articles. The OpenAI client helpers below are retained ONLY for the OpenAI
+*generation* provider (llm._generate_openai / summarizer) — the embeddings themselves are Gemini.
 """
+
+import asyncio
 
 import structlog
 from openai import AsyncOpenAI
@@ -83,19 +86,41 @@ async def _get_client_async() -> AsyncOpenAI | None:
     return None
 
 
-async def generate_embedding(text: str) -> list[float] | None:
-    """Generate embedding for a text string. Returns None on failure."""
-    client = await _get_client_async()
-    if not client:
-        logger.warning("openai_no_api_key")
+async def _resolve_embedding_key() -> str | None:
+    """Gemini key for embeddings: the owner's verified per-user key, else the platform env key.
+    Reuses the generation-side resolver (lazy import avoids a circular import with llm)."""
+    from app.services.llm import _resolve_gemini_key
+
+    return await _resolve_gemini_key()
+
+
+def _embed_sync(key: str, model: str, content: str, task_type: str) -> list[float]:
+    import google.generativeai as genai  # lazy — only on the embedding path
+
+    genai.configure(api_key=key)
+    result = genai.embed_content(model=model, content=content, task_type=task_type)
+    return result["embedding"]
+
+
+async def generate_embedding(text: str, *, task_type: str | None = None) -> list[float] | None:
+    """Generate a Gemini embedding for a text string. Returns None on failure (never raises).
+
+    task_type defaults to the stored-document type; search passes the query type for asymmetric
+    retrieval. Runs the synchronous SDK call in a thread so it never blocks the event loop.
+    """
+    key = await _resolve_embedding_key()
+    if not key:
+        logger.warning("embedding_no_gemini_key")
         return None
 
     try:
-        response = await client.embeddings.create(
-            model=settings.embedding_model,
-            input=text,
+        return await asyncio.to_thread(
+            _embed_sync,
+            key,
+            settings.embedding_model,
+            text,
+            task_type or settings.embedding_task_document,
         )
-        return response.data[0].embedding
     except Exception as e:
         logger.error("embedding_generation_failed", error=str(e))
         return None
@@ -121,7 +146,7 @@ async def embed_query_cached(text: str) -> list[float] | None:
     if cached is not None:
         return cached
 
-    embedding = await generate_embedding(key)
+    embedding = await generate_embedding(key, task_type=settings.embedding_task_query)
     if embedding is not None:
         if len(_query_embedding_cache) >= _QUERY_CACHE_MAX:
             # Simple bound: drop the oldest inserted entry.
@@ -167,11 +192,10 @@ async def embed_article(article_id: int):
 
 async def backfill_embeddings():
     """Backfill embeddings for articles with pending/failed status. Called by APScheduler."""
-    client = await _get_client_async()
-    if not client:
-        # No OpenAI key anywhere → articles ingest but never embed → never cluster → feed/briefing
+    if not await _resolve_embedding_key():
+        # No Gemini key anywhere → articles ingest but never embed → never cluster → feed/briefing
         # stay empty while /health is green. Log it so this silent dead-stop is observable in prod.
-        logger.warning("embedding_backfill_skipped_no_openai_key")
+        logger.warning("embedding_backfill_skipped_no_gemini_key")
         return
 
     async with async_session() as session:

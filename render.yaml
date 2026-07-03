@@ -26,8 +26,13 @@ services:
           name: newslens-db
           property: connectionString
         # config.py normalizes postgresql:// → postgresql+asyncpg:// automatically — no manual edit needed.
+      - key: GEMINI_API_KEY
+        sync: false  # set manually. REQUIRED — powers BOTH embeddings (text-embedding-004 → clustering →
+                     # feed/briefing/search) and generation (summaries + all lenses).
+      - key: GENERATION_PROVIDER
+        value: gemini  # summaries + lenses run on Gemini (per-user active_provider still wins)
       - key: OPENAI_API_KEY
-        sync: false  # set manually. REQUIRED for the content pipeline (embeddings → clustering → feed/briefing).
+        sync: false  # OPTIONAL now — only used if a user/env selects the OpenAI generation provider.
       - key: ENCRYPTION_KEY
         # sync:false (NOT generateValue): regenerating this key orphans every stored encrypted BYOM
         # key (decrypt hard-fails). Generate ONCE with Fernet.generate_key() and set it in the
