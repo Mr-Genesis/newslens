@@ -64,9 +64,27 @@ def _source_hash(articles: list[Article]) -> str:
     return hashlib.sha1(",".join(map(str, ids)).encode()).hexdigest()[:16]
 
 
-def _cluster_text(cluster: StoryCluster, articles: list[Article]) -> str:
+def _cluster_text(
+    cluster: StoryCluster, articles: list[Article], depth_pref: str = "standard"
+) -> str:
     # Wave D1: route through the retrieval seam so lenses see full bodies, not snippet[:400].
-    return retrieval.cluster_text(cluster, articles)
+    # depth_pref drives the retrieval budget ladder (brief/standard/expert).
+    return retrieval.cluster_text(cluster, articles, depth_pref=depth_pref)
+
+
+_DEPTH_STYLE = {
+    "brief": "Answer for a general reader in a hurry: plainest language, shortest form, no jargon.",
+    "expert": (
+        "Answer for a domain-expert reader: precise terminology, concrete figures, mechanisms and "
+        "second-order implications — skip basic explanations."
+    ),
+}
+
+
+def _depth_suffix(depth_pref: str | None) -> str:
+    """Depth instruction appended to lens prompts so brief/standard/expert visibly differ."""
+    style = _DEPTH_STYLE.get(depth_pref or "standard")
+    return f"\n\n{style}" if style else ""
 
 
 # ── analysis / strategic / trivia prompt builders (unchanged) ──
@@ -318,21 +336,28 @@ async def get_lens(
 
 
 # ── public API (used by routes) ──
-async def analysis(db, cluster_id, lens: str, profession: str | None = None):
+async def analysis(
+    db, cluster_id, lens: str, profession: str | None = None,
+    depth_pref: str = "standard",
+):
     cluster, articles = await _load(db, cluster_id)
     if cluster is None:
         return {"error": "cluster_not_found"}
-    text_ = _cluster_text(cluster, articles) if articles else ""
+    text_ = _cluster_text(cluster, articles, depth_pref=depth_pref) if articles else ""
+    # Depth-scoped cache subkeys ONLY for non-standard depths: existing standard caches stay
+    # valid, and brief/expert answers can never cross-serve (the 04-plan cache trap).
+    dp = "" if depth_pref in (None, "", "standard") else f":{depth_pref}"
+    ds = _depth_suffix(depth_pref)
     if lens == "key_facts":
-        return await get_lens(db, cluster_id, column="analysis_json", subkey="key_facts",
-                              prompt=_prompt_key_facts(text_), schema={"facts": []})
+        return await get_lens(db, cluster_id, column="analysis_json", subkey=f"key_facts{dp}",
+                              prompt=_prompt_key_facts(text_) + ds, schema={"facts": []})
     if lens == "5ws":
-        return await get_lens(db, cluster_id, column="analysis_json", subkey="5ws",
-                              prompt=_prompt_5ws(text_), schema={"who": ""})
+        return await get_lens(db, cluster_id, column="analysis_json", subkey=f"5ws{dp}",
+                              prompt=_prompt_5ws(text_) + ds, schema={"who": ""})
     if lens == "profession":
         return await get_lens(db, cluster_id, column="analysis_json",
-                              subkey=f"prof:{profession_hash(profession)}",
-                              prompt=_prompt_profession(text_, profession),
+                              subkey=f"prof:{profession_hash(profession)}{dp}",
+                              prompt=_prompt_profession(text_, profession) + ds,
                               schema={"headline": ""})
     return {"error": "unknown_lens"}
 

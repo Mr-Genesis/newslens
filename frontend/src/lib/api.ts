@@ -74,14 +74,34 @@ export interface Topic {
 export interface BriefingStory {
   title: string;
   summary: string;
-  /** null on the article-fallback path (article not clustered yet) — no deep-dive to link to. */
+  /** null on the article-fallback path (article not clustered yet). */
   cluster_id: number | null;
+  /** set on fallback stories so the card can open the single-article view (/story?aid=N). */
+  article_id?: number | null;
+  /** reader-facing region tag, e.g. "India" */
+  region?: string | null;
   category: string;
   source_count: number;
   coherence: number;
   is_read?: boolean;
   // E6/Wave Q1: best-effort WIIFM one-liner ("why you're seeing this"), when cached
   impact_headline?: string | null;
+}
+
+export interface ArticleDetail {
+  id: number;
+  title: string;
+  snippet: string | null;
+  url: string;
+  source_name: string;
+  is_paywalled: boolean;
+  published_at: string | null;
+  /** resolved server-side — when set, the client upgrades to the full deep dive */
+  cluster_id: number | null;
+}
+
+export function getArticle(id: number): Promise<ArticleDetail> {
+  return fetchJSON(`/articles/${id}`);
 }
 
 export interface Briefing {

@@ -60,9 +60,10 @@ async def test_summarizer_fallback_unescapes_entities(monkeypatch):
 
     monkeypatch.setattr(llm, "generate", _unavailable)
 
-    summary, coherence = await summarizer.generate_cluster_summary(
+    headline, summary, coherence = await summarizer.generate_cluster_summary(
         ["RBI auction"], ["&nbsp;Cut-off yield &#8377;34,000 crore. Second sentence here."],
     )
+    assert headline is None  # LLM unavailable → keep the existing cluster title
     assert coherence == 0.70
     assert "&#8377;" not in summary and "&nbsp;" not in summary
     assert "₹" in summary

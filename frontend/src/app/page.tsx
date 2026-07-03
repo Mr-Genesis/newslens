@@ -13,6 +13,7 @@ import { DailyTriviaCard } from "@/components/ui/DailyTriviaCard";
 import { PersonalizeBanner } from "@/components/ui/PersonalizeBanner";
 import { WhileAwayCard } from "@/components/ui/WhileAwayCard";
 import { LaunchScreen } from "@/components/LaunchScreen";
+import { AnimatedMark } from "@/components/SplashScreen";
 import { getBriefing, getTopics, type Briefing, type BriefingStory, type Topic } from "@/lib/api";
 import { isStale } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -176,7 +177,7 @@ export default function BriefingPage() {
       {/* Topic chips */}
       {(state === "success" || state === "refreshing") &&
         categories.length > 2 && (
-          <div className="flex gap-2 overflow-x-auto no-scrollbar py-3 -mx-4 px-4">
+          <div className="flex flex-nowrap gap-2 overflow-x-auto no-scrollbar overscroll-x-contain py-3 -mx-4 px-4">
             {categories.map((cat) => (
               <Chip
                 key={cat}
@@ -202,16 +203,26 @@ export default function BriefingPage() {
           </div>
         )}
 
-      {/* Loading state */}
-      {state === "loading" && (
-        <div className="pt-4">
-          <div className="h-8 w-48 skeleton mb-4" />
-          <div className="h-5 w-32 skeleton mb-6" />
-          {[1, 2, 3, 4, 5].map((i) => (
-            <StoryCardSkeleton key={i} />
-          ))}
-        </div>
-      )}
+      {/* Loading state — FIRST load (no content yet) gets the branded animated-mark loader
+          (device-QA #11: "I see news loading instead of the loader screen"); skeletons only
+          when we already have content on screen (refresh / topic switch). */}
+      {state === "loading" &&
+        (!briefing || briefing.stories.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-center min-h-[60vh]">
+            <AnimatedMark size={120} loop />
+            <p className="text-mono uppercase text-[var(--text-secondary)] mt-6">
+              Assembling your briefing
+            </p>
+          </div>
+        ) : (
+          <div className="pt-4">
+            <div className="h-8 w-48 skeleton mb-4" />
+            <div className="h-5 w-32 skeleton mb-6" />
+            {[1, 2, 3, 4, 5].map((i) => (
+              <StoryCardSkeleton key={i} />
+            ))}
+          </div>
+        ))}
 
       {/* Empty / first-run state — cold-start launch experience */}
       {state === "empty" && (

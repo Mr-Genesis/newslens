@@ -29,11 +29,14 @@ def _staleness_cutoff(now: datetime | None = None) -> datetime:
 async def generate_cluster_summary(
     titles: list[str],
     snippets: list[str],
-) -> tuple[str, float]:
-    """Generate a summary for a story cluster via the active LLM provider (llm.generate).
+) -> tuple[str | None, str, float]:
+    """Generate an editorial headline + summary for a story cluster via llm.generate.
 
-    Returns (summary_text, coherence_score). Coherence is estimated from the number of
-    corroborating sources. Falls back to the first snippet if generation is unavailable.
+    Returns (headline | None, summary_text, coherence_score). The headline is a punchy,
+    fully fact-supported rewrite (device-QA #2 — raw feed titles like "Government Stock -
+    Full Auction Results" don't tell a reader why they should care). None on any failure
+    or guard trip → callers keep the existing title. Coherence is estimated from the
+    number of corroborating sources.
     """
     # Fallback: first available snippet, trimmed to ~2 sentences. Unescape defensively — rows
     # ingested before the fetcher decoded entities still carry &nbsp;/&#8377; in the DB.
@@ -61,23 +64,34 @@ async def generate_cluster_summary(
 
     from app.services import llm
     try:
-        summary = await llm.generate(
-            f"Summarize these {len(titles)} related articles:\n{articles_text}",
+        data = await llm.generate(
+            f"Rewrite the headline and summarize these {len(titles)} related articles:\n{articles_text}",
             system=(
-                "You are a news analyst. Summarize the following related news articles in 2-3 "
-                "concise sentences. Focus on key facts, implications, and what makes this story "
-                "significant. Be neutral and factual."
+                "You are a sharp news editor. Respond ONLY as JSON: "
+                '{"headline": "...", "summary": "..."}. '
+                "headline: one line, UNDER 90 characters, plain language, spark curiosity or "
+                "surprise — but every word must be fully supported by the articles; no clickbait "
+                "that overpromises, no invented numbers or names. "
+                "summary: 2-3 concise, neutral, factual sentences on what happened, why it "
+                "matters, and what to watch."
             ),
-            max_tokens=200,
+            schema={"headline": "", "summary": ""},
+            max_tokens=260,
         )
     except llm.LLMUnavailable:
-        return fallback_summary, 0.70
+        return None, fallback_summary, 0.70
     except Exception as e:  # noqa: BLE001 — never let a summary failure crash the caller
         logger.error("summary_generation_failed", error=str(e))
-        return fallback_summary, 0.70
+        return None, fallback_summary, 0.70
 
-    summary = (summary or "").strip()
-    return (summary, coherence) if summary else (fallback_summary, 0.70)
+    if not isinstance(data, dict):
+        return None, fallback_summary, 0.70
+    headline = (data.get("headline") or "").strip()
+    summary = (data.get("summary") or "").strip()
+    # Guard: an over-long/empty headline is worse than the original title.
+    if not headline or len(headline) > 90:
+        headline = None
+    return (headline, summary, coherence) if summary else (headline, fallback_summary, 0.70)
 
 
 async def summarize_cluster(cluster_id: int) -> tuple[str, float] | None:
@@ -105,9 +119,9 @@ async def summarize_cluster(cluster_id: int) -> tuple[str, float] | None:
         titles = [a.title for a in articles]
         snippets = [a.snippet or "" for a in articles]
 
-    summary, coherence = await generate_cluster_summary(titles, snippets)
+    headline, summary, coherence = await generate_cluster_summary(titles, snippets)
 
-    # Store on cluster
+    # Store on cluster; the AI headline replaces the raw first-article title when present.
     async with async_session() as session:
         await session.execute(
             update(StoryCluster)
@@ -116,6 +130,7 @@ async def summarize_cluster(cluster_id: int) -> tuple[str, float] | None:
                 summary=summary,
                 coherence=coherence,
                 summary_generated_at=datetime.now(timezone.utc),
+                **({"title": headline} if headline else {}),
             )
         )
         await session.commit()
@@ -125,6 +140,7 @@ async def summarize_cluster(cluster_id: int) -> tuple[str, float] | None:
         cluster_id=cluster_id,
         coherence=coherence,
         source_count=len(titles),
+        headline=bool(headline),
     )
 
     return summary, coherence
