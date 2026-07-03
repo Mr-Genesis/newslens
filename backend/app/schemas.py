@@ -14,6 +14,12 @@ class SourceOut(BaseModel):
     url: str
     source_type: SourceType
     is_paywalled: bool
+    # Phase 1 gated tiers (research/expert): shown as an author byline + credibility badge in the UI.
+    # None for plain news sources. The internal gating fields (audience, credibility_meta,
+    # per_fetch_cap) are deliberately NOT exposed.
+    author_name: str | None = None
+    credibility_score: int | None = None
+    is_preprint: bool = False
 
     model_config = {"from_attributes": True}
 
