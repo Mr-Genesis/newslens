@@ -9,6 +9,7 @@ import {
   getDiscoverDeck,
   recordSwipe,
   getTopicCards,
+  addFollow,
   type DiscoverCard as DiscoverCardType,
 } from "@/lib/api";
 
@@ -80,6 +81,12 @@ export default function DiscoverPage() {
       setTotalSwiped((prev) => prev + 1);
 
       recordSwipe(card.article_id, direction).catch(() => {});
+
+      // #83: a right swipe on a gated (research/expert) card also follows the source — the
+      // frictionless opt-in. Idempotent server-side, so a repeat swipe is harmless.
+      if (direction === "right" && card.is_gated && card.source_id != null) {
+        addFollow("source", String(card.source_id)).catch(() => {});
+      }
 
       if (direction === "up" && card.topic_id > 0) {
         try {

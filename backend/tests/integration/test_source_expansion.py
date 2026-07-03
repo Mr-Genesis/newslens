@@ -203,3 +203,12 @@ async def test_admin_create_expert_with_credibility_persists_tier_fields(aclient
     assert s.credibility_score == 84 and s.author_name == "Brian Potter"
     assert s.audience == ["science", "business"]
     assert (s.credibility_meta or {}).get("reviewed_by") == "admin"  # human-published ⇒ locked
+
+
+async def test_admin_rejects_out_of_range_credibility(aclient):
+    """A score outside 0-100 would break the ×[0.9,1.1] feed-rank bound → rejected at the boundary."""
+    r = await aclient.post("/admin/sources", json={
+        "name": "Overscored", "url": "https://overscored.example",
+        "source_type": "expert", "credibility_score": 500,
+    })
+    assert r.status_code == 400

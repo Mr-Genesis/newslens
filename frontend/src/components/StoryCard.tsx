@@ -4,6 +4,7 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/Badge";
 import { ConfidenceScore } from "@/components/ui/ConfidenceScore";
+import { SourceTierBadge } from "@/components/ui/SourceTierBadge";
 import { articleHref, cn, relativeTime, storyHref } from "@/lib/utils";
 import type { BriefingStory } from "@/lib/api";
 
@@ -94,6 +95,8 @@ export function StoryCard({ story }: StoryCardProps) {
               />
             </span>
             <span className="flex items-center gap-1.5">
+              {/* #78: "for your field" cue — RESEARCH/EXPERT badge on gated-tier stories. */}
+              <SourceTierBadge sourceType={story.tier} />
               {story.region && story.region !== story.category && (
                 <Badge variant="outline" size="sm">
                   {story.region.toUpperCase()}

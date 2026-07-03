@@ -144,6 +144,10 @@ class BriefingStory(BaseModel):
     is_read: bool = False
     # E6: best-effort WIIFM headline from already-cached impact_json (no new LLM calls)
     impact_headline: str | None = None
+    # Phase 2 · #78 — "research"/"expert" when the story comes from a gated-tier source (the UI shows
+    # a RESEARCH/EXPERT badge, the "for your field" cue that pairs with the #80 ranking bonus). None
+    # for ordinary news stories.
+    tier: str | None = None
 
 
 class ArticleDetail(BaseModel):
@@ -176,6 +180,15 @@ class DiscoverCardOut(BaseModel):
     topic_id: int
     topic_name: str
     coherence: float
+    # Phase 2 · #83 — gated-tier opt-in surface. `is_gated` marks a research/expert card (from the
+    # reserved discovery sample) so the UI can badge it and offer "Follow source"; `source_id` is the
+    # follow target. All default-None/False → news cards and older clients are unaffected.
+    source_id: int | None = None
+    source_type: str | None = None
+    is_gated: bool = False
+    is_preprint: bool = False
+    author_name: str | None = None
+    credibility_score: int | None = None
 
 
 class SwipeRequest(BaseModel):

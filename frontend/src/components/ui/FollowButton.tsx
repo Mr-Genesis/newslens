@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { addFollow, getFollows, removeFollow, type FollowItem } from "@/lib/api";
 
 // The API client types `kind` as a plain string; constrain it here for the UI.
-type FollowKind = "topic" | "entity" | "saved_search";
+type FollowKind = "topic" | "entity" | "saved_search" | "source";
 
 interface FollowButtonProps {
   kind: FollowKind;
