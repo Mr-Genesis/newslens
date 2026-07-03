@@ -62,3 +62,28 @@ def test_fetch_timeout_honors_slow_source_meta():
     slow = SimpleNamespace(credibility_meta={"fetch_timeout": 45})  # NITI needs >20s
     assert _fetch_timeout(fast) == 30.0
     assert _fetch_timeout(slow) == 45.0
+
+
+# ── review hardening: the helpers must not misfire on legitimate input ──
+def test_normalize_link_only_strips_bare_host_double_prefix():
+    """Strip ONLY the scheme://host/scheme://… malformation (SEBI). A URL that embeds another URL
+    deeper in its path (redirect endpoints, archive links) must survive untouched."""
+    deep = "https://ex.example/redirect/https://other.example/page"
+    assert _normalize_link(deep) == deep
+    unencoded_q = "https://ex.example/out?next=https://other.example"
+    assert _normalize_link(unencoded_q) == unencoded_q
+
+
+def test_english_guard_judges_words_not_symbols():
+    """Ratio is over ALPHABETIC chars only (majority rule) — currency symbols, dashes and digits
+    never count against a title, and quoting one Devanagari name doesn't kill an English headline."""
+    assert _is_probably_english("PM launches 'विकसित भारत' initiative in Delhi") is True  # EN majority
+    assert _is_probably_english("₹2,000 cr penalty — RBI order against NBFC") is True     # symbols ignored
+    assert _is_probably_english("प्रधानमंत्री ने नई योजना का उद्घाटन किया") is False        # HI majority
+    assert _is_probably_english("...!!! 123") is True  # no letters at all → benefit of the doubt
+
+
+def test_fetch_timeout_clamps_garbage():
+    assert _fetch_timeout(SimpleNamespace(credibility_meta={"fetch_timeout": -5})) == 30.0
+    assert _fetch_timeout(SimpleNamespace(credibility_meta={"fetch_timeout": "inf"})) == 30.0
+    assert _fetch_timeout(SimpleNamespace(credibility_meta={"fetch_timeout": 9999})) == 120.0

@@ -195,3 +195,174 @@ async def test_review_job_never_scores_officials(db_session, monkeypatch):
 
     fresh = (await db_session.execute(sa.select(Source).where(Source.id == fed.id))).scalar_one()
     assert "proposed_score" not in (fresh.credibility_meta or {})  # official → skipped
+
+
+# ── review fixes: the ungated surfaces (digest, topic cards) + admin audience contract ──
+async def _cluster_for(db_session, source, title):
+    from app.models import ClusterArticle, StoryCluster
+    art = (await db_session.execute(
+        sa.select(Article).where(Article.source_id == source.id))).scalars().first()
+    cl = StoryCluster(title=title, summary="cached", coherence=0.9)
+    db_session.add(cl)
+    await db_session.flush()
+    db_session.add(ClusterArticle(cluster_id=cl.id, article_id=art.id))
+    await db_session.flush()
+    return cl
+
+
+async def test_digest_gates_official_clusters(aclient, db_session):
+    """/digest (the WhileAwayCard) must apply the same persona gate as the briefing — officials form
+    singleton clusters and would otherwise leak onto every user's home screen."""
+    await _set_profession(db_session, None)
+    rbi = await _official(db_session)
+    news = await _news(db_session)
+    await _cluster_for(db_session, rbi, "RBI Circulars item")
+    await _cluster_for(db_session, news, "Reuters story")
+
+    items = (await aclient.get("/digest")).json()["items"]
+    titles = {i["title"] for i in items}
+    assert "Reuters story" in titles
+    assert "RBI Circulars item" not in titles  # gated out for a profession-less user
+
+
+async def test_topic_cards_never_serve_gated_sources(aclient, db_session):
+    """/discover/topic/{id} (swipe-up cards) must exclude ALL gated tiers — gated content only ever
+    arrives via the deck's flagged opt-in sample, never as unflagged topic cards."""
+    from app.models import ArticleTopic, Topic
+
+    await _set_profession(db_session, None)
+    rbi = await _official(db_session)
+    filing = await _filing(db_session)
+    news = await _news(db_session)
+    topic = Topic(name="Policy")
+    db_session.add(topic)
+    await db_session.flush()
+    for src in (rbi, filing, news):
+        art = (await db_session.execute(
+            sa.select(Article).where(Article.source_id == src.id))).scalars().first()
+        db_session.add(ArticleTopic(article_id=art.id, topic_id=topic.id))
+    await db_session.flush()
+
+    cards = (await aclient.get(f"/discover/topic/{topic.id}")).json()
+    titles = {c["title"] for c in cards}
+    assert "Reuters story" in titles
+    assert "RBI Circulars item" not in titles and "NVDA 8-K" not in titles
+
+
+async def test_admin_official_requires_audience_and_filing_forces_empty(aclient, db_session):
+    """The audience contract is enforced at the write boundary: an official without audience would be
+    NULL = visible to EVERYONE (defeats the tier) → 400; a filing is always forced to audience=[]
+    (watchlist/follow-only) no matter what the caller sends."""
+    r = await aclient.post("/admin/sources", json={
+        "name": "Some Regulator", "url": "https://reg.example", "source_type": "official",
+        "credibility_score": 95,  # no audience → 400
+    })
+    assert r.status_code == 400
+
+    r2 = await aclient.post("/admin/sources", json={
+        "name": "EDGAR NVDA", "url": "https://edgar2.example", "rss_url": "https://edgar2.example/atom",
+        "source_type": "filing", "credibility_score": 95, "audience": ["finance"],  # ignored
+    })
+    assert r2.status_code == 200
+    row = (await db_session.execute(
+        sa.select(Source).where(Source.url == "https://edgar2.example"))).scalar_one()
+    assert row.audience == []  # forced watchlist-only, caller's audience ignored
+
+
+async def test_briefing_hides_official_from_profession_less_user(aclient, db_session, fake_llm):
+    await _set_profession(db_session, None)
+    rbi = await _official(db_session)
+    news = await _news(db_session)
+    await _cluster_for(db_session, rbi, "RBI Circulars item")
+    await _cluster_for(db_session, news, "Reuters story")
+
+    titles = {s["title"] for s in (await aclient.get("/briefing")).json()["stories"]}
+    assert "Reuters story" in titles and "RBI Circulars item" not in titles
+
+
+async def test_filter_filing_roundtrip_with_follow(aclient, db_session):
+    """?source_type=filing: empty for a non-follower; the follower sees exactly their filings."""
+    await _set_profession(db_session, None)
+    f = await _filing(db_session)
+    empty = (await aclient.get("/feed?per_page=50&source_type=filing")).json()["articles"]
+    assert empty == []
+
+    await aclient.post("/follows", json={"kind": "source", "value": str(f.id)})
+    titles = {a["title"] for a in
+              (await aclient.get("/feed?per_page=50&source_type=filing")).json()["articles"]}
+    assert titles == {"NVDA 8-K"}
+
+
+async def test_below_floor_official_hidden_unless_followed(aclient, db_session):
+    """Floors apply to officials too — and the follow-override still wins."""
+    await _set_profession(db_session, "Equity trader")
+    low = Source(name="Minor Agency", url="https://minor.example", rss_url="https://minor.example/rss",
+                 source_type=SourceType.official, region="global", category="policy",
+                 credibility_score=40, audience=["finance"])  # 40 < feed floor 55
+    db_session.add(low)
+    await db_session.flush()
+    db_session.add(Article(title="Minor notice", url="https://minor.example/a1", source_id=low.id,
+                           snippet="A sufficiently long snippet for the feed card body here.",
+                           published_at=datetime(2026, 7, 4, tzinfo=timezone.utc)))
+    await db_session.flush()
+
+    assert "Minor notice" not in await _feed_titles(aclient)          # below floor → hidden
+    await aclient.post("/follows", json={"kind": "source", "value": str(low.id)})
+    assert "Minor notice" in await _feed_titles(aclient)               # explicit opt-in wins
+
+
+# ── end-to-end fetch wiring: english_guard, link normalize, per-source timeout ──
+class _FakeResp:
+    def __init__(self, text):
+        self.text = text
+        self.headers = {"content-type": "application/rss+xml"}
+
+    def raise_for_status(self):
+        pass
+
+
+class _FakeClient:
+    def __init__(self, body):
+        self._body = body
+        self.calls = []
+
+    async def get(self, url, timeout=None):
+        self.calls.append({"url": url, "timeout": timeout})
+        return _FakeResp(self._body)
+
+
+_GUARDED_RSS = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>PIB-like</title>
+<item><title>Cabinet approves the semiconductor incentive scheme for fabs</title>
+<link>https://www.sebi.gov.in/https://www.sebi.gov.in/notice/order-jul-2026.pdf</link>
+<description>A sufficiently long description body for the snippet threshold to pass fine.</description></item>
+<item><title>प्रधानमंत्री ने नई योजना का उद्घाटन किया</title>
+<link>https://gov.example/hi/item2</link>
+<description>Hindi item that the english guard must drop before it pollutes the corpus.</description></item>
+</channel></rss>"""
+
+
+async def test_fetch_single_feed_wires_guard_normalize_and_timeout(db_session):
+    """End-to-end through fetch_single_feed: the flagged source drops the Hindi entry, stores the
+    SEBI-style link NORMALIZED (dedup key sanity), and passes the per-source timeout to the client."""
+    from app.services import fetcher
+
+    src = Source(name="Guarded Official", url="https://guarded.example",
+                 rss_url="https://guarded.example/rss", source_type=SourceType.official,
+                 region="in", category="policy", credibility_score=95, audience=["policy"],
+                 credibility_meta={"english_guard": True, "fetch_timeout": 45})
+    db_session.add(src)
+    await db_session.flush()
+
+    client = _FakeClient(_GUARDED_RSS)
+    new_count = await fetcher.fetch_single_feed(src, client, session=db_session)
+
+    assert client.calls[0]["timeout"] == 45.0                     # [18] per-source timeout wired
+    assert new_count == 1                                          # [5] Hindi entry dropped
+    arts = (await db_session.execute(
+        sa.select(Article).where(Article.source_id == src.id))).scalars().all()
+    titles = {a.title for a in arts}
+    assert any("semiconductor" in t for t in titles)
+    assert not any("योजना" in t for t in titles)
+    # [14] the stored URL is the normalized inner URL, applied after relative-URL resolution
+    assert {a.url for a in arts} == {"https://www.sebi.gov.in/notice/order-jul-2026.pdf"}

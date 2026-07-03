@@ -242,35 +242,46 @@ def _best_body(entry) -> str:
     return content if len(content) > len(summary) else summary
 
 
+_DOUBLE_PREFIX = re.compile(r"^https?://[^/]+/(https?://.+)$", re.IGNORECASE)
+
+
 def _normalize_link(link: str) -> str:
     """Fix double-prefixed item links (SEBI emits https://www.sebi.gov.in/https://www.sebi.gov.in/…).
 
-    If a second scheme appears in the PATH (i.e. '/http://' or '/https://'), keep from there — the
-    inner URL is the real one. Encoded schemes in query strings (%3A%2F%2F) are untouched."""
-    for marker in ("/https://", "/http://"):
-        idx = link.find(marker)
-        if idx != -1:
-            return link[idx + 1:]
-    return link
+    Strips ONLY the exact malformation `scheme://host/scheme://…` — the prefix must be a bare host
+    with no real path, so redirect endpoints (/out?next=https://…) and archive links that embed a
+    URL deeper in their path are never touched."""
+    m = _DOUBLE_PREFIX.match(link)
+    return m.group(1) if m else link
 
 
 def _is_probably_english(text: str) -> bool:
-    """Cheap English guard (no LLM): the ASCII share of a Hindi/CJK title is tiny, an English one
-    is ~1.0. Used only for sources flagged credibility_meta.english_guard (PIB serves Hindi today)."""
+    """Cheap English guard (no LLM), used only for sources flagged credibility_meta.english_guard
+    (PIB serves Hindi today). Majority rule over ALPHABETIC chars only, so currency symbols, dashes
+    and digits never count against a title, and an English headline quoting one Devanagari name
+    survives; a majority-Devanagari title is dropped."""
     if not text:
         return True
-    ascii_chars = sum(1 for ch in text if ord(ch) < 128)
-    return (ascii_chars / len(text)) >= 0.85
+    letters = [ch for ch in text if ch.isalpha()]
+    if not letters:
+        return True  # no letters at all → benefit of the doubt
+    ascii_letters = sum(1 for ch in letters if ord(ch) < 128)
+    return (ascii_letters / len(letters)) >= 0.5
 
 
 def _fetch_timeout(source) -> float:
-    """Per-source fetch timeout: credibility_meta.fetch_timeout override, else 30s (NITI's server
-    needs ~45s — a hard 30s made it flap)."""
+    """Per-source fetch timeout: credibility_meta.fetch_timeout override clamped to [5, 120]s, else
+    30s (NITI's server needs ~45s — a hard 30s made it flap). Garbage (negative/inf/nan) → default."""
+    import math
+
     meta = getattr(source, "credibility_meta", None) or {}
     try:
-        return float(meta.get("fetch_timeout") or 30.0)
+        t = float(meta.get("fetch_timeout") or 30.0)
     except (TypeError, ValueError):
         return 30.0
+    if not math.isfinite(t) or t <= 0:
+        return 30.0
+    return min(120.0, max(5.0, t))
 
 
 def parse_pub_date(entry) -> datetime | None:
@@ -295,8 +306,11 @@ def parse_pub_date(entry) -> datetime | None:
     return None
 
 
-async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
-    """Fetch and parse a single RSS feed. Returns number of new articles."""
+async def fetch_single_feed(source: Source, client: httpx.AsyncClient, session=None) -> int:
+    """Fetch and parse a single RSS feed. Returns number of new articles.
+
+    Accepts an optional session (tests — the savepoint-wrapped harness session can't share rows
+    with a second connection); production opens its own, as before."""
     if not source.rss_url:
         return 0
 
@@ -317,8 +331,15 @@ async def fetch_single_feed(source: Source, client: httpx.AsyncClient) -> int:
         logger.warning("rss_parse_error", source=source.name, error=str(feed.bozo_exception))
         return 0
 
+    if session is not None:
+        return await _ingest_feed_entries(session, source, feed)
+    async with async_session() as s:
+        return await _ingest_feed_entries(s, source, feed)
+
+
+async def _ingest_feed_entries(session, source: Source, feed) -> int:
     new_count = 0
-    async with async_session() as session:
+    if True:
         for entry in _capped_entries(feed.entries, source.per_fetch_cap):
             # RSS titles/summaries carry HTML entities (&nbsp; &#8377; &amp;) — decode at
             # ingestion so every downstream consumer (cards, summaries, embeddings) sees clean text.

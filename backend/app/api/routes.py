@@ -1025,6 +1025,8 @@ async def get_topic_cards(
     """
     Returns 5 cards from a specific topic (triggered by swipe-up).
     """
+    from app.services import audience as _audience
+
     result = await db.execute(
         select(Article)
         .options(
@@ -1032,8 +1034,12 @@ async def get_topic_cards(
             selectinload(Article.topics).selectinload(ArticleTopic.topic),
         )
         .join(Article.topics)
+        .join(Source, Article.source_id == Source.id)
         .where(ArticleTopic.topic_id == topic_id)
         .where(Article.snippet.isnot(None))
+        # Gated tiers never arrive as unflagged topic cards — they only ever enter discover via the
+        # deck's flagged opt-in sample (which also excludes filing entirely).
+        .where(Source.source_type.notin_(list(_audience.gated_source_types())))
         .order_by(Article.published_at.desc().nullslast())
         .limit(5)
     )
@@ -1718,10 +1724,27 @@ async def get_digest(db: AsyncSession = Depends(get_db)):
     ).scalar_one_or_none()
     now = datetime.now(timezone.utc)
     since = u.last_seen_at if (u and u.last_seen_at) else (now - timedelta(hours=24))
+    # Persona-gate the digest exactly like the briefing — officials/research form SINGLETON clusters,
+    # so an ungated 3-newest-clusters window would put RBI circulars on every user's home screen.
+    from sqlalchemy import exists as _sa_exists
+
+    from app.config import settings as app_settings
+    from app.services import audience as _audience
+    _profession, _, _pv = await _user_profession_locale(db)
+    _tags = await _audience.resolve_tags(_profession, user_id=current_user_id(), persona_version=_pv)
+    _followed = await _audience.followed_source_ids(db, current_user_id())
+    _allowed = _audience.allowed_source_ids(
+        _tags, floor=app_settings.credibility_briefing_floor, followed_source_ids=_followed
+    )
+    _visible = _sa_exists().where(
+        ClusterArticle.cluster_id == StoryCluster.id,
+        ClusterArticle.article_id == Article.id,
+        Article.source_id.in_(_allowed),
+    )
     rows = (
         await db.execute(
             select(StoryCluster)
-            .where(StoryCluster.created_at > since)
+            .where(StoryCluster.created_at > since, _visible)
             .order_by(StoryCluster.created_at.desc())
             .limit(3)
         )
@@ -1852,6 +1875,15 @@ async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
     if credibility_score is not None and not (0 <= credibility_score <= 100):
         raise HTTPException(status_code=400, detail="credibility_score must be between 0 and 100")
 
+    # Audience contract at the write boundary: an official with audience=NULL would be visible to
+    # EVERYONE (allowed_source_ids treats NULL as "general") — defeating the tier. A filing is
+    # ALWAYS watchlist/follow-only: force audience=[] regardless of what the caller sent.
+    audience_field = body.get("audience")
+    if source_type == "official" and not audience_field:
+        raise HTTPException(status_code=400, detail="official sources require a non-empty audience")
+    if source_type == "filing":
+        audience_field = []
+
     # UPSERT: if a source with the same url OR rss_url exists, update it in place.
     match_clauses = [Source.url == url]
     if rss_url:
@@ -1880,7 +1912,7 @@ async def create_source(body: dict, db: AsyncSession = Depends(get_db)):
         author_name=body.get("author_name"),
         credibility_score=credibility_score,
         credibility_meta=credibility_meta or None,
-        audience=body.get("audience"),
+        audience=audience_field,
         is_preprint=bool(body.get("is_preprint", False)),
         per_fetch_cap=body.get("per_fetch_cap"),
     )
@@ -1924,9 +1956,11 @@ async def admin_breadth(days: int = Query(None, ge=1, le=365), db: AsyncSession 
 
     from app.config import settings as app_settings
 
+    from app.services import audience as _audience
+
     window = days or app_settings.breadth_stale_days
     cutoff = datetime.now(timezone.utc) - timedelta(days=window)
-    _gated = [SourceType.research, SourceType.expert]
+    _gated = list(_audience.gated_source_types())
 
     by_type_rows = (await db.execute(
         select(Source.source_type, func.count()).group_by(Source.source_type))).all()
