@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { AnimatedMark } from "@/components/SplashScreen";
 
 /**
  * Welcome — first-run intro carousel (official "Splash & Onboarding" design,
@@ -52,6 +53,7 @@ function Slide({ children, className }: { children: React.ReactNode; className?:
 export default function WelcomePage() {
   const router = useRouter();
   const [page, setPage] = useState(0);
+  const [paused, setPaused] = useState(false);
 
   // Returning users skip the intro.
   useEffect(() => {
@@ -60,23 +62,40 @@ export default function WelcomePage() {
     }
   }, [router]);
 
+  // Auto-advance every 4s until the last page; any deliberate interaction (Back, dot tap,
+  // press-and-hold on the track) pauses it — the reader has taken control.
+  useEffect(() => {
+    if (paused || page >= 2) return;
+    const t = setTimeout(() => setPage((p) => Math.min(2, p + 1)), 4000);
+    return () => clearTimeout(t);
+  }, [page, paused]);
+
   const next = () => setPage((p) => Math.min(2, p + 1));
-  const back = () => setPage((p) => Math.max(0, p - 1));
+  const back = () => {
+    setPaused(true); // going back = reading at their own pace
+    setPage((p) => Math.max(0, p - 1));
+  };
   const toPicker = () => router.push("/onboarding");
 
   return (
     <div className="relative mt-[calc(var(--page-top)*-1)] mb-[calc(var(--page-bottom)*-1)] min-h-[100dvh] bg-[#0C0C0E] flex flex-col overflow-hidden">
-      {/* Top controls */}
-      <div className="h-12 flex items-center justify-between px-4 pt-[var(--safe-top)] shrink-0 z-10">
+      {/* Top controls — ≥44px tap targets (Android minimum) */}
+      <div className="h-14 flex items-center justify-between px-4 pt-[var(--safe-top)] shrink-0 z-10">
         {page > 0 ? (
-          <button onClick={back} className="text-mono uppercase tracking-[0.1em] text-[var(--text-muted)]">
+          <button
+            onClick={back}
+            className="min-h-12 min-w-12 -ml-3 px-3 flex items-center gap-1 text-[12px] font-[family-name:var(--font-jetbrains-mono)] uppercase tracking-[0.1em] text-[var(--text-secondary)] active:opacity-60 transition-opacity"
+          >
             &larr; Back
           </button>
         ) : (
           <span />
         )}
         {page < 2 ? (
-          <button onClick={toPicker} className="text-mono uppercase tracking-[0.1em] text-[var(--text-muted)]">
+          <button
+            onClick={toPicker}
+            className="min-h-12 min-w-12 -mr-3 px-3 flex items-center gap-1 text-[12px] font-[family-name:var(--font-jetbrains-mono)] uppercase tracking-[0.1em] text-[var(--text-secondary)] active:opacity-60 transition-opacity"
+          >
             Skip
           </button>
         ) : (
@@ -84,8 +103,13 @@ export default function WelcomePage() {
         )}
       </div>
 
-      {/* Track */}
-      <div className="flex-1 relative overflow-hidden">
+      {/* Track — press-and-hold pauses the auto-advance */}
+      <div
+        className="flex-1 relative overflow-hidden"
+        onPointerDown={() => setPaused(true)}
+        onPointerUp={() => setPaused(false)}
+        onPointerCancel={() => setPaused(false)}
+      >
         <div
           className="flex h-full w-[300%] transition-transform duration-500 [transition-timing-function:cubic-bezier(0.5,0.05,0.18,1)]"
           style={{ transform: `translateX(-${(page * 100) / 3}%)` }}
@@ -93,21 +117,9 @@ export default function WelcomePage() {
           {/* Page 1 — spotlight */}
           <Slide className="!pt-[64px]">
             <div className="flex-1 flex items-center justify-center">
-              {/* Framed spotlight — the mark in a viewfinder ring with outer source ticks (official brand spotlight) */}
-              <svg viewBox="0 0 100 100" width={210} height={210} className="overflow-visible" role="img" aria-hidden>
-                <g stroke="var(--border)" strokeWidth={3} strokeLinecap="round">
-                  <line x1="6" y1="22" x2="17" y2="22" />
-                  <line x1="2" y1="50" x2="14" y2="50" />
-                  <line x1="6" y1="78" x2="17" y2="78" />
-                  <line x1="83" y1="22" x2="94" y2="22" />
-                  <line x1="86" y1="50" x2="98" y2="50" />
-                  <line x1="83" y1="78" x2="94" y2="78" />
-                </g>
-                <circle cx="50" cy="50" r="26" fill="none" stroke="var(--border-subtle)" strokeWidth={1} />
-                <path d="M35 26 H22 V74 H35" fill="none" stroke="var(--text-primary)" strokeWidth={5} strokeLinecap="round" strokeLinejoin="round" />
-                <path d="M65 26 H78 V74 H65" fill="none" stroke="var(--text-primary)" strokeWidth={5} strokeLinecap="round" strokeLinejoin="round" />
-                <circle cx="50" cy="50" r="7.5" fill="var(--accent)" />
-              </svg>
+              {/* The canonical animated mark — official kit geometry (story lines INSIDE the
+                  brackets). Replaces a hand-drawn "spotlight" variant that put ticks outside. */}
+              <AnimatedMark size={210} />
             </div>
             <Kicker>News intelligence</Kicker>
             <Headline>
@@ -196,23 +208,32 @@ export default function WelcomePage() {
         </div>
       </div>
 
-      {/* Bottom: dots + next */}
+      {/* Bottom: dots (tappable, ≥44px hit areas) + next */}
       <div className="h-24 flex items-center justify-between px-6 pb-[var(--safe-bottom)] shrink-0 z-10">
-        <div className="flex gap-[7px] items-center">
+        <div className="flex items-center">
           {[0, 1, 2].map((i) => (
-            <span
+            <button
               key={i}
-              className={cn(
-                "h-1.5 rounded-full transition-all duration-300",
-                i === page ? "w-5 bg-[var(--text-primary)]" : "w-1.5 bg-[var(--text-ghost)]"
-              )}
-            />
+              aria-label={`Page ${i + 1}`}
+              onClick={() => {
+                setPaused(true); // jumping pages = self-paced from here on
+                setPage(i);
+              }}
+              className="h-11 w-6 flex items-center justify-center"
+            >
+              <span
+                className={cn(
+                  "h-1.5 rounded-full transition-all duration-300",
+                  i === page ? "w-5 bg-[var(--text-primary)]" : "w-1.5 bg-[var(--text-ghost)]"
+                )}
+              />
+            </button>
           ))}
         </div>
         {page < 2 && (
           <button
             onClick={next}
-            className="h-[46px] px-6 rounded-full bg-[var(--text-primary)] text-[#0C0C0E] font-medium text-[14.5px] flex items-center gap-2"
+            className="h-12 pl-7 pr-6 rounded-full bg-[var(--text-primary)] text-[#0C0C0E] font-medium text-[15px] flex items-center gap-2 active:scale-[0.97] transition-transform"
           >
             Next &rarr;
           </button>

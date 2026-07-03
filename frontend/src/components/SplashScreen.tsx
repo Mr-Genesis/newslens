@@ -19,8 +19,14 @@ import { BrandMark } from "@/components/ui/BrandMark";
  */
 const SEEN_KEY = "newslens-splash-seen";
 
-/** One-shot mark animation — kit keyframes retimed from the 5.5s loop to a single ~1.7s reveal. */
-function AnimatedMark({ size = 150 }: { size?: number }) {
+/**
+ * Official mark choreography (brand kit "NewsLens Mark - Animated"): ticks gather →
+ * brackets close in while drawing on → the story-dot pops with a resolution ring.
+ * Default = one-shot reveal (splash). `loop` = the kit's original 5.5s infinite cycle
+ * (loaders — the "logo animates while news resolves" screen).
+ */
+export function AnimatedMark({ size = 150, loop = false }: { size?: number; loop?: boolean }) {
+  const cls = loop ? "lp" : "os";
   return (
     <div style={{ width: size, height: size }}>
       <style>{`
@@ -29,24 +35,35 @@ function AnimatedMark({ size = 150 }: { size?: number }) {
         @keyframes nlTickIn{0%{opacity:0}55%{opacity:var(--to)}100%{opacity:calc(var(--to)*0.32)}}
         @keyframes nlDotPop{0%,62%{transform:scale(0);opacity:0}78%{transform:scale(1.22);opacity:1}90%{transform:scale(1)}100%{transform:scale(1);opacity:1}}
         @keyframes nlRingOut{0%,64%{transform:scale(1);opacity:0}70%{transform:scale(1.12);opacity:.55}100%{transform:scale(3.4);opacity:0}}
-        .nl-bl{stroke-dasharray:74;transform-box:view-box;animation:nlBracketL .9s cubic-bezier(.5,.05,.18,1) .15s both}
-        .nl-br{stroke-dasharray:74;transform-box:view-box;animation:nlBracketR .9s cubic-bezier(.5,.05,.18,1) .15s both}
-        .nl-t{animation:nlTickIn 1.35s ease-in-out both}
-        .nl-dot{transform-box:fill-box;transform-origin:center;animation:nlDotPop 1.75s cubic-bezier(.34,1.56,.64,1) both}
-        .nl-ring{transform-box:fill-box;transform-origin:center;animation:nlRingOut 1.75s ease-out both}
+        .os-bl{stroke-dasharray:74;transform-box:view-box;animation:nlBracketL .9s cubic-bezier(.5,.05,.18,1) .15s both}
+        .os-br{stroke-dasharray:74;transform-box:view-box;animation:nlBracketR .9s cubic-bezier(.5,.05,.18,1) .15s both}
+        .os-t{animation:nlTickIn 1.35s ease-in-out both}
+        .os-dot{transform-box:fill-box;transform-origin:center;animation:nlDotPop 1.75s cubic-bezier(.34,1.56,.64,1) both}
+        .os-ring{transform-box:fill-box;transform-origin:center;animation:nlRingOut 1.75s ease-out both}
+        /* loop mode — kit's original infinite cycle (percentages from the standalone HTML) */
+        @keyframes nlBracketLoopL{0%,7%{stroke-dashoffset:74;opacity:0;transform:translateX(-7px)}16%{opacity:1}38%{stroke-dashoffset:0;opacity:1;transform:translateX(0)}86%{stroke-dashoffset:0;opacity:1;transform:translateX(0)}100%{stroke-dashoffset:74;opacity:0;transform:translateX(-7px)}}
+        @keyframes nlBracketLoopR{0%,7%{stroke-dashoffset:74;opacity:0;transform:translateX(7px)}16%{opacity:1}38%{stroke-dashoffset:0;opacity:1;transform:translateX(0)}86%{stroke-dashoffset:0;opacity:1;transform:translateX(0)}100%{stroke-dashoffset:74;opacity:0;transform:translateX(7px)}}
+        @keyframes nlTickLoop{0%,4%{opacity:0}22%{opacity:var(--to)}40%{opacity:var(--to)}54%{opacity:calc(var(--to)*0.32)}86%{opacity:calc(var(--to)*0.32)}100%{opacity:0}}
+        @keyframes nlDotLoop{0%,40%{transform:scale(0);opacity:0}50%{transform:scale(1.22);opacity:1}58%{transform:scale(1);opacity:1}86%{transform:scale(1);opacity:1}100%{transform:scale(0.55);opacity:0}}
+        @keyframes nlRingLoop{0%,42%{transform:scale(1);opacity:0}46%{transform:scale(1.12);opacity:.55}64%{transform:scale(3.4);opacity:0}100%{transform:scale(3.4);opacity:0}}
+        .lp-bl{stroke-dasharray:74;transform-box:view-box;animation:nlBracketLoopL 5.5s cubic-bezier(.5,.05,.18,1) infinite}
+        .lp-br{stroke-dasharray:74;transform-box:view-box;animation:nlBracketLoopR 5.5s cubic-bezier(.5,.05,.18,1) infinite}
+        .lp-t{animation:nlTickLoop 5.5s ease-in-out infinite}
+        .lp-dot{transform-box:fill-box;transform-origin:center;animation:nlDotLoop 5.5s cubic-bezier(.34,1.56,.64,1) infinite}
+        .lp-ring{transform-box:fill-box;transform-origin:center;animation:nlRingLoop 5.5s ease-out infinite}
       `}</style>
       <svg viewBox="0 0 100 100" style={{ display: "block", width: "100%", height: "100%", overflow: "visible" }}>
         {/* source ticks: faint reports waiting to be resolved — always INSIDE the brackets */}
-        <line x1="33" y1="41" x2="44" y2="41" stroke="#3F3F46" strokeWidth="4" strokeLinecap="round" className="nl-t" style={{ ["--to" as string]: 0.85, animationDelay: "0.12s" }} />
-        <line x1="29" y1="50" x2="43" y2="50" stroke="#A1A1AA" strokeWidth="4" strokeLinecap="round" className="nl-t" style={{ ["--to" as string]: 1, animationDelay: "0.05s" }} />
-        <line x1="33" y1="59" x2="44" y2="59" stroke="#3F3F46" strokeWidth="4" strokeLinecap="round" className="nl-t" style={{ ["--to" as string]: 0.85, animationDelay: "0.19s" }} />
+        <line x1="33" y1="41" x2="44" y2="41" stroke="#3F3F46" strokeWidth="4" strokeLinecap="round" className={`${cls}-t`} style={{ ["--to" as string]: 0.85, animationDelay: "0.12s" }} />
+        <line x1="29" y1="50" x2="43" y2="50" stroke="#A1A1AA" strokeWidth="4" strokeLinecap="round" className={`${cls}-t`} style={{ ["--to" as string]: 1, animationDelay: "0.05s" }} />
+        <line x1="33" y1="59" x2="44" y2="59" stroke="#3F3F46" strokeWidth="4" strokeLinecap="round" className={`${cls}-t`} style={{ ["--to" as string]: 0.85, animationDelay: "0.19s" }} />
         {/* the resolution ring — expands once at the instant of focus */}
-        <circle cx="50" cy="50" r="8" fill="none" stroke="#F97316" strokeWidth="1.4" className="nl-ring" />
+        <circle cx="50" cy="50" r="8" fill="none" stroke="#F97316" strokeWidth="1.4" className={`${cls}-ring`} />
         {/* editorial brackets closing in */}
-        <path d="M35 26 H22 V74 H35" fill="none" stroke="#E4E4E7" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" className="nl-bl" />
-        <path d="M65 26 H78 V74 H65" fill="none" stroke="#E4E4E7" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" className="nl-br" />
+        <path d="M35 26 H22 V74 H35" fill="none" stroke="#E4E4E7" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" className={`${cls}-bl`} />
+        <path d="M65 26 H78 V74 H65" fill="none" stroke="#E4E4E7" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" className={`${cls}-br`} />
         {/* the single story, in focus */}
-        <circle cx="50" cy="50" r="7" fill="#F97316" className="nl-dot" />
+        <circle cx="50" cy="50" r="7" fill="#F97316" className={`${cls}-dot`} />
       </svg>
     </div>
   );

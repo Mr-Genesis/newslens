@@ -127,12 +127,30 @@ class BriefingStory(BaseModel):
     # article id: cluster and article ids are separate sequences, so a masqueraded id points the
     # deep-dive/lenses at a nonexistent or WRONG cluster as the sequences race past each other.
     cluster_id: int | None
+    # Set on the article-fallback path so unclustered stories still open a detail view
+    # (/story?aid=N) instead of rendering as dead cards.
+    article_id: int | None = None
     category: str
+    # Reader-facing region tag ("India" when any source is region=in) — device-QA #3b.
+    region: str | None = None
     source_count: int
     coherence: float
     is_read: bool = False
     # E6: best-effort WIIFM headline from already-cached impact_json (no new LLM calls)
     impact_headline: str | None = None
+
+
+class ArticleDetail(BaseModel):
+    """Single-article detail for briefing-fallback stories (no cluster yet)."""
+    id: int
+    title: str
+    snippet: str | None
+    url: str
+    source_name: str
+    is_paywalled: bool
+    published_at: datetime | None
+    # Resolved so the client can upgrade to the full deep dive when the article has a cluster.
+    cluster_id: int | None
 
 
 class BriefingResponse(BaseModel):

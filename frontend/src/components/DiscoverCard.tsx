@@ -78,7 +78,9 @@ export function DiscoverCard({
   return (
     <motion.div
       className={cn(
-        "absolute inset-x-0 rounded-[var(--radius-lg)] overflow-hidden",
+        // inset-0: the card FILLS the stack container (page owns the height) — the old
+        // inset-x-0 + own-height pair let the card overflow the container onto the buttons.
+        "absolute inset-0 rounded-[var(--radius-lg)] overflow-hidden",
         "bg-[var(--surface-card)] border border-[var(--glass-border)]",
         isTop ? "cursor-grab active:cursor-grabbing" : "pointer-events-none"
       )}
@@ -116,11 +118,8 @@ export function DiscoverCard({
         </>
       )}
 
-      {/* Card content */}
-      <div
-        className={cn("p-4 flex flex-col", !isTop && "invisible")}
-        style={{ height: "min(420px, calc(100dvh - 240px))" }}
-      >
+      {/* Card content — fills the card; no competing height math */}
+      <div className={cn("p-4 flex flex-col h-full", !isTop && "invisible")}>
         {/* Header: topic badge + agreement */}
         <div className="flex items-center justify-between gap-2">
           <Badge variant="topic" size="md" color={topicColor}>
@@ -153,9 +152,9 @@ export function DiscoverCard({
           </div>
         )}
 
-        {/* Facts */}
-        <ul className="mt-4 space-y-2.5 flex-1 overflow-hidden">
-          {card.facts.map((fact, i) => (
+        {/* Facts — top 3, clipped cleanly (never mid-line) */}
+        <ul className="mt-4 space-y-2.5 flex-1 min-h-0 overflow-hidden">
+          {card.facts.slice(0, 3).map((fact, i) => (
             <li key={i} className="text-small text-[var(--text-secondary)] flex items-start gap-2.5">
               <span className="w-1.5 h-1.5 rounded-full shrink-0 mt-[7px]" style={{ backgroundColor: topicColor }} />
               <span className="line-clamp-2">{fact}</span>
@@ -163,8 +162,8 @@ export function DiscoverCard({
           ))}
         </ul>
 
-        {/* Source chips */}
-        <div className="flex items-center gap-1.5 flex-wrap mt-4 pt-3 border-t border-[var(--glass-border)]">
+        {/* Source chips — pinned to the card bottom */}
+        <div className="flex items-center gap-1.5 flex-wrap mt-auto pt-3 border-t border-[var(--glass-border)]">
           {card.sources.slice(0, 3).map((s) => (
             <span key={s} className="text-mono text-[10px] px-2 py-0.5 rounded-full bg-[var(--surface-raised)] text-[var(--text-secondary)]">
               {s}

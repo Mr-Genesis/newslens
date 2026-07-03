@@ -5,6 +5,7 @@ import { BottomTabBar } from "@/components/layout/BottomTabBar";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { AuthProvider } from "@/components/AuthProvider";
 import { SplashScreen } from "@/components/SplashScreen";
+import { BackButtonHandler } from "@/components/BackButtonHandler";
 import "./globals.css";
 
 // Inline script to prevent flash of wrong theme (runs before React hydration)
@@ -64,6 +65,7 @@ export default function RootLayout({
       <body className="min-h-[100dvh] flex flex-col overflow-x-hidden">
         <ThemeProvider>
           <AuthProvider>
+            <BackButtonHandler />
             <SplashScreen />
             <NavBar />
             <main className="flex-1 pt-[var(--page-top)] pb-[var(--page-bottom)]">

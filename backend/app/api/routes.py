@@ -366,6 +366,47 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
     )
 
 
+@router.get("/articles/{article_id}", dependencies=[Depends(get_current_user)])
+async def get_article(article_id: int, db: AsyncSession = Depends(get_db)):
+    """Single-article detail for briefing-fallback stories (article not clustered yet).
+
+    Resolves the article's cluster id when one exists so the client can upgrade to the
+    full deep dive instead of the single-article view.
+    """
+    from fastapi import HTTPException
+
+    from app.schemas import ArticleDetail
+
+    article = (
+        await db.execute(
+            select(Article)
+            .options(selectinload(Article.source))
+            .where(Article.id == article_id)
+        )
+    ).scalar_one_or_none()
+    if article is None:
+        raise HTTPException(status_code=404, detail="article not found")
+
+    cluster_id = (
+        await db.execute(
+            select(ClusterArticle.cluster_id)
+            .where(ClusterArticle.article_id == article_id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    return ArticleDetail(
+        id=article.id,
+        title=article.title,
+        snippet=article.snippet,
+        url=article.url,
+        source_name=article.source.name if article.source else "Unknown",
+        is_paywalled=bool(article.source.is_paywalled) if article.source else False,
+        published_at=article.published_at,
+        cluster_id=cluster_id,
+    )
+
+
 @router.get("/topics", response_model=TopicListResponse)
 async def get_topics(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Topic).order_by(Topic.name))
@@ -459,6 +500,19 @@ def _extract_impact_headline(impact_json: dict | None) -> str | None:
     return None
 
 
+# Source-taxonomy categories → reader-facing chip names (used when an article has no topic
+# row yet — the source's own category beats a blanket "General").
+SOURCE_CATEGORY_DISPLAY = {
+    "world": "World",
+    "technology": "Technology",
+    "science": "Science",
+    "business": "Business",
+    "national": "India",
+    "policy": "Policy",
+    "startup": "Start-up",
+}
+
+
 @router.get("/briefing", response_model=BriefingResponse, dependencies=[Depends(get_current_user)])
 async def get_briefing(db: AsyncSession = Depends(get_db)):
     """
@@ -517,18 +571,27 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
         first_snippet = None
         category = "General"
         topic_id = None
+        region = None
         cluster_article_ids = []
         for ca in cluster.articles:
             source_names.add(ca.article.source.name)
             cluster_article_ids.append(ca.article.id)
             if first_snippet is None and ca.article.snippet:
                 first_snippet = ca.article.snippet
+            if region is None and ca.article.source and ca.article.source.region == "in":
+                region = "India"
             if category == "General" and ca.article.topics:
                 for at in ca.article.topics:
                     if at.topic:
                         category = at.topic.name
                         topic_id = at.topic_id
                         break
+            # No topic row yet → classify by the source's own category (every seeded source
+            # carries one) instead of defaulting everything to "General" (device-QA #3b).
+            if category == "General" and ca.article.source and ca.article.source.category:
+                category = SOURCE_CATEGORY_DISPLAY.get(
+                    ca.article.source.category, category
+                )
 
         # Use real summary or on-demand generate
         summary = cluster.summary
@@ -572,6 +635,7 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
                 summary=summary,
                 cluster_id=cluster.id,
                 category=category,
+                region=region,
                 source_count=len(source_names),
                 coherence=coherence,
                 is_read=is_read,
@@ -594,7 +658,10 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     if not stories:
         article_result = await db.execute(
             select(Article)
-            .options(selectinload(Article.source))
+            .options(
+                selectinload(Article.source),
+                selectinload(Article.topics).selectinload(ArticleTopic.topic),
+            )
             .where(Article.snippet.isnot(None))
             .order_by(Article.published_at.desc().nullslast())
             .limit(8)
@@ -613,24 +680,21 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
         ).all()
         article_cluster = {aid: cid for aid, cid in ca_rows}
 
-        source_categories = {
-            "BBC News": "World",
-            "Al Jazeera": "World",
-            "NPR News": "World",
-            "Reuters - World": "World",
-            "TechCrunch": "Tech",
-            "Ars Technica": "Tech",
-            "The Verge": "Tech",
-            "Hacker News": "Tech",
-            "Nature News": "Science",
-            "Wall Street Journal": "Business",
-        }
-
         for a in articles:
             snippet = a.snippet or ""
             sentences = snippet.split(". ")
             summary = ". ".join(sentences[:2]) + "." if len(sentences) > 1 else snippet
-            category = source_categories.get(a.source.name, "General")
+            # Classify: article topic → source's own category → General. (The old version
+            # mapped 10 hardcoded Western outlet names, so every Indian source fell to
+            # "General" — device-QA #3b.)
+            category = "General"
+            for at in a.topics:
+                if at.topic:
+                    category = at.topic.name
+                    break
+            if category == "General" and a.source and a.source.category:
+                category = SOURCE_CATEGORY_DISPLAY.get(a.source.category, "General")
+            region = "India" if (a.source and a.source.region == "in") else None
             is_read = a.id in read_article_ids
 
             stories.append(
@@ -638,7 +702,9 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
                     title=a.title,
                     summary=summary,
                     cluster_id=article_cluster.get(a.id),
+                    article_id=a.id,  # unclustered fallback cards open /story?aid=N
                     category=category,
+                    region=region,
                     source_count=1,
                     coherence=0.70,
                     is_read=is_read,
@@ -1314,7 +1380,12 @@ async def cluster_analysis(
     if lens not in ("key_facts", "5ws", "profession"):
         raise HTTPException(status_code=400, detail="invalid lens")
     profession, _ = await _user_profession_locale(db)
-    return await lenses.analysis(db, cluster_id, lens, profession=profession)
+    # Depth toggle (Brief/Standard/Expert) genuinely changes retrieval budget + answer style.
+    u = (
+        await db.execute(select(User).where(User.id == current_user_id()))
+    ).scalar_one_or_none()
+    depth = (u.depth_pref if u and u.depth_pref else "standard")
+    return await lenses.analysis(db, cluster_id, lens, profession=profession, depth_pref=depth)
 
 
 @router.get("/clusters/{cluster_id}/impact", dependencies=[Depends(get_current_user)])

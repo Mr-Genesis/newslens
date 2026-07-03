@@ -30,6 +30,11 @@ export function storyHref(clusterId: number): string {
   return `/story/${clusterId}`;
 }
 
+/** Detail link for an UNCLUSTERED article (briefing fallback) — single-article view. */
+export function articleHref(articleId: number): string {
+  return `/story?aid=${articleId}`;
+}
+
 /** Check if a briefing timestamp is stale (>4 hours old) */
 export function isStale(date: string | Date): boolean {
   const fourHours = 4 * 60 * 60 * 1000;

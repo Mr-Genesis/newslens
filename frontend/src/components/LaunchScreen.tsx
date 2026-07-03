@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { Button } from "@/components/ui/Button";
-import { Logo } from "@/components/ui/BrandMark";
+import { BrandMark } from "@/components/ui/BrandMark";
+import { AnimatedMark } from "@/components/SplashScreen";
 
 interface LaunchScreenProps {
   /** Re-check whether the briefing is ready. */
@@ -42,8 +43,19 @@ export function LaunchScreen({ onRetry, refreshing = false }: LaunchScreenProps)
 
   return (
     <div className="flex flex-col items-center justify-center text-center min-h-[70vh] px-[var(--space-lg)]">
-      {/* Wordmark */}
-      <Logo markSize={28} textClassName="text-[28px]" className="mb-[var(--space-lg)]" />
+      {/* The designed loader — the mark ANIMATES while the news resolves (kit loop),
+          not a static wordmark over skeletons. */}
+      <div className="mb-[var(--space-md)]">
+        {reduce ? <div className="text-[var(--text-primary)]"><BrandMark size={120} /></div> : <AnimatedMark size={120} loop />}
+      </div>
+      <div className="flex items-baseline mb-[var(--space-lg)]">
+        <span className="text-[28px] leading-none font-semibold tracking-[-0.02em] text-[var(--text-primary)] font-[family-name:var(--font-fraunces)]">
+          News
+        </span>
+        <span className="text-[28px] leading-none font-semibold tracking-[-0.02em] text-[var(--accent)] font-[family-name:var(--font-fraunces)]">
+          Lens
+        </span>
+      </div>
 
       <h1 className="text-title text-[var(--text-primary)]">
         Preparing your first briefing

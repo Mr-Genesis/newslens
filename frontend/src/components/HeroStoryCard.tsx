@@ -4,7 +4,7 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/Badge";
 import { ConfidenceScore } from "@/components/ui/ConfidenceScore";
-import { relativeTime, storyHref } from "@/lib/utils";
+import { articleHref, relativeTime, storyHref } from "@/lib/utils";
 import type { BriefingStory } from "@/lib/api";
 
 interface HeroStoryCardProps {
@@ -12,8 +12,13 @@ interface HeroStoryCardProps {
 }
 
 export function HeroStoryCard({ story }: HeroStoryCardProps) {
-  // Fallback stories (article not clustered yet) have no deep dive — render inert.
-  const clickable = story.cluster_id != null;
+  // Clustered → deep dive; unclustered fallback → single-article view; neither → inert.
+  const href =
+    story.cluster_id != null
+      ? storyHref(story.cluster_id)
+      : story.article_id != null
+        ? articleHref(story.article_id)
+        : null;
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
@@ -22,9 +27,9 @@ export function HeroStoryCard({ story }: HeroStoryCardProps) {
       transition={{ duration: 0.4, ease: "easeOut" }}
     >
       <Link
-        href={clickable ? storyHref(story.cluster_id as number) : "#"}
-        aria-disabled={!clickable}
-        style={clickable ? undefined : { pointerEvents: "none" }}
+        href={href ?? "#"}
+        aria-disabled={href === null}
+        style={href === null ? { pointerEvents: "none" } : undefined}
         className="block gradient-border rounded-[var(--radius-lg)] p-4 transition-all duration-[var(--duration-short)] hover:shadow-[var(--shadow-md)]"
       >
         <div className="flex items-center gap-2 mb-3">

@@ -20,6 +20,7 @@ export default function DiscoverPage() {
   const [state, setState] = useState<PageState>("loading");
   const [deck, setDeck] = useState<DiscoverCardType[]>([]);
   const [totalSwiped, setTotalSwiped] = useState(0);
+  const [batchTotal, setBatchTotal] = useState(0); // frozen per batch — counter never inflates on prefetch
   const [history, setHistory] = useState<DiscoverCardType[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isFetching, setIsFetching] = useState(false);
@@ -36,6 +37,7 @@ export default function DiscoverPage() {
       }
 
       setDeck(cards);
+      setBatchTotal(cards.length); // freeze the counter denominator for this batch
       setTotalSwiped(0);
       setState("swiping");
     } catch (err) {
@@ -101,12 +103,15 @@ export default function DiscoverPage() {
         }
       }
 
-      if (deck.length <= 1) {
-        setState("empty");
-      }
     },
     [deck]
   );
+
+  // Deck exhausted → "caught up". An effect (not a stale-closure check inside handleSwipe)
+  // so async topic-card refills are respected and there's no premature empty-state flash.
+  useEffect(() => {
+    if (state === "swiping" && deck.length === 0) setState("empty");
+  }, [deck.length, state]);
 
   const handleUndo = useCallback(() => {
     setHistory((h) => {
@@ -197,17 +202,21 @@ export default function DiscoverPage() {
       {state === "swiping" && (
         <div className="flex flex-col items-center pt-2">
           {/* Header */}
-          <div className="w-full mb-3">
-            <h1 className="text-hero text-[var(--text-primary)]">Discover</h1>
-            <p className="text-mono text-[var(--text-muted)] mt-1">
-              SWIPE TO TRIAGE &middot; {totalSwiped + 1} OF {deck.length + totalSwiped}
+          <div className="w-full mb-3 flex items-end justify-between">
+            <div>
+              <h1 className="text-hero text-[var(--text-primary)]">Discover</h1>
+              <p className="text-mono text-[var(--text-muted)] mt-1">SWIPE TO TRIAGE</p>
+            </div>
+            <p className="text-mono text-[var(--text-ghost)]">
+              {Math.min(totalSwiped + 1, batchTotal)} / {batchTotal}
             </p>
           </div>
 
-          {/* Card stack */}
+          {/* Card stack — the container is the single source of height truth; cards fill it
+              (inset-0). 344 ≈ page chrome (top 48 + header 84 + gap 24 + buttons 92 + bottom 72 + slack). */}
           <div
             className="relative w-full"
-            style={{ height: "min(360px, calc(100dvh - 240px))" }}
+            style={{ height: "clamp(360px, calc(100dvh - 344px), 560px)" }}
             role="group"
             aria-label="Discover card deck"
           >
