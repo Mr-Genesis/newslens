@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     # × (0.9 + 0.2 × score/100) ⇒ ×[0.9, 1.1]. News (NULL credibility) is treated as this neutral
     # score → ×1.0. The ±10% cap means credibility curates ordering but can never drown fresher news.
     credibility_rank_neutral: int = 75
+    # #94 — a doctor's OWN specialty gets a bounded feed-rank boost (a cardiologist's cardiology paper
+    # over an equal-recency oncology one). Broad `medicine` gating is unchanged — this only re-ranks.
+    specialty_rank_boost: float = 1.25
     # Phase 2 · #83 — reserved research/expert slots in the ~25-card discover deck (the opt-in surface).
     discover_gated_slots: int = 5
     # Phase 3 · #90 — a gated source is re-proposed by the monthly LLM review job once its last

@@ -125,9 +125,11 @@ async def get_feed(
     # Phase 1: persona-gate the research/expert tiers — a source is in the feed only if it's news,
     # or clears the credibility floor and matches the user's profession-derived audience tags.
     from app.services import audience as _audience
+    from app.services import pubmed as _pubmed
     _profession, _, _pv = await _user_profession_locale(db)
     # #88: keyword map first, LLM fallback for the long tail (cached on persona_version).
     _tags = await _audience.resolve_tags(_profession, user_id=current_user_id(), persona_version=_pv)
+    _user_specialty = _pubmed.term_for_profession(_profession)  # #94: for the specialty rank boost
     _followed = await _audience.followed_source_ids(db, current_user_id())  # #81 opt-in override
     query = query.where(
         Article.source_id.in_(
@@ -221,11 +223,19 @@ async def get_feed(
             score = min(100, max(0, score))
             return 0.9 + 0.2 * score / 100
 
+        def _specialty_mult(a: Article) -> float:
+            # #94: a bounded lift when the article's source specialty matches the user's own specialty.
+            # No specialty (non-medical / general) → ×1.0, so ordinary feeds are unchanged.
+            if not _user_specialty or not a.source:
+                return 1.0
+            meta = a.source.credibility_meta or {}
+            return app_settings.specialty_rank_boost if meta.get("specialty") == _user_specialty else 1.0
+
         def _blend(a: Article) -> float:
             t = pub_ts[a.id]
             recency = 0.0 if t is None else (1.0 if hi == lo else (t - lo) / span)
             rel = min(1.0, scores.get(art_to_cluster.get(a.id), 0.0))
-            return ((1 - ratio) * recency + ratio * rel) * _cred_mult(a)
+            return ((1 - ratio) * recency + ratio * rel) * _cred_mult(a) * _specialty_mult(a)
 
         blends = {a.id: _blend(a) for a in articles}
         articles.sort(
