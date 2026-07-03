@@ -115,6 +115,15 @@ class Settings(BaseSettings):
     # the briefing. News sources (NULL credibility) are never floored.
     credibility_feed_floor: int = 55
     credibility_briefing_floor: int = 70
+    # Phase 2 · #79 — credibility nudges feed ordering via a bounded multiplier on the rank blend:
+    # × (0.9 + 0.2 × score/100) ⇒ ×[0.9, 1.1]. News (NULL credibility) is treated as this neutral
+    # score → ×1.0. The ±10% cap means credibility curates ordering but can never drown fresher news.
+    credibility_rank_neutral: int = 75
+    # Phase 2 · #83 — reserved research/expert slots in the ~25-card discover deck (the opt-in surface).
+    discover_gated_slots: int = 5
+    # Phase 2 · #80 — additive story_weights bonus for a persona-matched research/expert cluster, so
+    # "research in your field" reliably reaches the briefing top-8 without a singleton dominating.
+    credibility_briefing_bonus: float = 0.15
 
     # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
     # chain genuinely can't be verified in your environment.

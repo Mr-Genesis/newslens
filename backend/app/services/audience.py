@@ -50,12 +50,17 @@ def tags_for_profession(profession: str | None) -> set[str]:
     return {tag for tag, kws in _KEYWORDS.items() if any(kw in text for kw in kws)}
 
 
-def allowed_source_ids(user_tags: set[str], *, floor: int):
+def allowed_source_ids(user_tags: set[str], *, floor: int, followed_source_ids=None):
     """A subquery of source ids a user may see, given their audience tags.
 
     News (non-gated) sources are always allowed. A gated (research/expert) source is allowed only
     when it clears the credibility floor AND its audience overlaps the user's tags (or has no
     audience). A user with no tags sees no audience-tagged gated sources — the pre-expansion feed.
+
+    `followed_source_ids` (#81) is the opt-in escape hatch: a source the user explicitly follows is
+    allowed unconditionally — bypassing BOTH the floor and the audience match — on the same
+    "explicit intent" principle by which search is never gated. Empty/None ⇒ no override (the feed
+    stays byte-identical for a user with no source-follows).
     """
     from sqlalchemy import and_, or_, select
 
@@ -72,8 +77,30 @@ def allowed_source_ids(user_tags: set[str], *, floor: int):
         or_(Source.credibility_score.is_(None), Source.credibility_score >= floor),
         audience_ok,
     )
-    cond = or_(
+    branches = [
         Source.source_type.notin_([SourceType.research, SourceType.expert]),
         gated_ok,
-    )
-    return select(Source.id).where(cond)
+    ]
+    if followed_source_ids:
+        branches.append(Source.id.in_(sorted(followed_source_ids)))
+    return select(Source.id).where(or_(*branches))
+
+
+async def followed_source_ids(db, user_id: int) -> set[int]:
+    """The set of source ids this user follows (follows.kind == "source", value = the id string)."""
+    from sqlalchemy import select
+
+    from app.models import Follow
+
+    rows = (
+        await db.execute(
+            select(Follow.value).where(Follow.user_id == user_id, Follow.kind == "source")
+        )
+    ).scalars().all()
+    ids = set()
+    for v in rows:
+        try:
+            ids.add(int(v))
+        except (TypeError, ValueError):
+            continue
+    return ids

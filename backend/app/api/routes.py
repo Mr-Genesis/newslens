@@ -14,6 +14,7 @@ from app.models import (
     FeedbackType,
     Follow,
     Source,
+    SourceType,
     StoryCluster,
     Topic,
     User,
@@ -102,6 +103,7 @@ async def health_check():
 @router.get("/feed", response_model=FeedResponse, dependencies=[Depends(get_current_user)])
 async def get_feed(
     topic: int | None = None,
+    source_type: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
@@ -125,11 +127,28 @@ async def get_feed(
     from app.services import audience as _audience
     _profession, _ = await _user_profession_locale(db)
     _tags = _audience.tags_for_profession(_profession)
+    _followed = await _audience.followed_source_ids(db, current_user_id())  # #81 opt-in override
     query = query.where(
         Article.source_id.in_(
-            _audience.allowed_source_ids(_tags, floor=app_settings.credibility_feed_floor)
+            _audience.allowed_source_ids(
+                _tags, floor=app_settings.credibility_feed_floor, followed_source_ids=_followed
+            )
         )
     )
+
+    # #82: source-type filter chips ("All / News / Research / Experts"). Composes with the persona
+    # gate above — filtering to a tier never bypasses it. "news" = the non-gated tiers.
+    if source_type and source_type.lower() != "all":
+        from fastapi import HTTPException
+        st = source_type.lower()
+        _gated_types = [SourceType.research, SourceType.expert]
+        if st == "news":
+            type_cond = Source.source_type.notin_(_gated_types)
+        elif st in ("research", "expert"):
+            type_cond = Source.source_type == SourceType(st)
+        else:
+            raise HTTPException(status_code=400, detail="invalid source_type")
+        query = query.where(Article.source_id.in_(select(Source.id).where(type_cond)))
 
     # G2: when personalizing, fetch a bounded recent pool and rerank it (recency + entity relevance)
     # BEFORE paginating, so a high-affinity story can cross page boundaries within the horizon. When
@@ -192,11 +211,17 @@ async def get_feed(
         span = (hi - lo) or 1.0
         ratio = app_settings.uer_feed_blend_ratio
 
+        def _cred_mult(a: Article) -> float:
+            # #79: bounded ×[0.9, 1.1] credibility nudge. NULL (news) → neutral → ×1.0.
+            score = a.source.credibility_score if (a.source and a.source.credibility_score is not None) \
+                else app_settings.credibility_rank_neutral
+            return 0.9 + 0.2 * score / 100
+
         def _blend(a: Article) -> float:
             t = pub_ts[a.id]
             recency = 0.0 if t is None else (1.0 if hi == lo else (t - lo) / span)
             rel = min(1.0, scores.get(art_to_cluster.get(a.id), 0.0))
-            return (1 - ratio) * recency + ratio * rel
+            return ((1 - ratio) * recency + ratio * rel) * _cred_mult(a)
 
         blends = {a.id: _blend(a) for a in articles}
         articles.sort(
@@ -564,8 +589,10 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
     from sqlalchemy import exists as _sa_exists
     from app.services import audience as _audience
     _profession, _ = await _user_profession_locale(db)
+    _tags = _audience.tags_for_profession(_profession)  # #80: for the "in your field" bonus below
+    _followed = await _audience.followed_source_ids(db, current_user_id())  # #81 opt-in override
     _allowed = _audience.allowed_source_ids(
-        _audience.tags_for_profession(_profession), floor=app_settings.credibility_briefing_floor
+        _tags, floor=app_settings.credibility_briefing_floor, followed_source_ids=_followed
     )
     _visible = _sa_exists().where(
         ClusterArticle.cluster_id == StoryCluster.id,
@@ -659,8 +686,21 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
         # (orthogonal to the explicit topic preference — a followed-entity story can climb even with
         # no topic preference; a zero-signal user gets +0, so ordering is identical to today).
         pref_weight = prefs.get(topic_id, 0.0) if topic_id else 0.0
+        # #80: "in your field" bonus — a research/expert cluster whose source audience overlaps the
+        # user's profession tags gets a small additive lift so it reliably reaches the top-8. A
+        # profession-less user has empty tags → never matches → briefing ordering is unchanged. An
+        # audience-null general source (visible to everyone) is NOT "your field" → no bonus.
+        field_match = any(
+            ca.article.source
+            and ca.article.source.source_type in (SourceType.research, SourceType.expert)
+            and ca.article.source.audience
+            and (set(ca.article.source.audience) & _tags)
+            for ca in cluster.articles
+        )
         story_weights[cluster.id] = (
-            pref_weight + app_settings.uer_briefing_blend_weight * cluster_scores.get(cluster.id, 0.0)
+            pref_weight
+            + app_settings.uer_briefing_blend_weight * cluster_scores.get(cluster.id, 0.0)
+            + (app_settings.credibility_briefing_bonus if field_match else 0.0)
         )
 
         # E6: best-effort WIIFM headline from ALREADY-cached impact_json (no LLM calls).
@@ -691,7 +731,9 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
 
     stories = stories[:8]
 
-    # Fallback: if no clusters, build briefing from recent articles
+    # Fallback: if no clusters, build briefing from recent articles. Apply the SAME persona gate as
+    # the cluster path (#81) — otherwise a profession-less user with sparse content would leak gated
+    # research/expert articles here, defeating the gate. `_allowed` already folds in followed sources.
     if not stories:
         article_result = await db.execute(
             select(Article)
@@ -699,7 +741,7 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
                 selectinload(Article.source),
                 selectinload(Article.topics).selectinload(ArticleTopic.topic),
             )
-            .where(Article.snippet.isnot(None))
+            .where(Article.snippet.isnot(None), Article.source_id.in_(_allowed))
             .order_by(Article.published_at.desc().nullslast())
             .limit(8)
         )
@@ -783,17 +825,33 @@ async def get_discover_deck(
     Returns a deck of 20-30 cards for the discover/swipe interface.
     MVP: returns recent articles with cluster context.
     """
-    result = await db.execute(
-        select(Article)
-        .options(
-            selectinload(Article.source),
-            selectinload(Article.topics).selectinload(ArticleTopic.topic),
-        )
-        .where(Article.snippet.isnot(None))
-        .order_by(func.random())
-        .limit(25)
+    from app.config import settings as app_settings
+
+    _gated_types = [SourceType.research, SourceType.expert]
+    _opts = (
+        selectinload(Article.source),
+        selectinload(Article.topics).selectinload(ArticleTopic.topic),
     )
-    articles = result.scalars().all()
+    # #83: the discover deck is the OPT-IN surface for the gated tiers. Reserve up to ~5 slots for
+    # research/expert cards regardless of the user's profession (this is exactly where a non-matching
+    # user discovers and follows them); fill the rest from the NON-gated (news) pool so gated cards
+    # only ever arrive via this flagged reserved sample — never unflagged through the main pool.
+    gated_result = await db.execute(
+        select(Article).options(*_opts)
+        .join(Source, Article.source_id == Source.id)
+        .where(Article.snippet.isnot(None), Source.source_type.in_(_gated_types))
+        .order_by(func.random())
+        .limit(app_settings.discover_gated_slots)
+    )
+    gated_articles = gated_result.scalars().all()
+    news_result = await db.execute(
+        select(Article).options(*_opts)
+        .join(Source, Article.source_id == Source.id)
+        .where(Article.snippet.isnot(None), Source.source_type.notin_(_gated_types))
+        .order_by(func.random())
+        .limit(25 - len(gated_articles))
+    )
+    articles = list(gated_articles) + list(news_result.scalars().all())
 
     cards: list[DiscoverCardOut] = []
     for i, article in enumerate(articles):
@@ -812,6 +870,8 @@ async def get_discover_deck(
         sentences = [s.strip() for s in snippet.split(". ") if s.strip()]
         facts = sentences[:3] if sentences else ["No details available."]
 
+        src = article.source
+        is_gated = bool(src and src.source_type in _gated_types)
         cards.append(
             DiscoverCardOut(
                 id=i + 1,
@@ -819,10 +879,16 @@ async def get_discover_deck(
                 title=article.title,
                 tension_line=article.title,  # MVP: title as tension line
                 facts=facts,
-                sources=[article.source.name],
+                sources=[src.name] if src else [],
                 topic_id=topic_id,
                 topic_name=topic_name,
                 coherence=0.82,  # placeholder
+                source_id=src.id if src else None,
+                source_type=src.source_type.value if (src and src.source_type) else None,
+                is_gated=is_gated,
+                is_preprint=bool(src and src.is_preprint),
+                author_name=src.author_name if src else None,
+                credibility_score=src.credibility_score if src else None,
             )
         )
 
@@ -1495,7 +1561,8 @@ async def auth_me(user: User = Depends(get_current_user)):
 
 
 # ── Wave C: standing follows + "while you were away" digest ──
-_FOLLOW_KINDS = {"topic", "entity", "saved_search"}
+# Phase 2 · #81: "source" — value is the source id; following bypasses the persona gate.
+_FOLLOW_KINDS = {"topic", "entity", "saved_search", "source"}
 
 
 @router.get("/follows", response_model=list[FollowOut], dependencies=[Depends(get_current_user)])
@@ -1516,6 +1583,15 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     value = (body.value or "").strip()
     if kind not in _FOLLOW_KINDS or not value:
         raise HTTPException(status_code=400, detail="invalid kind or empty value")
+    # #81: a source-follow must reference a real source (value = source id) — 404 otherwise, so a
+    # typo can't create a dangling opt-in that silently does nothing.
+    if kind == "source":
+        try:
+            _sid = int(value)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="source follow value must be a source id")
+        if (await db.execute(select(Source.id).where(Source.id == _sid))).scalar_one_or_none() is None:
+            raise HTTPException(status_code=404, detail="source not found")
     # Idempotent: a duplicate (user, kind, value) returns the existing row.
     existing = (
         await db.execute(
