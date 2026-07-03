@@ -2,6 +2,8 @@
 
 import { motion } from "framer-motion";
 import { Badge } from "@/components/ui/Badge";
+import { FollowButton } from "@/components/ui/FollowButton";
+import { SourceTierBadge } from "@/components/ui/SourceTierBadge";
 
 interface SourceCardProps {
   sourceName: string;
@@ -10,6 +12,12 @@ interface SourceCardProps {
   isFree: boolean;
   publishedAt?: string | null;
   index?: number;
+  // Phase 2 · #78/#81 — gated-tier provenance + opt-in follow (null/absent for plain news sources).
+  sourceId?: number | null;
+  sourceType?: string | null;
+  authorName?: string | null;
+  credibilityScore?: number | null;
+  isPreprint?: boolean;
 }
 
 function getInitial(name: string): string {
@@ -40,9 +48,15 @@ export function SourceCard({
   isFree,
   publishedAt,
   index = 0,
+  sourceId,
+  sourceType,
+  authorName,
+  credibilityScore,
+  isPreprint,
 }: SourceCardProps) {
   const avatarColor = getAvatarColor(sourceName);
   const borderColor = isFree ? "var(--agree)" : "var(--accent)";
+  const isGated = sourceType === "research" || sourceType === "expert";
 
   return (
     <motion.div
@@ -67,13 +81,20 @@ export function SourceCard({
             {getInitial(sourceName)}
           </div>
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-small font-semibold text-[var(--text-primary)] truncate">
                 {sourceName}
               </span>
               <Badge variant={isFree ? "free" : "paywall"} size="sm">
                 {isFree ? "FREE" : "PAYWALL"}
               </Badge>
+              {/* #78: provenance badges — nothing rendered for a plain news source. */}
+              <SourceTierBadge
+                sourceType={sourceType}
+                authorName={authorName}
+                credibilityScore={credibilityScore}
+                isPreprint={isPreprint}
+              />
             </div>
             {publishedAt && (
               <span className="text-mono text-[var(--text-ghost)]">
@@ -84,6 +105,10 @@ export function SourceCard({
               </span>
             )}
           </div>
+          {/* #81: opt-in follow — only for gated tiers (following a news source is a no-op). */}
+          {isGated && sourceId != null && (
+            <FollowButton kind="source" value={String(sourceId)} label="Follow source" className="shrink-0" />
+          )}
         </div>
 
         {/* Excerpt */}

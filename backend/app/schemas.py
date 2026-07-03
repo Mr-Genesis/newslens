@@ -144,6 +144,10 @@ class BriefingStory(BaseModel):
     is_read: bool = False
     # E6: best-effort WIIFM headline from already-cached impact_json (no new LLM calls)
     impact_headline: str | None = None
+    # Phase 2 · #78 — "research"/"expert" when the story comes from a gated-tier source (the UI shows
+    # a RESEARCH/EXPERT badge, the "for your field" cue that pairs with the #80 ranking bonus). None
+    # for ordinary news stories.
+    tier: str | None = None
 
 
 class ArticleDetail(BaseModel):

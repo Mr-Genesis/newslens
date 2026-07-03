@@ -6,10 +6,11 @@ import {
   useTransform,
   type PanInfo,
 } from "framer-motion";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
+import { SourceTierBadge } from "@/components/ui/SourceTierBadge";
 import { cn } from "@/lib/utils";
-import type { DiscoverCard as DiscoverCardType } from "@/lib/api";
+import { addFollow, type DiscoverCard as DiscoverCardType } from "@/lib/api";
 
 interface DiscoverCardProps {
   card: DiscoverCardType;
@@ -75,6 +76,23 @@ export function DiscoverCard({
     [onSwipe]
   );
 
+  // #83: discover is the opt-in surface for gated tiers. A lightweight, optimistic follow (no
+  // getFollows round-trip — 25 cards mount at once; addFollow is idempotent server-side).
+  const [followed, setFollowed] = useState(false);
+  const followSource = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (followed || card.source_id == null) return;
+      setFollowed(true);
+      try {
+        await addFollow("source", String(card.source_id));
+      } catch {
+        setFollowed(false);
+      }
+    },
+    [followed, card.source_id]
+  );
+
   return (
     <motion.div
       className={cn(
@@ -120,11 +138,20 @@ export function DiscoverCard({
 
       {/* Card content — fills the card; no competing height math */}
       <div className={cn("p-4 flex flex-col h-full", !isTop && "invisible")}>
-        {/* Header: topic badge + agreement */}
+        {/* Header: topic badge (+ tier badge) + agreement */}
         <div className="flex items-center justify-between gap-2">
-          <Badge variant="topic" size="md" color={topicColor}>
-            {card.topic_name}
-          </Badge>
+          <span className="flex items-center gap-1.5 flex-wrap min-w-0">
+            <Badge variant="topic" size="md" color={topicColor}>
+              {card.topic_name}
+            </Badge>
+            {/* #78: provenance badge — nothing for a news card. */}
+            <SourceTierBadge
+              sourceType={card.source_type}
+              authorName={card.author_name}
+              credibilityScore={card.credibility_score}
+              isPreprint={card.is_preprint}
+            />
+          </span>
           <span className="text-mono inline-flex items-center gap-1.5" style={{ color: aColor }}>
             {pct}%
             <span className="inline-flex items-center gap-[2px]" aria-hidden="true">
@@ -173,6 +200,24 @@ export function DiscoverCard({
             <span className="text-mono text-[10px] px-2 py-0.5 rounded-full bg-[var(--surface-raised)] text-[var(--text-muted)]">
               +{card.sources.length - 3}
             </span>
+          )}
+          {/* #83: opt-in "Follow source" for gated cards. stop pointer-capture so the tap never
+              starts a drag/swipe. */}
+          {card.is_gated && card.source_id != null && (
+            <button
+              type="button"
+              onPointerDownCapture={(e) => e.stopPropagation()}
+              onClick={followSource}
+              aria-pressed={followed}
+              className={cn(
+                "ml-auto text-mono text-[10px] px-2.5 py-1 rounded-full border transition-colors",
+                followed
+                  ? "border-[var(--accent-muted)] bg-[var(--accent-subtle)] text-[var(--accent)]"
+                  : "border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+              )}
+            >
+              {followed ? "Following" : "Follow source"}
+            </button>
           )}
         </div>
       </div>

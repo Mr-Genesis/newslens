@@ -283,6 +283,11 @@ export default function DeepDiveView({
                     isFree={sourceCard.is_free}
                     publishedAt={sourceCard.article.published_at}
                     index={index}
+                    sourceId={sourceCard.article.source.id}
+                    sourceType={sourceCard.article.source.source_type}
+                    authorName={sourceCard.article.source.author_name}
+                    credibilityScore={sourceCard.article.source.credibility_score}
+                    isPreprint={sourceCard.article.source.is_preprint}
                   />
                 ))}
               </div>

@@ -697,6 +697,16 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
             and (set(ca.article.source.audience) & _tags)
             for ca in cluster.articles
         )
+        # #78: expose the gated tier (if any) so the card can show a RESEARCH/EXPERT badge.
+        tier = next(
+            (
+                ca.article.source.source_type.value
+                for ca in cluster.articles
+                if ca.article.source
+                and ca.article.source.source_type in (SourceType.research, SourceType.expert)
+            ),
+            None,
+        )
         story_weights[cluster.id] = (
             pref_weight
             + app_settings.uer_briefing_blend_weight * cluster_scores.get(cluster.id, 0.0)
@@ -717,6 +727,7 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
                 coherence=coherence,
                 is_read=is_read,
                 impact_headline=impact_headline,
+                tier=tier,
             )
         )
 

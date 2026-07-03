@@ -48,6 +48,11 @@ export interface Source {
   name: string;
   url: string;
   is_paywalled: boolean;
+  // Phase 2 · #78 — gated-tier provenance (null for plain news sources).
+  source_type?: string | null;
+  author_name?: string | null;
+  credibility_score?: number | null;
+  is_preprint?: boolean;
 }
 
 export interface Article {
@@ -86,6 +91,8 @@ export interface BriefingStory {
   is_read?: boolean;
   // E6/Wave Q1: best-effort WIIFM one-liner ("why you're seeing this"), when cached
   impact_headline?: string | null;
+  // Phase 2 · #78 — "research"/"expert" for a gated-tier story (→ RESEARCH/EXPERT badge). null for news.
+  tier?: string | null;
 }
 
 export interface ArticleDetail {
@@ -147,6 +154,14 @@ export interface DiscoverCard {
   topic_id: number;
   topic_name: string;
   coherence: number;
+  // Phase 2 · #83 — gated-tier opt-in surface: a research/expert card carries its source so the UI
+  // can badge it and offer "Follow source". null/false for the news cards that fill the rest.
+  source_id?: number | null;
+  source_type?: string | null;
+  is_gated?: boolean;
+  is_preprint?: boolean;
+  author_name?: string | null;
+  credibility_score?: number | null;
 }
 
 export interface FeedResponse {
@@ -180,13 +195,16 @@ export async function getBriefing(): Promise<Briefing> {
 export async function getFeed(
   page = 1,
   perPage = 20,
-  topicId?: number
+  topicId?: number,
+  // Phase 2 · #82 — source-type filter: "news" | "research" | "expert" (omit/"all" = every tier).
+  sourceType?: string
 ): Promise<FeedResponse> {
   const params = new URLSearchParams({
     page: String(page),
     per_page: String(perPage),
   });
   if (topicId) params.set("topic", String(topicId));
+  if (sourceType && sourceType !== "all") params.set("source_type", sourceType);
   return fetchJSON(`/feed?${params}`);
 }
 
