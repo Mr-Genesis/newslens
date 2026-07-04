@@ -158,6 +158,20 @@ class Settings(BaseSettings):
     impressions_enabled: bool = True
     impression_daily_cap: int = 500     # rows/user/day — server drops (and logs) beyond
     uer_less_weight: float = -0.5       # negative bump per 'less' on each of the article's entities
+    # WS-2 (#112) — "News You Follow" free-text rails. A saved_search follow is evaluated read-time via
+    # the /search hybrid machinery, scoped to a recency window. PRECISION GUARD: admit a cluster iff
+    # (dist < loose AND a keyword-or-entity hit confirms the proper nouns) OR (dist < tight, a pure
+    # semantic near-match). These are STARTING hypotheses — a distance histogram is logged per eval and
+    # scripts/measure_follow_distances.py calibrates them against the real prod corpus (query↔document
+    # embeddings have their own distribution; clustering's 0.15 doc↔doc threshold does NOT transfer).
+    rails_enabled: bool = True
+    rails_recency_hours: int = 72       # only stories from the last N hours appear in a rail
+    rails_stories_per_follow: int = 5   # cards shown per rail
+    rails_ann_k: int = 50               # ANN candidates pulled before the recency+precision filter
+    rails_cache_ttl_seconds: int = 60   # per-user response cache (invalidated on follow/seen change)
+    rails_dist_loose: float = 0.35      # semantic-near AND keyword/entity confirmation
+    rails_dist_tight: float = 0.22      # pure semantic near-match (no keyword needed)
+    saved_search_cap: int = 20          # max saved_search follows per user
 
     # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
     # chain genuinely can't be verified in your environment.

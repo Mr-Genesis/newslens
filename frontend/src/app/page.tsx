@@ -13,6 +13,7 @@ import { DailyTriviaCard } from "@/components/ui/DailyTriviaCard";
 import { PersonalizeBanner } from "@/components/ui/PersonalizeBanner";
 import { WhileAwayCard } from "@/components/ui/WhileAwayCard";
 import { LaunchScreen } from "@/components/LaunchScreen";
+import { FollowRails } from "@/components/FollowRails";
 import { useImpressions } from "@/hooks/useImpressions";
 import { AnimatedMark } from "@/components/SplashScreen";
 import { getBriefing, getTopics, type Briefing, type BriefingStory, type Topic } from "@/lib/api";
@@ -301,6 +302,9 @@ export default function BriefingPage() {
               </div>
             </div>
           )}
+
+          {/* WS-2 (#112): News You Follow rails — renders nothing until the user has follows */}
+          <FollowRails />
 
           {/* Empty topic filter: the chip's topic has articles, just none in today's 8-story
               brief. Say so instead of rendering a blank page. */}

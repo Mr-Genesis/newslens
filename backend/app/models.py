@@ -365,6 +365,10 @@ class Follow(Base):
     # G2: the resolved entity behind an entity-follow (from the tapped chip). Nullable keeps uq_follow
     # live with no orphan window; the string-path follow leaves it NULL.
     entity_id: Mapped[int | None] = mapped_column(ForeignKey("entities.id", ondelete="SET NULL"))
+    # WS-2 (#112) badges: when the user last opened THIS rail. new_count = rail stories newer than it.
+    # Per-follow (NOT the global User.last_seen_at, which /digest resets on every read). NULL = never
+    # viewed → every current story counts as new.
+    last_viewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
