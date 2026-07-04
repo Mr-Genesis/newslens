@@ -193,6 +193,10 @@ class Settings(BaseSettings):
 
     # Fetch intervals (minutes)
     rss_fetch_interval_minutes: int = 10
+    # WS-8 (#118): GET /health/fresh returns 503 when the newest article was fetched more than this many
+    # minutes ago — above the wake-from-sleep false-alarm window. An external pinger (cron-job.org) hits
+    # it and emails on non-200, independent of GitHub Actions (which auto-disables after 60d).
+    freshness_alarm_minutes: int = 45
     gdelt_fetch_interval_minutes: int = 15
     embedding_backfill_interval_minutes: int = 5
 

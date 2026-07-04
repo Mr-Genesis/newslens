@@ -142,6 +142,29 @@ async def pipeline_status(db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.get("/health/fresh")
+async def health_fresh(db: AsyncSession = Depends(get_db)):
+    """WS-8 (#118): a freshness ALARM (unauthenticated). 503 when the newest article was fetched more
+    than `freshness_alarm_minutes` ago — the app itself asserts the pipeline is running, so an EXTERNAL
+    pinger (cron-job.org) can email on non-200 independent of GitHub Actions (which auto-disables after
+    60d of repo inactivity — exactly when hands-off monitoring matters). Returns the body on both paths
+    so the pinger email carries the age."""
+    from app.config import settings as _s
+    from fastapi.responses import JSONResponse
+
+    latest = (await db.execute(select(func.max(Article.fetched_at)))).scalar_one()
+    now = datetime.now(timezone.utc)
+    age_min = None if latest is None else (now - latest).total_seconds() / 60.0
+    fresh = age_min is not None and age_min <= _s.freshness_alarm_minutes
+    body = {
+        "fresh": fresh,
+        "latest_article_fetched_at": latest.isoformat() if latest else None,
+        "age_minutes": round(age_min, 1) if age_min is not None else None,
+        "threshold_minutes": _s.freshness_alarm_minutes,
+    }
+    return body if fresh else JSONResponse(body, status_code=503)
+
+
 @router.get("/feed", response_model=FeedResponse, dependencies=[Depends(get_current_user)])
 async def get_feed(
     topic: int | None = None,

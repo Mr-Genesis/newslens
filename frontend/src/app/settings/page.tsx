@@ -12,6 +12,7 @@ import { useTheme } from "@/components/ThemeProvider";
 import { ProfileFields } from "@/components/ProfileFields";
 import { ModelProviderCard } from "@/components/ModelProviderCard";
 import { AccountCard } from "@/components/AccountCard";
+import { SystemCard } from "@/components/SystemCard";
 import {
   getStats,
   getTopics,
@@ -196,6 +197,11 @@ export default function ProfilePage() {
           {/* Account — sign-in entry point (the /login page is unreachable without this) */}
           <motion.div variants={fadeUp} className="mb-4">
             <AccountCard />
+          </motion.div>
+
+          {/* WS-8 (#118): read-only pipeline health */}
+          <motion.div variants={fadeUp} className="mb-4">
+            <SystemCard />
           </motion.div>
 
           {/* Profile + Gemini key (v2) */}

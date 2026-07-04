@@ -40,3 +40,24 @@ jobs:
           curl -sS --max-time 120 "$BACKEND_URL/pipeline" || true
           echo
           test "$code" = "200"
+
+      # WS-8 (#118): assert the pipeline is PRODUCING, not just warm. /health/fresh 503s when the newest
+      # article was fetched > 45 min ago (above the wake-from-sleep false-alarm window), so a non-200
+      # here fails the job → GitHub emails the owner. SECONDARY alarm: cron-job.org pings /health/fresh
+      # independently, because GitHub auto-disables scheduled workflows after 60d of repo inactivity —
+      # exactly when hands-off monitoring matters (setup in DEPLOY.md).
+      - name: Assert pipeline freshness (fail loudly if data is stale)
+        env:
+          BACKEND_URL: https://newslens-3gpu.onrender.com
+        run: |
+          # Retry so a transient blip AND the brief post-wake fetch window (the startup rss_fetch_kick
+          # lands a few seconds after wake) don't false-alarm — only a PERSISTENT 503 (a real stall)
+          # fails the job. Mirrors the warmer's retry above.
+          fresh=000
+          for i in 1 2 3; do
+            fresh=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 120 "$BACKEND_URL/health/fresh" || echo 000)
+            echo "freshness attempt $i (/health/fresh): HTTP $fresh"
+            [ "$fresh" = "200" ] && break
+            sleep 20
+          done
+          test "$fresh" = "200"

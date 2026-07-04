@@ -146,6 +146,7 @@ news-app/
 |--------|------|---------|
 | GET | /health | Health check (DB status) |
 | GET | /pipeline | Pipeline health: article counts by `embedding_status`, cluster counts, freshness, and `last_embedding_error` (quota/auth/no_key) — diagnoses a stalled embed→cluster stage without the log stream |
+| GET | /health/fresh | Freshness alarm: **503** when the newest article was fetched > `FRESHNESS_ALARM_MINUTES` (45) ago, else 200 — an external pinger (cron-job.org) emails on non-200, independent of GitHub Actions (WS-8) |
 | GET | /feed | Paginated feed with explore/exploit mix; optional `as_of` cursor pins the pool (`fetched_at <= as_of`) for stable infinite scroll on BOTH paths — first response echoes `as_of=now`, a stale cursor recovers with a fresh one (WS-3) |
 | GET | /feed?topic={id} | Topic-filtered feed |
 | GET | /feed?source_type={news\|research\|expert} | Source-tier-filtered feed (invalid → 400; chip UI deferred) |
