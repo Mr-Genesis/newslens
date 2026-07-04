@@ -103,6 +103,12 @@ export function useInfiniteFeed({ perPage = 20, topicId, sourceType }: Options =
   }, [hasMore, prefetch]);
 
   const loadMore = useCallback(async function loadMore(): Promise<void> {
+    // WS-3 cursor safety: never page until a cursor has been pinned. A cache-seeded feed is 'idle'
+    // with pageRef=0 AND asOfRef=null before loadFirst's first fetch lands, and the sentinel can already
+    // be on screen — without this a scroll fires a page-1 fetch with a null cursor (unpinned window).
+    // (The stale-cursor recovery below also sets pageRef=0, but with asOfRef already pinned, so it is
+    // NOT blocked here.)
+    if (pageRef.current === 0 && asOfRef.current === null) return;
     if (statusRef.current !== "idle") return;  // only page from a settled, has-more state (single-fire)
     setStatus("paging");
     const nextPage = pageRef.current + 1;

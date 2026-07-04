@@ -64,4 +64,28 @@ describe("useCachedResource", () => {
     await Promise.resolve();
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it("drops a superseded (old-key) revalidation — A→B keeps B even if A resolves late (review #1)", async () => {
+    // Regression (adversarial review, HIGH): navigating between two cached resources changes the hook
+    // key IN PLACE (no remount, as DeepDiveView does). A slow in-flight run for the old key must NOT
+    // write its data into the new key's snapshot (cross-story torn read).
+    let resolveA: (v: { v: string }) => void = () => {};
+    const fetcherA = () => new Promise<{ v: string }>((r) => (resolveA = r));
+    const fetcherB = () => Promise.resolve({ v: "B" });
+
+    const { result, rerender } = renderHook(
+      ({ k, f }: { k: string; f: () => Promise<{ v: string }> }) => useCachedResource(k, f, NO_FOCUS),
+      { initialProps: { k: "story:a", f: fetcherA } }
+    );
+    expect(result.current.status).toBe("loading"); // A is in flight, nothing cached
+
+    rerender({ k: "story:b", f: fetcherB });
+    await waitFor(() => expect(result.current.data).toEqual({ v: "B" }));
+
+    resolveA({ v: "A" }); // the stale story-A request finally lands
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(result.current.data).toEqual({ v: "B" }); // B survived — A's late result was dropped
+    expect(result.current.status).toBe("fresh");
+  });
 });

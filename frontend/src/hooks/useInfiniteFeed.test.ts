@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 
 vi.mock("@/lib/api", async (orig) => {
   const actual = await orig<typeof import("@/lib/api")>();
@@ -66,5 +66,23 @@ describe("useInfiniteFeed cache seeding", () => {
     await waitFor(() =>
       expect(result.current.items.map((a) => a.title)).toEqual(["FRESH1", "FRESH2"])
     );
+  });
+
+  it("does not page before loadFirst pins the cursor even when seeded (WS-3 cursor safety, review #4)", async () => {
+    await store(FEED_KEY, resp([article(1, "CACHED")]));
+    // loadFirst hangs → the as_of cursor is never pinned and pageRef stays 0
+    vi.mocked(getFeed).mockReturnValue(new Promise<FeedResponse>(() => {}));
+
+    const { result } = renderHook(() => useInfiniteFeed());
+    expect(result.current.status).toBe("idle"); // seeded from cache
+
+    await act(async () => {
+      await result.current.loadMore(); // a sentinel intersection would call this
+    });
+
+    // loadMore was a no-op (pageRef still 0): only loadFirst's single page-1 fetch fired — NOT a second
+    // page-1 fetch with a null cursor (the WS-3 pinning violation the guard prevents).
+    expect(vi.mocked(getFeed)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(getFeed).mock.calls[0][0]).toBe(1);
   });
 });

@@ -134,11 +134,12 @@ export async function load<T>(key: string, maxAgeMs?: number): Promise<T | undef
 export async function store<T>(key: string, data: T): Promise<void> {
   const entry: CacheEntry<T> = { data, storedAt: Date.now() };
   memory.set(key, entry);
+  trimMemory(); // bound the memory tier even if the persistent write below rejects (IDB quota)
   try {
     await backend.set(key, entry);
     await enforceLimits();
   } catch {
-    /* best-effort persistence — memory tier still works */
+    /* best-effort persistence — the memory tier is already bounded by trimMemory() */
   }
 }
 
@@ -182,21 +183,41 @@ async function enforceLimits(): Promise<void> {
     }
   }
 
-  // 2) count + size cap → drop the oldest-written entries first
+  // 2) count + size cap → drop the oldest-written entries first, but never the sole newest entry
+  //    (a single payload over the byte ceiling is kept, not self-evicted on the write that stored it).
   live.sort((a, b) => a[1].storedAt - b[1].storedAt);
-  const bytes = (e: CacheEntry<unknown>) => {
-    try {
-      return JSON.stringify(e.data).length;
-    } catch {
-      return 0;
-    }
-  };
-  let total = live.reduce((s, [, e]) => s + bytes(e), 0);
-  while (live.length > CACHE_LIMITS.maxEntries || total > CACHE_LIMITS.maxBytes) {
+  let total = live.reduce((s, [, e]) => s + entryBytes(e), 0);
+  while (live.length > 1 && (live.length > CACHE_LIMITS.maxEntries || total > CACHE_LIMITS.maxBytes)) {
     const oldest = live.shift();
     if (!oldest) break;
-    total -= bytes(oldest[1]);
+    total -= entryBytes(oldest[1]);
     memory.delete(oldest[0]);
     await backend.del(oldest[0]);
+  }
+}
+
+/** JSON byte estimate for an entry's payload (0 if it can't be serialized). */
+function entryBytes(e: CacheEntry<unknown>): number {
+  try {
+    return JSON.stringify(e.data).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** Bound the in-memory tier independently of the persistent backend (which may reject writes on a
+ *  quota-limited WebView, in which case enforceLimits never runs). TTL-prunes, then evicts oldest-first
+ *  to the count/byte caps, always keeping the single newest entry so a lone oversized payload survives. */
+function trimMemory(): void {
+  const now = Date.now();
+  for (const [k, e] of [...memory.entries()]) {
+    if (now - e.storedAt > ttlFor(k)) memory.delete(k);
+  }
+  const live = [...memory.entries()].sort((a, b) => a[1].storedAt - b[1].storedAt);
+  let total = live.reduce((s, [, e]) => s + entryBytes(e), 0);
+  while (live.length > 1 && (live.length > CACHE_LIMITS.maxEntries || total > CACHE_LIMITS.maxBytes)) {
+    const [k, e] = live.shift()!;
+    total -= entryBytes(e);
+    memory.delete(k);
   }
 }

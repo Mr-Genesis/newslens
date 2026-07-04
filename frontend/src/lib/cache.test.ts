@@ -9,6 +9,7 @@ import {
   _resetCache,
   CACHE_TTL_MS,
   CACHE_LIMITS,
+  type PersistBackend,
 } from "./cache";
 
 beforeEach(() => {
@@ -147,6 +148,51 @@ describe("cache eviction (TTL + oldest-first)", () => {
     } finally {
       CACHE_LIMITS.maxBytes = orig.maxBytes;
       CACHE_LIMITS.maxEntries = orig.maxEntries;
+    }
+  });
+
+  it("keeps a lone entry that exceeds the byte ceiling — no self-eviction on its own write (review #2)", async () => {
+    const backend = memoryBackend();
+    _setBackend(backend);
+    const orig = { ...CACHE_LIMITS };
+    CACHE_LIMITS.maxBytes = 50;
+    try {
+      const huge = "x".repeat(200); // ~202 bytes stringified, well over the 50B ceiling
+      await store("cluster:1", huge);
+      expect(peek("cluster:1")).toBe(huge); // retained, not wiped by the write that stored it
+      expect((await backend.entries()).some(([k]) => k === "cluster:1")).toBe(true);
+    } finally {
+      Object.assign(CACHE_LIMITS, orig);
+    }
+  });
+
+  it("bounds the memory tier even when the persistent backend rejects every write (review #3)", async () => {
+    const failing: PersistBackend = {
+      get: async () => undefined,
+      set: async () => {
+        throw new Error("QuotaExceeded");
+      },
+      del: async () => {},
+      entries: async () => [],
+    };
+    _setBackend(failing);
+    const orig = { ...CACHE_LIMITS };
+    CACHE_LIMITS.maxEntries = 3;
+    try {
+      vi.useFakeTimers();
+      for (let i = 0; i < 6; i++) {
+        vi.setSystemTime(i + 1); // strictly increasing storedAt
+        await store(`cluster:${i}`, { i }); // backend.set throws → enforceLimits is skipped
+      }
+      // memory is still capped to the 3 newest (trimMemory runs regardless of the backend)
+      expect(peek("cluster:0")).toBeUndefined();
+      expect(peek("cluster:1")).toBeUndefined();
+      expect(peek("cluster:2")).toBeUndefined();
+      expect(peek("cluster:3")).toBeDefined();
+      expect(peek("cluster:5")).toBeDefined();
+      vi.useRealTimers();
+    } finally {
+      Object.assign(CACHE_LIMITS, orig);
     }
   });
 });

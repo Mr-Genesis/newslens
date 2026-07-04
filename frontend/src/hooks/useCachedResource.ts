@@ -57,22 +57,28 @@ export function useCachedResource<T>(
 
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
-  const aliveRef = useRef(true);
+  // Monotonic run token: each run() claims a token, and a superseding run (key change, focus
+  // revalidate) or unmount bumps it. So a slow in-flight run for a now-stale key can't write its data
+  // into the current snapshot — the cross-story torn read a shared "alive" flag couldn't prevent
+  // (it can't tell "unmounted" from "key replaced in place", which is how DeepDiveView navigates).
+  const runIdRef = useRef(0);
 
   const run = useCallback(async () => {
     if (!key) return;
+    const myRun = ++runIdRef.current;
+    const active = () => runIdRef.current === myRun;
     // Cold start: nothing in memory but the persistent tier may hold last session's copy → paint it
     // before the network comes back.
     if (peek<T>(key, maxAgeMs) === undefined) {
       const cached = await load<T>(key, maxAgeMs);
-      if (aliveRef.current && cached !== undefined) setSnap({ data: cached, status: "stale" });
+      if (active() && cached !== undefined) setSnap({ data: cached, status: "stale" });
     }
-    setValidating(true);
+    if (active()) setValidating(true);
     try {
       const fresh = await revalidate<T>(key, () => fetcherRef.current());
-      if (aliveRef.current) setSnap({ data: fresh, status: "fresh" });
+      if (active()) setSnap({ data: fresh, status: "fresh" });
     } catch {
-      if (aliveRef.current) {
+      if (active()) {
         // keep cached data on screen; only show an error when we have nothing cached
         setSnap((prev) => ({
           data: prev.data,
@@ -80,15 +86,18 @@ export function useCachedResource<T>(
         }));
       }
     } finally {
-      if (aliveRef.current) setValidating(false);
+      if (active()) setValidating(false);
     }
   }, [key, maxAgeMs]);
 
   useEffect(() => {
-    aliveRef.current = true;
     void run();
     return () => {
-      aliveRef.current = false;
+      // Intentionally bump the CURRENT token (not a captured copy) so whatever run is in flight at
+      // unmount/key-change is invalidated. The exhaustive-deps ref-cleanup warning assumes a DOM ref;
+      // this is a monotonic counter, so reading .current at cleanup time is exactly what we want.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      runIdRef.current++;
     };
   }, [run]);
 
