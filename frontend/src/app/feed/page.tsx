@@ -5,6 +5,7 @@ import { Chip } from "@/components/ui/Chip";
 import { Button } from "@/components/ui/Button";
 import { FeedArticleCard } from "@/components/FeedArticleCard";
 import { getFeed, type Article } from "@/lib/api";
+import { useImpressions } from "@/hooks/useImpressions";
 
 type SourceType = "all" | "news" | "research" | "expert" | "official" | "filing";
 const CHIPS: { label: string; value: SourceType }[] = [
@@ -23,6 +24,7 @@ type State = "loading" | "success" | "empty" | "error";
  *  already exist; this is the surface that renders them. */
 export default function FeedPage() {
   const [active, setActive] = useState<SourceType>("all");
+  const { observe } = useImpressions("feed");
   const [articles, setArticles] = useState<Article[]>([]);
   const [state, setState] = useState<State>("loading");
 
@@ -70,7 +72,15 @@ export default function FeedPage() {
       {state === "success" && (
         <div className="flex flex-col" key={active}>
           {articles.map((a) => (
-            <FeedArticleCard key={a.id} article={a} />
+            <div
+              key={a.id}
+              ref={observe}
+              data-impression-cluster={a.cluster_id ?? undefined}
+              data-impression-article={a.cluster_id ? undefined : a.id}
+              onClickCapture={() => sessionStorage.setItem("nl_surface", "feed")}
+            >
+              <FeedArticleCard article={a} />
+            </div>
           ))}
         </div>
       )}

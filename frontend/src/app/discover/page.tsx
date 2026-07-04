@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { DiscoverCard } from "@/components/DiscoverCard";
 import { Button } from "@/components/ui/Button";
 import { DiscoverCardSkeleton } from "@/components/ui/Skeleton";
+import { useImpressions } from "@/hooks/useImpressions";
 import {
   getDiscoverDeck,
   recordSwipe,
@@ -152,6 +153,13 @@ export default function DiscoverPage() {
   }, [state, deck.length, handleSwipe]);
 
   const visibleCards = deck.slice(0, 3);
+
+  // WS-1: the deck shows one card at a time — log the top card as an impression when it surfaces.
+  const { logNow } = useImpressions("discover");
+  const topCardId = visibleCards[0]?.article_id;
+  useEffect(() => {
+    if (topCardId != null) logNow({ articleId: topCardId });
+  }, [topCardId, logNow]);
 
   return (
     <div className="mx-auto max-w-[640px] w-full px-[var(--space-md)]">

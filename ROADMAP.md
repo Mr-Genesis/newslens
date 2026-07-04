@@ -29,6 +29,17 @@
 - Tension lines on discover cards still fall back to article titles when no AI line exists
 
 **🔜 Deferred / still open (post-G2 hardening — tracked, not blocking):**
+- ⏸️ **Impressions retention** (from the 2026-07-04 Follow-Anything plan review): the `impressions`
+  table (WS-1 of that wave) is capped ~500 rows/user/day but unbounded over time (~15k rows/user/month).
+  Add a monthly prune job — delete rows >180 days, optionally keeping per-(user,surface,month) aggregate
+  counts for long-horizon CTR. Not needed until the table actually matters; wiring mirrors the existing
+  monthly credibility-review cron.
+- ⏸️ **Render paid-tier revisit trigger** (decision 2026-07-04, re-opens itself): chose free tier +
+  keepalive. **Trigger to upgrade the WEB service to Starter ($7/mo): two pipeline stalls in one week OR
+  the first real second user.** Rationale on file: a separate background worker was REJECTED — Render has
+  no free worker tier (same $7), and splitting jobs out of the web process breaks the in-process SSE
+  events hub (`events.py`) without a Postgres LISTEN/NOTIFY bridge; Starter-web gets always-on scheduler +
+  no user cold-starts with zero code changes.
 - ⏸️ **§2b — `_source_hash` widening** — deliberately deferred until a lens becomes entity/user-dependent.
   No lens reads graph/user data yet, so widening now would only add per-user lens-cache cost. Widen the
   hash to include entity ids + content version + user scope the moment a personalized/graph-reading lens

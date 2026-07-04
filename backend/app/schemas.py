@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models import EmbeddingStatus, FeedbackType, SourceType
 
@@ -85,10 +85,54 @@ class TopicListResponse(BaseModel):
     trending_topics: list[TopicOut]
 
 
+# WS-1 (#111): the surface vocabulary — one whitelist shared by BOTH the impression denominator and
+# the feedback/CTR numerator, so a numerator surface can never be a value the denominator can't hold.
+IMPRESSION_SURFACES = ("briefing", "feed", "rail", "discover", "search")
+DWELL_MAX_MS = 14_400_000  # 4h — clamp, never reject (a long-lived tab must not lose its dwell)
+
+
 # --- Feedback ---
 class FeedbackCreate(BaseModel):
     article_id: int
     feedback_type: FeedbackType
+    # WS-1 dwell: with feedback_type=read, cluster_id targets the story whose auto-read row gets
+    # duration_ms (GREATEST upsert; server resolves the deterministic min-article target — clients
+    # must not guess an article id). surface = where the story was opened from (CTR numerator).
+    cluster_id: int | None = None
+    duration_ms: int | None = Field(default=None, ge=0)  # clamped (not rejected) server-side
+    surface: str | None = None
+
+    @field_validator("surface")
+    @classmethod
+    def _surface_known(cls, v: str | None) -> str | None:
+        # Bounds length AND vocabulary — an unbounded string hits the VARCHAR(16) column and 500s at
+        # commit; a junk value pollutes the CTR key. Reuse the impression whitelist for symmetry.
+        if v is not None and v not in IMPRESSION_SURFACES:
+            raise ValueError(f"surface must be one of {IMPRESSION_SURFACES}")
+        return v
+
+
+class ImpressionItem(BaseModel):
+    cluster_id: int | None = None
+    article_id: int | None = None
+    surface: str
+
+    @field_validator("surface")
+    @classmethod
+    def _surface_known(cls, v: str) -> str:
+        if v not in IMPRESSION_SURFACES:
+            raise ValueError(f"surface must be one of {IMPRESSION_SURFACES}")
+        return v
+
+    @model_validator(mode="after")
+    def _has_target(self):
+        if self.cluster_id is None and self.article_id is None:
+            raise ValueError("impression needs cluster_id or article_id")
+        return self
+
+
+class ImpressionsBatch(BaseModel):
+    items: list[ImpressionItem] = Field(default_factory=list, max_length=200)
 
 
 class FeedbackOut(BaseModel):

@@ -1,10 +1,12 @@
 import enum
-from datetime import datetime
+from datetime import date, datetime
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     DDL,
     Boolean,
+    CheckConstraint,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -17,6 +19,7 @@ from sqlalchemy import (
     UniqueConstraint,
     event,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -148,6 +151,12 @@ class Article(Base):
 
     __table_args__ = (
         UniqueConstraint("url", "source_id", name="uq_article_url_source"),
+        # WS-1 (#111): plain b-tree indexes for the date predicates the wave adds (rails' 72h
+        # recency window on published_at, the as_of cursor on fetched_at). Plain — not
+        # DESC-NULLS-LAST expression indexes — to keep autogenerate parity (the HNSW index is
+        # already the one tolerated exception).
+        Index("ix_articles_published_at", "published_at"),
+        Index("ix_articles_fetched_at", "fetched_at"),
     )
 
     source: Mapped["Source"] = relationship(back_populates="articles")
@@ -240,12 +249,58 @@ class UserFeedback(Base):
     feedback_type: Mapped[FeedbackType] = mapped_column(
         Enum(FeedbackType), nullable=False
     )
+    # WS-1 (#111): dwell + click attribution. duration_ms rides the auto-`read` row (upserted with
+    # GREATEST on story close); surface names WHERE the tap happened (briefing|feed|rail|discover|
+    # search) — the CTR numerator that pairs with impressions' denominator.
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    surface: Mapped[str | None] = mapped_column(String(16), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
     user: Mapped["User"] = relationship(back_populates="feedback")
     article: Mapped["Article"] = relationship(back_populates="feedback")
+
+
+class Impression(Base):
+    """WS-1 (#111): what a user SAW per surface — the rec engine's perishable negative-space signal.
+
+    Deduped per (user, story, surface, day) via an EXPRESSION unique index: cluster_id/article_id are
+    nullable (briefing fallback cards are clusterless), and plain NULLs never conflict in a unique
+    index — so the key COALESCEs both to 0. `day` is a stored column, NOT date(created_at): that cast
+    isn't IMMUTABLE over timestamptz, so an expression index on it can't exist. RLS-scoped."""
+
+    __tablename__ = "impressions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    cluster_id: Mapped[int | None] = mapped_column(
+        ForeignKey("story_clusters.id", ondelete="CASCADE"), nullable=True
+    )
+    article_id: Mapped[int | None] = mapped_column(
+        ForeignKey("articles.id", ondelete="CASCADE"), nullable=True
+    )
+    surface: Mapped[str] = mapped_column(String(16), nullable=False)
+    day: Mapped[date] = mapped_column(Date, nullable=False, server_default=func.current_date())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "cluster_id IS NOT NULL OR article_id IS NOT NULL", name="ck_impression_target"
+        ),
+        Index(
+            "uq_impression_day",
+            text("user_id"),
+            text("COALESCE(cluster_id, 0)"),
+            text("COALESCE(article_id, 0)"),
+            text("surface"),
+            text("day"),
+            unique=True,
+        ),
+        Index("ix_impressions_user_created", "user_id", "created_at"),
+    )
 
 
 class UserPreference(Base):
@@ -433,7 +488,8 @@ class UserEntityRelevance(Base):
 # key, direct-DB tests — the policy is permissive; when set (every real request) rows are filtered
 # to that user. The explicit current_user_id() filter in queries is the PRIMARY control; RLS is
 # defense-in-depth. Defined here (DDL events) so create_all (tests) matches the production migration.
-_RLS_TABLES = ("user_feedback", "user_preferences", "user_settings", "follows", "user_entity_relevance")
+_RLS_TABLES = ("user_feedback", "user_preferences", "user_settings", "follows",
+               "user_entity_relevance", "impressions")
 
 
 def rls_statements(table: str) -> list[str]:
