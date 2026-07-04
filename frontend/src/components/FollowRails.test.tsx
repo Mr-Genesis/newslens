@@ -70,4 +70,11 @@ describe("FollowRails", () => {
     await userEvent.click(await screen.findByLabelText("Follow a new topic"));
     expect(push).toHaveBeenCalledWith("/follow/new");
   });
+
+  it("reports its rendered cluster ids for cross-section dedupe (WS-3)", async () => {
+    const onIds = vi.fn();
+    vi.mocked(getFollowRails).mockResolvedValue([rail()]);
+    render(<FollowRails onClusterIdsRendered={onIds} />);
+    await waitFor(() => expect(onIds).toHaveBeenCalledWith([10, 11]));
+  });
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { StoryCard } from "@/components/StoryCard";
@@ -14,6 +14,7 @@ import { PersonalizeBanner } from "@/components/ui/PersonalizeBanner";
 import { WhileAwayCard } from "@/components/ui/WhileAwayCard";
 import { LaunchScreen } from "@/components/LaunchScreen";
 import { FollowRails } from "@/components/FollowRails";
+import { InfiniteFeed } from "@/components/InfiniteFeed";
 import { useImpressions } from "@/hooks/useImpressions";
 import { AnimatedMark } from "@/components/SplashScreen";
 import { getBriefing, getTopics, type Briefing, type BriefingStory, type Topic } from "@/lib/api";
@@ -50,6 +51,11 @@ export default function BriefingPage() {
   const [activeCategory, setActiveCategory] = useState<string>("All");
   const [rechecking, setRechecking] = useState(false);
   const [userTopics, setUserTopics] = useState<Topic[]>([]);
+  // WS-3 (#113): cross-section dedupe — cluster ids the rails render, lifted up so the "All stories"
+  // feed can filter them out (precedence hero > rails > categories > feed). And a key that pull-to-
+  // refresh bumps to remount the feed with a fresh as_of cursor.
+  const [railClusterIds, setRailClusterIds] = useState<number[]>([]);
+  const [feedKey, setFeedKey] = useState(0);
   const router = useRouter();
   // WS-1: log which briefing stories were actually SEEN (>=50% for >=1s); tag taps with the surface.
   const { observe } = useImpressions("briefing");
@@ -73,6 +79,7 @@ export default function BriefingPage() {
     try {
       setState(isRefresh ? "refreshing" : "loading");
       setError(null);
+      if (isRefresh) setFeedKey((k) => k + 1); // pull-to-refresh resets the feed's as_of cursor
       const data = await getBriefing();
 
       if (!data.stories || data.stories.length === 0) {
@@ -143,6 +150,19 @@ export default function BriefingPage() {
   // Hero story is the first one (highest source count / importance)
   const heroStory = filteredStories[0];
   const remainingStories = filteredStories.slice(1);
+
+  // WS-3: cluster ids already shown above the feed (briefing stories + rails) → the feed dedupes them.
+  const handleRailIds = useCallback((ids: number[]) => setRailClusterIds(ids), []);
+  const seenClusterIds = useMemo(() => {
+    const s = new Set<number>();
+    (briefing?.stories ?? []).forEach((st) => {
+      if (st.cluster_id != null) s.add(st.cluster_id);
+    });
+    railClusterIds.forEach((id) => {
+      if (id != null) s.add(id);
+    });
+    return s;
+  }, [briefing, railClusterIds]);
 
   // Group remaining by category
   const grouped = remainingStories.reduce<Record<string, BriefingStory[]>>(
@@ -304,7 +324,7 @@ export default function BriefingPage() {
           )}
 
           {/* WS-2 (#112): News You Follow rails — renders nothing until the user has follows */}
-          <FollowRails />
+          <FollowRails onClusterIdsRendered={handleRailIds} />
 
           {/* Empty topic filter: the chip's topic has articles, just none in today's 8-story
               brief. Say so instead of rendering a blank page. */}
@@ -358,6 +378,18 @@ export default function BriefingPage() {
               Refresh briefing
             </Button>
           </div>
+
+          {/* WS-3 (#113): ALL STORIES — the infinite "everything, newest first" feed. Only in the
+              unfiltered "All" view (a category chip is a filtered briefing, not the full firehose).
+              Cross-section dedupe removes stories already shown above. key resets on pull-to-refresh. */}
+          {activeCategory === "All" && (
+            <InfiniteFeed
+              key={feedKey}
+              surface="feed"
+              excludeClusterIds={seenClusterIds}
+              showHeader
+            />
+          )}
         </motion.div>
       )}
     </div>
