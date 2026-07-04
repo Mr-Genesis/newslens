@@ -119,6 +119,11 @@ class Settings(BaseSettings):
     entity_edge_half_life_days: float = 30.0  # exponential decay applied to prior edge weight nightly
     expansion_enabled: bool = True            # one-hop expansion term in score_clusters_relevance
     expansion_weight: float = 0.1             # bounded additive scaler on the adjacent-interest term
+    # WS-7 (#117) locale region-affinity: a bounded ×[1.0, boost] nudge when a source's region matches
+    # the user's locale — applied ONLY after an explicit profile save (persona_version > 1), so it's a
+    # real persona feature, not a global default-"IN" re-rank. lower()-normalized; region vs locale.
+    locale_affinity_enabled: bool = True
+    locale_affinity_boost: float = 1.1        # ceiling of the nudge (mirrors the credibility bound)
 
     # Phase 1 source expansion — credibility floors for the gated tiers (research/expert). A gated
     # source below the feed floor is discover/search-only; below the briefing floor it never enters

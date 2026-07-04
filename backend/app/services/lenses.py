@@ -355,8 +355,19 @@ def cluster_coherence(cluster: StoryCluster, articles: list[Article]) -> float:
     from a cached consensus pass for the current sources — so a contested story can score below the
     heuristic floor — then the stored value, then the source-overlap heuristic. Pure read (no LLM, no
     extra query): it only inspects the already-loaded cluster + the consensus cache."""
+    sh = _source_hash(articles)
     try:
-        cons = _cache_read(cluster, "extra_json", "consensus", _source_hash(articles))
+        cons = _cache_read(cluster, "extra_json", "consensus", sh)
+        if cons is None:
+            # WS-7: a non-standard-depth consensus is cached under "consensus:<depth>" — fall back to
+            # any of them for the CURRENT sources so coherence isn't lost for brief/expert users (the
+            # depth-scoped cache subkeys otherwise hide the agreement ratio from this standard-slot read).
+            extra = getattr(cluster, "extra_json", None) or {}
+            for k in extra:
+                if k.startswith("consensus:"):
+                    cons = _cache_read(cluster, "extra_json", k, sh)
+                    if cons is not None:
+                        break
     except AttributeError:
         cons = None  # cluster-like object without the JSONB column → fall through (never crash a read)
     if isinstance(cons, dict):
@@ -432,18 +443,20 @@ async def analysis(
     return {"error": "unknown_lens"}
 
 
-async def strategic(db, cluster_id):
+async def strategic(db, cluster_id, depth_pref: str = "standard"):
     cluster, articles = await _load(db, cluster_id)
-    text_ = _cluster_text(cluster, articles) if cluster and articles else ""
-    return await get_lens(db, cluster_id, column="strategic_json", subkey="default",
-                          prompt=_prompt_strategic(text_), schema={"actors": []})
+    text_ = _cluster_text(cluster, articles, depth_pref=depth_pref) if cluster and articles else ""
+    dp = "" if depth_pref in (None, "", "standard") else f":{depth_pref}"  # depth-scoped cache subkey
+    return await get_lens(db, cluster_id, column="strategic_json", subkey=f"default{dp}",
+                          prompt=_prompt_strategic(text_) + _depth_suffix(depth_pref), schema={"actors": []})
 
 
-async def trivia(db, cluster_id, difficulty: str = "medium"):
+async def trivia(db, cluster_id, difficulty: str = "medium", depth_pref: str = "standard"):
     cluster, articles = await _load(db, cluster_id)
-    text_ = _cluster_text(cluster, articles) if cluster and articles else ""
-    return await get_lens(db, cluster_id, column="trivia_json", subkey=difficulty,
-                          prompt=_prompt_trivia(text_, difficulty), schema={"questions": []})
+    text_ = _cluster_text(cluster, articles, depth_pref=depth_pref) if cluster and articles else ""
+    dp = "" if depth_pref in (None, "", "standard") else f":{depth_pref}"
+    return await get_lens(db, cluster_id, column="trivia_json", subkey=f"{difficulty}{dp}",
+                          prompt=_prompt_trivia(text_, difficulty) + _depth_suffix(depth_pref), schema={"questions": []})
 
 
 async def impact(db, cluster_id, persona: dict, *, force: bool = False):
@@ -548,7 +561,7 @@ def _ask_user(question: str, cluster: StoryCluster, source_lines: str) -> str:
     )
 
 
-async def ask(db, cluster_id, question: str):
+async def ask(db, cluster_id, question: str, depth_pref: str = "standard"):
     """Grounded, cited Q&A over a single cluster's sources. Refuses (never fabricates) when the
     answer isn't supported; drops citations whose outlet isn't in the cluster."""
     cluster, articles = await _load(db, cluster_id)
@@ -560,7 +573,7 @@ async def ask(db, cluster_id, question: str):
 
     try:
         raw = await llm.generate(
-            _ask_user(question, cluster, _impact_source_lines(articles)),
+            _ask_user(question, cluster, _impact_source_lines(articles, depth_pref)) + _depth_suffix(depth_pref),
             system=_ASK_SYSTEM, schema={"answer": ""}, max_tokens=600,
         )
     except llm.LLMUnavailable:
@@ -608,7 +621,7 @@ def _frameworks_prompt(cluster: StoryCluster, selected: list[dict], source_lines
     )
 
 
-async def frameworks(db, cluster_id):
+async def frameworks(db, cluster_id, depth_pref: str = "standard"):
     """Auto-selected analytical-framework one-liners for a cluster (≤4 chips, ≤20 words each)."""
     cluster, articles = await _load(db, cluster_id)
     if cluster is None:
@@ -630,12 +643,14 @@ async def frameworks(db, cluster_id):
         return {"frameworks": [], "story_type": story_type}
 
     sh = _source_hash(articles)
-    subkey = f"frameworks:{story_type}"
+    dp = "" if depth_pref in (None, "", "standard") else f":{depth_pref}"
+    subkey = f"frameworks:{story_type}{dp}"
     cached = _cache_read(cluster, "extra_json", subkey, sh)
     if cached is None:
         try:
             raw = await llm.generate(
-                _frameworks_prompt(cluster, selected, retrieval.source_lines(articles)),
+                _frameworks_prompt(cluster, selected, retrieval.source_lines(articles, depth_pref=depth_pref))
+                + _depth_suffix(depth_pref),
                 system=_FRAMEWORKS_SYSTEM, schema={"lines": {}}, max_tokens=500,
             )
         except llm.LLMUnavailable:
@@ -676,7 +691,7 @@ def _consensus_prompt(cluster: StoryCluster, source_lines: str) -> str:
     )
 
 
-async def consensus(db, cluster_id):
+async def consensus(db, cluster_id, depth_pref: str = "standard"):
     """One grounded LLM pass → agree/dissent split + the disputed point. Cached; dissent whose
     outlet isn't a cluster source is dropped (groundedness)."""
     cluster, articles = await _load(db, cluster_id)
@@ -686,11 +701,14 @@ async def consensus(db, cluster_id):
         return {"unavailable": True, "reason": "no_sources"}
     outlets = {(a.source.name or "").strip().lower() for a in articles if a.source}
     sh = _source_hash(articles)
-    cached = _cache_read(cluster, "extra_json", "consensus", sh)
+    # Standard depth keeps the plain "consensus" subkey (cluster_coherence reads that slot); non-standard
+    # depths cache separately so brief/expert answers never cross-serve.
+    subkey = "consensus" if depth_pref in (None, "", "standard") else f"consensus:{depth_pref}"
+    cached = _cache_read(cluster, "extra_json", subkey, sh)
     if cached is None:
         try:
             raw = await llm.generate(
-                _consensus_prompt(cluster, _impact_source_lines(articles)),
+                _consensus_prompt(cluster, _impact_source_lines(articles, depth_pref)) + _depth_suffix(depth_pref),
                 system=_CONSENSUS_SYSTEM, schema={"summary": ""}, max_tokens=400,
             )
         except llm.LLMUnavailable:
@@ -713,7 +731,7 @@ async def consensus(db, cluster_id):
             "dissent": dissent,
             "summary": str(d.get("summary") or ""),
         }
-        await _cache_write(db, cluster, "extra_json", "consensus", sh, data)
+        await _cache_write(db, cluster, "extra_json", subkey, sh, data)
         cached = data
     return cached
 
