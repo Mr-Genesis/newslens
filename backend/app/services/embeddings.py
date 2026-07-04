@@ -94,6 +94,11 @@ async def _resolve_embedding_key() -> str | None:
     return await _resolve_gemini_key()
 
 
+class QuotaExceeded(Exception):
+    """A Gemini 429 (rate/daily-quota). Raised so the backfill can circuit-break instead of
+    re-firing a dead quota every 5 minutes (which torches the ~1,000/day free-tier embedding cap)."""
+
+
 def _embed_sync(key: str, model: str, content: str, task_type: str, output_dim: int) -> list[float]:
     import google.generativeai as genai  # lazy — only on the embedding path
 
@@ -103,6 +108,21 @@ def _embed_sync(key: str, model: str, content: str, task_type: str, output_dim: 
         model=model, content=content, task_type=task_type, output_dimensionality=output_dim
     )
     return result["embedding"]
+
+
+def _embed_batch_sync(
+    key: str, model: str, texts: list[str], task_type: str, output_dim: int
+) -> list[list[float]]:
+    """Embed MANY texts in ONE request (BatchEmbedContents). The SDK returns a list-of-embeddings
+    when `content` is a list — so N articles cost 1 request, not N, which is what keeps the free-tier
+    ~1,000/day embedding cap from being blown on a single backfill pass."""
+    import google.generativeai as genai
+
+    genai.configure(api_key=key)
+    result = genai.embed_content(
+        model=model, content=texts, task_type=task_type, output_dimensionality=output_dim
+    )
+    return result["embedding"]  # BatchEmbeddingDict → list aligned with `texts` order
 
 
 # Last embedding failure, surfaced over HTTP by GET /pipeline so the cause of a stalled pipeline
@@ -173,6 +193,44 @@ async def generate_embedding(text: str, *, task_type: str | None = None) -> list
         return None
 
 
+# After a 429, the backfill parks itself until this epoch so it stops hammering a spent daily quota.
+_embedding_backoff_until: float = 0.0
+
+
+async def generate_embeddings_batch(texts: list[str]) -> list[list[float]] | None:
+    """Embed a list of texts in ONE Gemini request. Returns the aligned list of vectors, or None on
+    a non-quota failure (no key / transport). Raises QuotaExceeded on a 429 so the caller can back
+    off. A success clears the sticky last-error (pipeline recovers)."""
+    global _last_embedding_error
+    if not texts:
+        return []
+    key = await _resolve_embedding_key()
+    if not key:
+        logger.warning("embedding_no_gemini_key")
+        _record_embedding_error("no_key", "no Gemini key resolved (per-user key or GEMINI_API_KEY env)")
+        return None
+
+    try:
+        vecs = await asyncio.to_thread(
+            _embed_batch_sync,
+            key,
+            settings.embedding_model,
+            texts,
+            settings.embedding_task_document,
+            settings.embedding_dimensions,
+        )
+        _last_embedding_error = None
+        return vecs
+    except Exception as e:
+        msg = str(e)
+        category = _classify_embedding_error(msg)
+        _record_embedding_error(category, msg)
+        logger.error("embedding_batch_failed", category=category, count=len(texts), error=msg)
+        if category == "quota":
+            raise QuotaExceeded(msg) from e
+        return None
+
+
 # Cache of query string -> embedding, so repeated searches for the same query
 # reuse one OpenAI call. Bounded to avoid unbounded growth from arbitrary queries.
 _query_embedding_cache: dict[str, list[float]] = {}
@@ -237,58 +295,96 @@ async def embed_article(article_id: int):
             await session.commit()
 
 
-async def backfill_embeddings():
-    """Backfill embeddings for articles with pending/failed status. Called by APScheduler."""
+def _article_embed_text(article: Article) -> str:
+    text = article.title or ""
+    if article.snippet:
+        text += " " + article.snippet
+    return text
+
+
+async def backfill_embeddings(session=None):
+    """Backfill embeddings for pending/failed articles. Called by APScheduler.
+
+    Sends ONE batched request per `embedding_batch_size` articles (not one per article) to stay
+    under the free-tier ~1,000/day cap, and parks itself for a cooldown after a 429 instead of
+    re-firing a spent quota every 5 minutes. Accepts an optional session (tests); prod opens its own.
+    """
+    import time
+
+    global _embedding_backoff_until
     if not await _resolve_embedding_key():
         # No Gemini key anywhere → articles ingest but never embed → never cluster → feed/briefing
         # stay empty while /health is green. Log it so this silent dead-stop is observable in prod.
         logger.warning("embedding_backfill_skipped_no_gemini_key")
+        _record_embedding_error("no_key", "no Gemini key resolved (per-user key or GEMINI_API_KEY env)")
         return
 
-    async with async_session() as session:
-        result = await session.execute(
-            select(Article)
-            .where(Article.embedding_status.in_([
-                EmbeddingStatus.pending,
-                EmbeddingStatus.failed,
-            ]))
-            .order_by(Article.fetched_at.desc())
-            .limit(50)
-        )
-        articles = result.scalars().all()
+    now = time.time()
+    if now < _embedding_backoff_until:
+        logger.info("embedding_backfill_cooldown", seconds_left=int(_embedding_backoff_until - now))
+        return
 
+    if session is not None:
+        return await _backfill_once(session)
+    async with async_session() as own:
+        return await _backfill_once(own)
+
+
+async def _backfill_once(session):
+    import time
+
+    global _embedding_backoff_until
+    articles = (
+        await session.execute(
+            select(Article)
+            .where(Article.embedding_status.in_([EmbeddingStatus.pending, EmbeddingStatus.failed]))
+            .order_by(Article.fetched_at.desc())
+            .limit(settings.embedding_batch_size)
+        )
+    ).scalars().all()
     if not articles:
         return
 
-    success_count = 0
-    for article in articles:
-        text = article.title
-        if article.snippet:
-            text += " " + article.snippet
+    texts = [_article_embed_text(a) for a in articles]
+    try:
+        vecs = await generate_embeddings_batch(texts)
+    except QuotaExceeded:
+        _embedding_backoff_until = time.time() + settings.embedding_quota_cooldown_minutes * 60
+        logger.warning(
+            "embedding_backfill_quota_backoff",
+            cooldown_minutes=settings.embedding_quota_cooldown_minutes,
+            pending=len(articles),
+        )
+        return  # leave the articles pending — it wasn't their fault; they retry after the cooldown
 
-        embedding = await generate_embedding(text)
-
-        async with async_session() as session:
-            if embedding:
-                await session.execute(
-                    update(Article)
-                    .where(Article.id == article.id)
-                    .values(
-                        embedding=embedding,
-                        embedding_status=EmbeddingStatus.complete,
-                    )
-                )
-                success_count += 1
+    if not vecs:
+        # Non-quota whole-batch failure. A batch fails ATOMICALLY, so one poison text (oversized /
+        # malformed) would otherwise starve every other article in the batch forever — a new failure
+        # mode that batching introduces. Fall back to per-text embedding to ISOLATE the offender:
+        # good texts still embed, only the bad one stays failed. If even that embeds nothing
+        # (transport / systemic), arm a short backoff so we don't re-fire the same work every 5 min.
+        success = 0
+        for article, text in zip(articles, texts):
+            vec = await generate_embedding(text)
+            if vec:
+                article.embedding = vec
+                article.embedding_status = EmbeddingStatus.complete
+                success += 1
             else:
-                await session.execute(
-                    update(Article)
-                    .where(Article.id == article.id)
-                    .values(embedding_status=EmbeddingStatus.failed)
-                )
-            await session.commit()
+                article.embedding_status = EmbeddingStatus.failed
+        await session.commit()
+        if success == 0:
+            _embedding_backoff_until = time.time() + settings.embedding_error_cooldown_minutes * 60
+        logger.warning("embedding_backfill_batch_fallback", processed=len(articles), success=success)
+        return
 
-    logger.info(
-        "embedding_backfill_complete",
-        processed=len(articles),
-        success=success_count,
-    )
+    success = 0
+    for article, vec in zip(articles, vecs):
+        if vec:
+            article.embedding = vec
+            article.embedding_status = EmbeddingStatus.complete
+            success += 1
+        else:
+            article.embedding_status = EmbeddingStatus.failed
+    await session.commit()
+    logger.info("embedding_backfill_complete", processed=len(articles), success=success, api_calls=1)
