@@ -48,6 +48,10 @@ class FeedResponse(BaseModel):
     page: int
     per_page: int
     explore_ratio: float
+    # WS-3 (#113): the pagination cursor. First response echoes now(); the client threads it back on
+    # subsequent pages to pin the pool (fetched_at <= as_of) so new ingest can't shift page boundaries.
+    # A stale cursor (empty window) comes back refreshed to now() so the client can restart.
+    as_of: datetime
 
 
 # --- Cluster / Deep Dive ---

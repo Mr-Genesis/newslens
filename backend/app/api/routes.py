@@ -147,6 +147,7 @@ async def get_feed(
     source_type: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
+    as_of: datetime | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     offset = (page - 1) * per_page
@@ -219,6 +220,18 @@ async def get_feed(
         else:
             raise HTTPException(status_code=400, detail="invalid source_type")
         query = query.where(Article.source_id.in_(select(Source.id).where(type_cond)))
+
+    # WS-3 (#113): the as_of pagination cursor. When the client threads a cursor (page ≥ 2), pin the
+    # pool to fetched_at <= as_of so new ingest mid-scroll can't shift page boundaries (duplicate/drop
+    # rows) — on BOTH the personalized and legacy paths (they share the identical top-shift bug).
+    # Omitting as_of (the first page) leaves the query UNFILTERED — byte-identical legacy behavior, and
+    # avoids clock skew excluding a just-ingested row — while we still hand back as_of=now to pin later
+    # pages. A stale cursor whose window is empty recovers with a fresh now() (see response_as_of below).
+    now = datetime.now(timezone.utc)
+    if as_of is not None:
+        if as_of.tzinfo is None:
+            as_of = as_of.replace(tzinfo=timezone.utc)
+        query = query.where(Article.fetched_at <= as_of)
 
     # G2: when personalizing, fetch a bounded recent pool and rerank it (recency + entity relevance)
     # BEFORE paginating, so a high-affinity story can cross page boundaries within the horizon. When
@@ -348,12 +361,21 @@ async def get_feed(
     else:
         explore_ratio = app_settings.default_explore_ratio
 
+    # WS-3 (#113): the cursor echoed to the client. Normally the pinned as_of (or now() on the first
+    # page). But a client-supplied cursor whose window is now empty (predates all data / pruned) is
+    # stale — hand back a FRESH now() so the client restarts pagination instead of looping on an empty
+    # page. (Distinct from "caught up": there total > 0 and only the page slice is empty.)
+    response_as_of = as_of if as_of is not None else now
+    if as_of is not None and total == 0:
+        response_as_of = now
+
     return FeedResponse(
         articles=article_outs,
         total=total,
         page=page,
         per_page=per_page,
         explore_ratio=explore_ratio,
+        as_of=response_as_of,
     )
 
 
