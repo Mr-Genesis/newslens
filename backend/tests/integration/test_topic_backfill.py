@@ -197,3 +197,31 @@ async def test_backfill_is_idempotent_no_duplicate_rows(db_session):
         )
     ).scalar()
     assert count == 1  # no duplicate row
+
+
+@pytest.mark.asyncio
+async def test_backfill_my_topics_endpoint_schedules_all_subscriptions(aclient, db_session, monkeypatch):
+    scheduled = []
+
+    def fake_schedule(tid):
+        scheduled.append(tid)
+        return object()  # non-None → counted as scheduled
+
+    monkeypatch.setattr(fetcher, "schedule_topic_backfill", fake_schedule)
+    await _ensure_user(db_session)
+    t1 = Topic(name="T1")
+    t2 = Topic(name="T2")
+    db_session.add_all([t1, t2])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            UserPreference(user_id=DEFAULT_USER, topic_id=t1.id, weight=1.0),
+            UserPreference(user_id=DEFAULT_USER, topic_id=t2.id, weight=1.0),
+        ]
+    )
+    await db_session.flush()
+
+    r = await aclient.post("/profile/backfill-topics")
+    assert r.status_code == 200
+    assert r.json() == {"topics": 2, "scheduled": 2}
+    assert set(scheduled) == {t1.id, t2.id}

@@ -1725,6 +1725,22 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
     return await get_profile(db)
 
 
+@router.post("/profile/backfill-topics", dependencies=[Depends(get_current_user)])
+async def backfill_my_topics(db: AsyncSession = Depends(get_db)):
+    """Kick a background article→topic backfill for EVERY topic the caller subscribes to — for topics
+    that were subscribed BEFORE the on-subscribe auto-backfill existed (so they still show 0 articles).
+    Idempotent + deduped; returns how many were scheduled."""
+    from app.services.fetcher import schedule_topic_backfill
+
+    topic_ids = (
+        await db.execute(
+            select(UserPreference.topic_id).where(UserPreference.user_id == current_user_id())
+        )
+    ).scalars().all()
+    scheduled = sum(1 for tid in topic_ids if schedule_topic_backfill(tid) is not None)
+    return {"topics": len(topic_ids), "scheduled": scheduled}
+
+
 # ── E1: per-user Gemini key ──
 def _invalidate_llm_caches(uid: int) -> None:
     """WS-6 (#116): drop this user's cached key/provider so a settings write takes effect at once."""
