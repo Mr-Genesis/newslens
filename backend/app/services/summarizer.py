@@ -5,6 +5,7 @@ Generates cluster summaries from article titles and snippets through the provide
 Hybrid strategy: batch job pre-generates + on-demand fallback.
 """
 
+import asyncio
 import structlog
 from datetime import datetime, timezone, timedelta
 
@@ -12,7 +13,7 @@ from sqlalchemy import select, update
 
 from app.config import settings
 from app.database import async_session
-from app.models import ClusterArticle, StoryCluster, Article, EmbeddingStatus
+from app.models import ClusterArticle, StoryCluster, Article
 
 logger = structlog.get_logger()
 
@@ -24,6 +25,21 @@ def _staleness_cutoff(now: datetime | None = None) -> datetime:
     """
     now = now or datetime.now(timezone.utc)
     return now - timedelta(hours=4)
+
+
+def snippet_summary(snippets: list[str]) -> str:
+    """No-LLM fallback summary: the first non-empty snippet, HTML-unescaped, trimmed to ~2 sentences.
+
+    Returned INSTANTLY by the read paths (/briefing, /clusters/{id}) while the real LLM summary
+    generates in the background, and reused as generate_cluster_summary's degradation text. Must never
+    be persisted as a cluster's ``summary`` — that would make backfill_summaries treat the cluster as
+    done and skip the real generation.
+    """
+    import html as _html
+
+    text = _html.unescape(next((s for s in snippets if s), "No summary available."))
+    sentences = text.split(". ")
+    return ". ".join(sentences[:2]) + "." if len(sentences) > 1 else text
 
 
 async def generate_cluster_summary(
@@ -38,12 +54,8 @@ async def generate_cluster_summary(
     or guard trip → callers keep the existing title. Coherence is estimated from the
     number of corroborating sources.
     """
-    # Fallback: first available snippet, trimmed to ~2 sentences. Unescape defensively — rows
-    # ingested before the fetcher decoded entities still carry &nbsp;/&#8377; in the DB.
-    import html as _html
-    fallback_text = _html.unescape(next((s for s in snippets if s), "No summary available."))
-    sentences = fallback_text.split(". ")
-    fallback_summary = ". ".join(sentences[:2]) + "." if len(sentences) > 1 else fallback_text
+    # Fallback: first available snippet, trimmed to ~2 sentences — shared with the read-path fallback.
+    fallback_summary = snippet_summary(snippets)
 
     # Coherence heuristic (source-count fallback; the real ratio is computed in lenses.cluster_coherence).
     source_count = len(titles)
@@ -144,6 +156,49 @@ async def summarize_cluster(cluster_id: int) -> tuple[str, float] | None:
     )
 
     return summary, coherence
+
+
+# Clusters currently being summarized in the background — dedupes a burst of read requests (or eager
+# creation) so only ONE task per cluster is in flight at a time.
+_scheduled: set[int] = set()
+# Strong references to the in-flight tasks. The event loop keeps only a WEAK reference to a bare
+# create_task result, so without this a background summary could be garbage-collected mid-run
+# (documented CPython footgun) and silently cancelled — defeating the warm-up. Discarded on completion.
+_tasks: "set[asyncio.Task]" = set()
+
+
+def schedule_summary(cluster_id: int) -> "asyncio.Task | None":
+    """Fire-and-forget background summary generation for a cluster.
+
+    The read paths call this instead of awaiting summarize_cluster, so /briefing and /clusters/{id}
+    return instantly (with a snippet fallback) and the real summary is warm on the next view. Deduped
+    per cluster and gated by ``settings.eager_summaries_enabled``. Returns the Task, or None when it was
+    deduped / gated off / there is no running event loop.
+    """
+    if not settings.eager_summaries_enabled:
+        return None
+    if cluster_id in _scheduled:
+        return None
+    _scheduled.add(cluster_id)
+
+    async def _run() -> None:
+        try:
+            await summarize_cluster(cluster_id)
+        except Exception as e:  # noqa: BLE001 — best-effort; backfill_summaries retries misses
+            logger.warning("scheduled_summary_failed", cluster_id=cluster_id, error=str(e))
+        finally:
+            _scheduled.discard(cluster_id)
+
+    try:
+        task = asyncio.create_task(_run())
+    except RuntimeError:
+        # No running loop (e.g. invoked from a sync context) — undo the guard so a later call retries.
+        _scheduled.discard(cluster_id)
+        return None
+    # Hold a strong reference until the task finishes so it can't be GC-cancelled mid-run.
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+    return task
 
 
 async def backfill_summaries():

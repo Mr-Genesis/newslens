@@ -79,6 +79,10 @@ async def run_clustering():
                     await link_cluster(session, cluster.id)
                 except Exception as e:  # noqa: BLE001 — never break clustering on edge-linking
                     logger.warning("cluster_link_failed", cluster_id=cluster.id, error=str(e))
+                # Eagerly summarize the brand-new cluster in the background so it's warm before any user
+                # opens it — turns the read-path on-demand into a rare cold path (deduped + gated inside).
+                from app.services.summarizer import schedule_summary
+                schedule_summary(cluster.id)
                 new_clusters += 1
 
     logger.info(
