@@ -182,18 +182,20 @@ class TestTopics:
         assert data["explore_topics"] == []
         assert data["trending_topics"] == []
 
-    async def test_topics_in_your_topics(self, client: AsyncClient, mock_session: MockSession):
-        """Existing topics appear in your_topics (MVP behavior)."""
+    async def test_unsubscribed_topic_not_auto_in_your_topics(
+        self, client: AsyncClient, mock_session: MockSession
+    ):
+        """Per-user split (was MVP "all topics → your_topics"): a topic the caller hasn't subscribed to
+        does NOT appear in your_topics. The mock user here has no subscriptions; the full
+        your/explore/trending behaviour is covered by tests/integration/test_topics_per_user.py."""
         mock_session.topics = [make_topic(id=1, name="Technology")]
 
         response = await client.get("/topics")
         assert response.status_code == 200
         data = response.json()
-        assert len(data["your_topics"]) == 1
-        assert data["your_topics"][0]["name"] == "Technology"
-        # MVP: explore and trending are always empty
-        assert data["explore_topics"] == []
-        assert data["trending_topics"] == []
+        assert data["your_topics"] == []  # not subscribed → not auto-added
+        assert isinstance(data["explore_topics"], list)
+        assert isinstance(data["trending_topics"], list)
 
 
 # ─── Feedback ───

@@ -559,13 +559,19 @@ async def get_article(article_id: int, db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.get("/topics", response_model=TopicListResponse)
+@router.get("/topics", response_model=TopicListResponse, dependencies=[Depends(get_current_user)])
 async def get_topics(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Topic).order_by(Topic.name))
-    topics = result.scalars().all()
+    """Per-user topic split (was "all topics → your_topics" MVP):
+    - your_topics: the caller's subscribed topics (UserPreference), by weight — shown even if quiet.
+    - explore_topics: topics the caller has NOT subscribed to that currently have content.
+    - trending_topics: top topics by RECENT (7d) article volume — a public, non-personalized ranking.
+    """
+    from datetime import timedelta
 
-    # Real per-topic article counts (was hardcoded 0 "for MVP", which forced the home chip row
-    # to guess from briefing categories alone — the "only 3 chips" bug).
+    topics = (await db.execute(select(Topic).order_by(Topic.name))).scalars().all()
+    by_id = {t.id: t for t in topics}
+
+    # Total per-topic article counts (drives article_count + explore ranking).
     counts = dict(
         (
             await db.execute(
@@ -575,24 +581,54 @@ async def get_topics(db: AsyncSession = Depends(get_db)):
             )
         ).all()
     )
+    # Recent (7d) volume per topic — drives "trending". Uses fetched_at (NOT NULL) rather than
+    # published_at, so undated items (feeds with no parseable date) still count as recent.
+    recent_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    recent = dict(
+        (
+            await db.execute(
+                select(ArticleTopic.topic_id, func.count(ArticleTopic.article_id))
+                .join(Article, Article.id == ArticleTopic.article_id)
+                .where(Article.fetched_at >= recent_cutoff)
+                .group_by(ArticleTopic.topic_id)
+            )
+        ).all()
+    )
 
-    topic_outs = []
-    for t in topics:
-        topic_outs.append(
-            TopicOut(
-                id=t.id,
-                name=t.name,
-                article_count=counts.get(t.id, 0),
-                is_explore=False,
+    # The caller's subscriptions (UserPreference), highest weight first.
+    subs = (
+        await db.execute(
+            select(UserPreference.topic_id, UserPreference.weight).where(
+                UserPreference.user_id == current_user_id()
             )
         )
+    ).all()
+    sub_weight = {tid: w for tid, w in subs}
+    sub_ids = set(sub_weight)
 
-    # For MVP: all topics go in your_topics, explore and trending are empty
-    return TopicListResponse(
-        your_topics=topic_outs,
-        explore_topics=[],
-        trending_topics=[],
-    )
+    def out(t: Topic, is_explore: bool = False) -> TopicOut:
+        return TopicOut(id=t.id, name=t.name, article_count=counts.get(t.id, 0), is_explore=is_explore)
+
+    your_topics = [
+        out(by_id[tid])
+        for tid in sorted(sub_ids & by_id.keys(), key=lambda i: (-sub_weight[i], by_id[i].name))
+    ]
+    explore = [
+        out(t, is_explore=True)
+        for t in sorted(
+            (t for t in topics if t.id not in sub_ids and counts.get(t.id, 0) > 0),
+            key=lambda t: (-counts.get(t.id, 0), t.name),
+        )
+    ][:10]
+    trending = [
+        out(t)
+        for t in sorted(
+            (t for t in topics if recent.get(t.id, 0) > 0),
+            key=lambda t: (-recent.get(t.id, 0), t.name),
+        )
+    ][:5]
+
+    return TopicListResponse(your_topics=your_topics, explore_topics=explore, trending_topics=trending)
 
 
 @router.post("/feedback", response_model=FeedbackOut, status_code=201, dependencies=[Depends(get_current_user)])
@@ -1647,6 +1683,7 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
         u.profession = body.profession.strip() or None
     if body.locale is not None:
         u.locale = body.locale.strip() or "IN"
+    new_topic_ids: list[int] = []
     if body.interests is not None:
         await db.execute(
             UserPreference.__table__.delete().where(
@@ -1664,6 +1701,7 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
                 topic = Topic(name=name)
                 db.add(topic)
                 await db.flush()
+                new_topic_ids.append(topic.id)
             db.add(
                 UserPreference(user_id=current_user_id(), topic_id=topic.id, weight=1.0)
             )
@@ -1676,7 +1714,31 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
     # Any profile edit bumps persona_version → lazily invalidates this user's cached impacts.
     u.persona_version = (u.persona_version or 1) + 1
     await db.commit()
+    # A freshly-created interest has no tagged articles yet — retroactively tag existing articles in the
+    # background (the topic is committed above, so the job's own session sees it) so the interest
+    # surfaces content within seconds instead of waiting for the next matching article.
+    if new_topic_ids:
+        from app.services.fetcher import schedule_topic_backfill
+
+        for tid in new_topic_ids:
+            schedule_topic_backfill(tid)
     return await get_profile(db)
+
+
+@router.post("/profile/backfill-topics", dependencies=[Depends(get_current_user)])
+async def backfill_my_topics(db: AsyncSession = Depends(get_db)):
+    """Kick a background article→topic backfill for EVERY topic the caller subscribes to — for topics
+    that were subscribed BEFORE the on-subscribe auto-backfill existed (so they still show 0 articles).
+    Idempotent + deduped; returns how many were scheduled."""
+    from app.services.fetcher import schedule_topic_backfill
+
+    topic_ids = (
+        await db.execute(
+            select(UserPreference.topic_id).where(UserPreference.user_id == current_user_id())
+        )
+    ).scalars().all()
+    scheduled = sum(1 for tid in topic_ids if schedule_topic_backfill(tid) is not None)
+    return {"topics": len(topic_ids), "scheduled": scheduled}
 
 
 # ── E1: per-user Gemini key ──

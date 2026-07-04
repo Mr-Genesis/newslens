@@ -1,5 +1,6 @@
 """RSS feed fetcher service with retry and structured logging."""
 
+import asyncio
 import html
 import json
 import re
@@ -90,6 +91,140 @@ async def assign_topics(session, article: Article):
                 session.add(
                     ArticleTopic(article_id=article.id, topic_id=topic.id)
                 )
+
+
+async def backfill_topic_articles(session, topic_id: int, limit: int = 200) -> int:
+    """Retroactively tag EXISTING articles to a (usually just-created) topic — the inverse of
+    assign_topics. Seeds the topic embedding if missing, then: (1) pgvector-NN the closest articles
+    within the similarity threshold, and (2) a keyword pass on the exact topic name. Bounded by `limit`.
+    Returns the number of ArticleTopic rows created. Without this, a freshly-created interest stays at
+    0 articles until the NEXT matching article happens to arrive.
+    """
+    from sqlalchemy import or_
+
+    from app.config import settings
+    from app.services.embeddings import generate_embedding, vector_literal
+
+    topic = (await session.execute(select(Topic).where(Topic.id == topic_id))).scalar_one_or_none()
+    if topic is None:
+        return 0
+
+    # A pgvector literal for the topic's embedding — generate + persist one if it's missing.
+    emb_literal: str | None = None
+    if topic.embedding is not None:
+        emb_literal = vector_literal(topic.embedding)
+    else:
+        try:
+            emb = await generate_embedding(f"News about {topic.name}")
+        except Exception:
+            emb = None
+        if emb:
+            emb_literal = vector_literal(emb)
+            await session.execute(
+                text("UPDATE topics SET embedding = :emb WHERE id = :tid"),
+                {"emb": emb_literal, "tid": topic_id},
+            )
+            await session.flush()
+
+    already = set(
+        (
+            await session.execute(
+                select(ArticleTopic.article_id).where(ArticleTopic.topic_id == topic_id)
+            )
+        ).scalars().all()
+    )
+    to_insert: list[dict] = []
+
+    # 1) semantic pass — the K nearest articles within the distance threshold.
+    if emb_literal is not None:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT id, (embedding <=> :emb) AS distance FROM articles "
+                    "WHERE embedding IS NOT NULL ORDER BY embedding <=> :emb LIMIT :k"
+                ),
+                {"emb": emb_literal, "k": limit},
+            )
+        ).all()
+        for row in rows:
+            if row.id in already or row.distance >= settings.new_topic_max_similarity:
+                continue
+            to_insert.append(
+                {"article_id": row.id, "topic_id": topic_id, "relevance_score": 1.0 - row.distance}
+            )
+            already.add(row.id)
+
+    # 2) keyword pass — the exact topic name as a whole word among the NEWEST candidates. The ORDER BY
+    #    makes the LIMIT window deterministic: without it Postgres returns arbitrary rows, so for a short
+    #    name like "AI" (whose unanchored ilike matches thousands) the real word-boundary matches could
+    #    all fall outside the window and never get tagged.
+    kw = (
+        await session.execute(
+            select(Article.id, Article.title, Article.snippet)
+            .where(or_(Article.title.ilike(f"%{topic.name}%"), Article.snippet.ilike(f"%{topic.name}%")))
+            .order_by(Article.fetched_at.desc())
+            .limit(limit)
+        )
+    ).all()
+    pat = re.compile(rf"\b{re.escape(topic.name.lower())}\b")
+    for aid, title, snippet in kw:
+        if aid in already:
+            continue
+        if pat.search(f"{title or ''} {snippet or ''}".lower()):
+            to_insert.append({"article_id": aid, "topic_id": topic_id, "relevance_score": 0.0})
+            already.add(aid)
+
+    if to_insert:
+        # Conflict-tolerant bulk insert: a concurrent assign_topics (RSS ingest) can insert the same
+        # (article_id, topic_id) between our dedupe snapshot and this write — ON CONFLICT DO NOTHING
+        # stops that race from rolling back the entire backfill on uq_article_topic.
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        await session.execute(
+            pg_insert(ArticleTopic)
+            .values(to_insert)
+            .on_conflict_do_nothing(constraint="uq_article_topic")
+        )
+    await session.flush()
+    return len(to_insert)
+
+
+# Topics with a backfill in flight — dedupe + strong task refs so a fire-and-forget backfill can't be
+# GC-cancelled mid-run (same footgun as schedule_summary).
+_topic_backfill_scheduled: set[int] = set()
+_topic_backfill_tasks: "set[asyncio.Task]" = set()
+
+
+def schedule_topic_backfill(topic_id: int) -> "asyncio.Task | None":
+    """Fire-and-forget: retroactively tag existing articles to a newly-created topic in the background,
+    so a seeded interest surfaces content within seconds. Deduped per topic, gated by
+    settings.topic_backfill_enabled, strong task reference retained until done."""
+    from app.config import settings
+
+    if not getattr(settings, "topic_backfill_enabled", True):
+        return None
+    if topic_id in _topic_backfill_scheduled:
+        return None
+    _topic_backfill_scheduled.add(topic_id)
+
+    async def _run() -> None:
+        try:
+            async with async_session() as session:
+                await backfill_topic_articles(session, topic_id)
+                await session.commit()
+        except Exception as e:  # noqa: BLE001 — best-effort; the periodic backfill catches misses
+            logger.warning("topic_backfill_failed", topic_id=topic_id, error=str(e))
+        finally:
+            _topic_backfill_scheduled.discard(topic_id)
+
+    try:
+        task = asyncio.create_task(_run())
+    except RuntimeError:
+        _topic_backfill_scheduled.discard(topic_id)
+        return None
+    _topic_backfill_tasks.add(task)
+    task.add_done_callback(_topic_backfill_tasks.discard)
+    return task
 
 
 async def backfill_topic_assignments():
@@ -243,6 +378,40 @@ def _best_body(entry) -> str:
     return content if len(content) > len(summary) else summary
 
 
+_URL_ONLY_RE = re.compile(r"https?://\S+")
+
+
+def _is_thin_content(text: str | None) -> bool:
+    """True when a feed item's 'content' is really just a link (Hacker News and other link-aggregators)
+    or empty/near-empty — it carries no article body of its own, so the linked page must be fetched for
+    the card/deep-dive to show anything useful."""
+    t = (text or "").strip()
+    if len(t) < 50:
+        return True
+    url_chars = sum(len(u) for u in _URL_ONLY_RE.findall(t))
+    return url_chars / len(t) > 0.6
+
+
+async def _extract_linked_content(url: str) -> tuple[str | None, str | None]:
+    """Fetch `url` and extract (snippet, full_body) via trafilatura — reuses the GDELT extractor.
+    Skips Hacker News discussion links (they are the comments page, not the article). Best-effort:
+    returns (None, None) on any failure so ingestion never breaks on a bad link."""
+    if not url or "news.ycombinator.com/item" in url:
+        return None, None
+    from app.services.gdelt import _extract  # lazy: gdelt imports assign_topics from this module
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=8.0,
+            headers={"User-Agent": "NewsLensBot/1.0 (+https://newslens.app)"},
+        ) as client:
+            # Hard cap so a slow/hanging linked host can't stall the whole RSS cycle for other sources.
+            return await asyncio.wait_for(_extract(client, url), timeout=10.0)
+    except Exception:
+        return None, None
+
+
 _DOUBLE_PREFIX = re.compile(r"^https?://[^/]+/(https?://.+)$", re.IGNORECASE)
 
 
@@ -360,6 +529,9 @@ async def _ingest_feed_entries(session, source: Source, feed) -> int:
 
     new_count = 0
     meta = source.credibility_meta or {}
+    # Link-aggregator sources (Hacker News) submit external links with no article body of their own —
+    # fetch + extract the linked page so cards aren't just a headline + URL. Gated per-source.
+    fetch_full = bool(meta.get("fetch_full_content"))
 
     # Filing tier (Phase 3): a `filing_watchlist` source is an exchange firehose that must be reduced
     # to only companies SOMEONE watchlists. Compute the aggregate name-key set once per fetch. When
@@ -420,6 +592,14 @@ async def _ingest_feed_entries(session, source: Source, feed) -> int:
         # Check for duplicates
         if await is_duplicate(session, source.id, link, title):
             continue
+
+        # A link-only submission (HN et al.) has no body → fetch + extract the linked article's text.
+        # AFTER the dedup check, so an already-ingested item isn't re-downloaded on every fetch cycle.
+        if fetch_full and _is_thin_content(raw):
+            s2, b2 = await _extract_linked_content(link)
+            if b2:
+                snippet, body = (s2 or b2[:300]), b2
+                logger.info("full_content_fetched", source=source.name, url=link, chars=len(b2))
 
         article = Article(
             title=title,
