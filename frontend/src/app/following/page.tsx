@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/Button";
+import { useRouter } from "next/navigation";
 import { getFollows, removeFollow, type FollowItem } from "@/lib/api";
 
 type PageState = "loading" | "success" | "empty" | "error";
@@ -16,6 +17,7 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 export default function FollowingPage() {
+  const router = useRouter();
   const [state, setState] = useState<PageState>("loading");
   const [follows, setFollows] = useState<FollowItem[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -85,26 +87,29 @@ export default function FollowingPage() {
       {/* Empty */}
       {state === "empty" && (
         <div className="flex flex-col items-center justify-center pt-[var(--space-3xl)] text-center">
-          <motion.div
+          <motion.button
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ duration: 0.3 }}
+            whileTap={{ scale: 0.95 }}
+            onClick={() => router.push("/follow/new")}
+            aria-label="Follow a new topic"
             className="w-12 h-12 rounded-full bg-[var(--accent-subtle)] flex items-center justify-center mb-3"
           >
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12 5v14M5 12h14" />
             </svg>
-          </motion.div>
+          </motion.button>
           <p className="text-heading text-[var(--text-primary)]">Not following anything yet</p>
           <p className="text-small text-[var(--text-muted)] mt-1.5 max-w-[280px]">
             Follow a topic from your briefing, or save a search to keep tracking it here.
           </p>
           <Button
-            variant="secondary"
-            onClick={() => (window.location.href = "/")}
+            variant="primary"
+            onClick={() => router.push("/follow/new")}
             className="mt-4"
           >
-            Browse stories
+            Follow a topic
           </Button>
         </div>
       )}

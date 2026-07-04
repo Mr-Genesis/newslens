@@ -601,6 +601,30 @@ export async function removeFollow(id: number): Promise<void> {
   await fetchJSON(`/follows/${id}`, { method: "DELETE" });
 }
 
+/* ── WS-2 (#112): "News You Follow" rails ── */
+export interface RailStory {
+  cluster_id: number;
+  title: string;
+  summary: string | null;
+  source_count: number;
+}
+export interface FollowRail {
+  follow_id: number;
+  kind: string;
+  value: string;
+  total: number;
+  new_count: number;
+  stories: RailStory[];
+}
+export async function getFollowRails(): Promise<FollowRail[]> {
+  const r = await fetchJSON<{ rails: FollowRail[] }>("/follows/rails");
+  return r.rails ?? [];
+}
+/** Clear a rail's "N new" badge (tapping a rail story or its "see all"). */
+export async function markFollowSeen(followId: number): Promise<void> {
+  await fetchJSON(`/follows/${followId}/seen`, { method: "POST" });
+}
+
 export async function getClusterStrategic(clusterId: number): Promise<LensResult> {
   return fetchJSON(`/clusters/${clusterId}/strategic`);
 }
