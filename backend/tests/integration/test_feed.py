@@ -99,9 +99,10 @@ async def test_feed_no_n_plus_one(aclient, db_session, engine):
     assert resp.status_code == 200
     assert len(resp.json()["articles"]) == 25
     # Endpoint issues a bounded set of queries: count, page, source selectin,
-    # cluster-membership, per-cluster count, summary set, recent feedback.
+    # cluster-membership, per-cluster count, summary set, recent feedback, and WS-5's one-hop seed
+    # probe (a single O(1) UER lookup — 0 rows for this zero-signal user, then expansion short-circuits).
     # Far fewer than 1-per-article (which would be 25+). Allow generous headroom.
-    assert counter["n"] <= 12, f"feed issued {counter['n']} SELECTs (possible N+1)"
+    assert counter["n"] <= 13, f"feed issued {counter['n']} SELECTs (possible N+1)"
 
 
 @pytest.mark.asyncio

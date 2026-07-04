@@ -50,6 +50,7 @@ from app.schemas import (
     SavedListResponse,
     SourceOut,
     StatsResponse,
+    SurfaceCTR,
     SwipeRequest,
     TopicOut,
     TopicListResponse,
@@ -291,31 +292,18 @@ async def get_feed(
         pub_ts = {a.id: (a.published_at.timestamp() if a.published_at else None) for a in articles}
         present = [t for t in pub_ts.values() if t is not None]
         lo, hi = (min(present), max(present)) if present else (0.0, 0.0)
-        span = (hi - lo) or 1.0
         ratio = app_settings.uer_feed_blend_ratio
-
-        def _cred_mult(a: Article) -> float:
-            # #79: bounded ×[0.9, 1.1] credibility nudge. NULL (news) → neutral → ×1.0. Clamp to
-            # [0,100] so a bad stored score can never break the bound and drown fresher news —
-            # defense at the point of use, independent of the write-side validation.
-            score = a.source.credibility_score if (a.source and a.source.credibility_score is not None) \
-                else app_settings.credibility_rank_neutral
-            score = min(100, max(0, score))
-            return 0.9 + 0.2 * score / 100
-
-        def _specialty_mult(a: Article) -> float:
-            # #94: a bounded lift when the article's source specialty matches the user's own specialty.
-            # No specialty (non-medical / general) → ×1.0, so ordinary feeds are unchanged.
-            if not _user_specialty or not a.source:
-                return 1.0
-            meta = a.source.credibility_meta or {}
-            return app_settings.specialty_rank_boost if meta.get("specialty") == _user_specialty else 1.0
+        from app.services import ranking  # WS-5 (#115): the extracted, parity-tested feed blend
 
         def _blend(a: Article) -> float:
-            t = pub_ts[a.id]
-            recency = 0.0 if t is None else (1.0 if hi == lo else (t - lo) / span)
-            rel = min(1.0, scores.get(art_to_cluster.get(a.id), 0.0))
-            return ((1 - ratio) * recency + ratio * rel) * _cred_mult(a) * _specialty_mult(a)
+            src_specialty = (a.source.credibility_meta or {}).get("specialty") if a.source else None
+            return ranking.blend_score(
+                ranking.recency_norm(pub_ts[a.id], lo, hi),
+                scores.get(art_to_cluster.get(a.id), 0.0),
+                ranking.credibility_mult(a.source.credibility_score if a.source else None),
+                ranking.specialty_mult(src_specialty, _user_specialty),
+                ratio,
+            )
 
         blends = {a.id: _blend(a) for a in articles}
         articles.sort(
@@ -1504,10 +1492,42 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     )
     topics_explored = topics_result.scalar_one() or 0
 
+    # WS-5 (#115): impressions + CTR per surface. Denominator = surface-tagged impressions (WS-1);
+    # numerator = opens (read + interesting) on that surface. RLS-scoped like the counts above.
+    imp_rows = (
+        await db.execute(
+            select(Impression.surface, func.count())
+            .where(Impression.user_id == current_user_id())
+            .group_by(Impression.surface)
+        )
+    ).all()
+    click_rows = (
+        await db.execute(
+            select(UserFeedback.surface, func.count())
+            .where(
+                UserFeedback.user_id == current_user_id(),
+                UserFeedback.surface.isnot(None),
+                UserFeedback.feedback_type.in_([FeedbackType.read, FeedbackType.interesting]),
+            )
+            .group_by(UserFeedback.surface)
+        )
+    ).all()
+    clicks_by = {s: n for s, n in click_rows}
+    surfaces = [
+        SurfaceCTR(
+            surface=s,
+            impressions=n,
+            clicks=clicks_by.get(s, 0),
+            ctr=(clicks_by.get(s, 0) / n) if n else 0.0,
+        )
+        for s, n in sorted(imp_rows)
+    ]
+
     return StatsResponse(
         articles_read=articles_read,
         stories_saved=stories_saved,
         topics_explored=topics_explored,
+        surfaces=surfaces,
     )
 
 
