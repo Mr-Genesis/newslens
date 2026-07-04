@@ -58,3 +58,30 @@ async def test_schedule_summary_gated_off_is_noop(monkeypatch):
     summarizer._scheduled.discard(99)
     assert summarizer.schedule_summary(99) is None
     assert 99 not in summarizer._scheduled
+
+
+@pytest.mark.asyncio
+async def test_schedule_summary_holds_strong_task_ref_until_done(monkeypatch):
+    # Regression (adversarial review): asyncio keeps only a WEAK ref to a bare create_task result, so
+    # the task must be strongly referenced (in _tasks) until it completes — else GC could cancel the
+    # background summary mid-run. The ref is cleared by the done-callback on completion.
+    import asyncio
+
+    from app.services import summarizer
+
+    release = asyncio.Event()
+
+    async def fake_summarize(_cid):
+        await release.wait()
+
+    monkeypatch.setattr(summarizer, "summarize_cluster", fake_summarize)
+    summarizer._scheduled.discard(7)
+
+    t = summarizer.schedule_summary(7)
+    assert t is not None
+    assert t in summarizer._tasks  # strong ref held while the summary is in flight
+
+    release.set()
+    await t
+    assert t not in summarizer._tasks  # done-callback cleaned it up
+    assert 7 not in summarizer._scheduled

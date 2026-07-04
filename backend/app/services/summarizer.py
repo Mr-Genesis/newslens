@@ -161,6 +161,10 @@ async def summarize_cluster(cluster_id: int) -> tuple[str, float] | None:
 # Clusters currently being summarized in the background — dedupes a burst of read requests (or eager
 # creation) so only ONE task per cluster is in flight at a time.
 _scheduled: set[int] = set()
+# Strong references to the in-flight tasks. The event loop keeps only a WEAK reference to a bare
+# create_task result, so without this a background summary could be garbage-collected mid-run
+# (documented CPython footgun) and silently cancelled — defeating the warm-up. Discarded on completion.
+_tasks: "set[asyncio.Task]" = set()
 
 
 def schedule_summary(cluster_id: int) -> "asyncio.Task | None":
@@ -186,11 +190,15 @@ def schedule_summary(cluster_id: int) -> "asyncio.Task | None":
             _scheduled.discard(cluster_id)
 
     try:
-        return asyncio.create_task(_run())
+        task = asyncio.create_task(_run())
     except RuntimeError:
         # No running loop (e.g. invoked from a sync context) — undo the guard so a later call retries.
         _scheduled.discard(cluster_id)
         return None
+    # Hold a strong reference until the task finishes so it can't be GC-cancelled mid-run.
+    _tasks.add(task)
+    task.add_done_callback(_tasks.discard)
+    return task
 
 
 async def backfill_summaries():
