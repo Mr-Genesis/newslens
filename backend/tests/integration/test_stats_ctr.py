@@ -1,5 +1,7 @@
 """WS-5 (#115): /stats gains impressions + CTR per surface (opens = read + interesting over the
-surface-tagged impression log)."""
+surface-tagged impression log). CTR is a bounded lifetime aggregate over DISTINCT stories."""
+from datetime import date, timedelta
+
 import pytest
 
 from app.models import Article, FeedbackType, Impression, Source, SourceType, User, UserFeedback
@@ -51,8 +53,44 @@ async def test_stats_reports_impressions_and_ctr_per_surface(aclient, db_session
 
 
 @pytest.mark.asyncio
+async def test_ctr_stays_bounded_across_multi_day_impressions_and_repeat_feedback(aclient, db_session):
+    """Review regression: distinct-story counting collapses the per-day impression dedup and repeated
+    'interesting' taps, so CTR can't drift below the real rate or exceed 1.0."""
+    await _ensure_user(db_session)
+    a = await _article(db_session)
+    today = date.today()
+    db_session.add(Impression(user_id=1, article_id=a.id, surface="feed", day=today))
+    db_session.add(Impression(user_id=1, article_id=a.id, surface="feed", day=today - timedelta(days=1)))
+    db_session.add(UserFeedback(user_id=1, article_id=a.id, feedback_type=FeedbackType.interesting, surface="feed"))
+    db_session.add(UserFeedback(user_id=1, article_id=a.id, feedback_type=FeedbackType.interesting, surface="feed"))
+    db_session.add(UserFeedback(user_id=1, article_id=a.id, feedback_type=FeedbackType.read, surface="feed"))
+    await db_session.flush()
+
+    feed = next(s for s in (await aclient.get("/stats")).json()["surfaces"] if s["surface"] == "feed")
+    assert feed["impressions"] == 1   # one distinct story, not two day-rows
+    assert feed["clicks"] == 1        # one distinct opened story, not three feedback rows
+    assert feed["ctr"] <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_surface_with_clicks_but_no_impressions_is_visible(aclient, db_session):
+    """Review regression: a surface with opens but no logged impressions (e.g. a rail deep-link) must
+    appear (impressions=0), not silently vanish."""
+    await _ensure_user(db_session)
+    a = await _article(db_session)
+    db_session.add(UserFeedback(user_id=1, article_id=a.id, feedback_type=FeedbackType.read, surface="rail"))
+    await db_session.flush()
+
+    surfaces = {s["surface"]: s for s in (await aclient.get("/stats")).json()["surfaces"]}
+    assert "rail" in surfaces
+    assert surfaces["rail"]["impressions"] == 0
+    assert surfaces["rail"]["clicks"] == 1
+    assert surfaces["rail"]["ctr"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_stats_surfaces_empty_without_impressions(aclient, db_session):
     await _ensure_user(db_session)
     body = (await aclient.get("/stats")).json()
-    assert body["surfaces"] == []  # backward-compatible: no impressions → empty list, scalars intact
+    assert body["surfaces"] == []  # backward-compatible: no impressions/clicks → empty list, scalars intact
     assert "articles_read" in body

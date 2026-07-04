@@ -330,9 +330,9 @@ class SavedListResponse(BaseModel):
 # --- Stats ---
 class SurfaceCTR(BaseModel):
     surface: str
-    impressions: int
-    clicks: int
-    ctr: float  # clicks / impressions (opens = read + interesting), 0.0 when no impressions
+    impressions: int  # DISTINCT stories impressed on this surface (lifetime)
+    clicks: int       # DISTINCT stories opened (read + interesting) on this surface (lifetime)
+    ctr: float        # clicks / impressions, bounded to [0,1]; a lifetime aggregate, not a session rate
 
 
 class StatsResponse(BaseModel):

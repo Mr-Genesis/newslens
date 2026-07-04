@@ -1492,18 +1492,24 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
     )
     topics_explored = topics_result.scalar_one() or 0
 
-    # WS-5 (#115): impressions + CTR per surface. Denominator = surface-tagged impressions (WS-1);
-    # numerator = opens (read + interesting) on that surface. RLS-scoped like the counts above.
+    # WS-5 (#115): impressions + CTR per surface — a bounded LIFETIME aggregate (not a session rate).
+    # Both sides count DISTINCT stories per surface so the ratio can't be distorted by the per-DAY
+    # impression dedup, a lifetime-pinned `read` row, or un-deduped `interesting` taps (review): a
+    # story shown across N days or tapped N times still counts once. clamped to [0,1] as a belt-and-
+    # braces against the cluster/article key mismatch. RLS-scoped like the counts above.
     imp_rows = (
         await db.execute(
-            select(Impression.surface, func.count())
+            select(
+                Impression.surface,
+                func.count(func.distinct(func.coalesce(Impression.cluster_id, Impression.article_id))),
+            )
             .where(Impression.user_id == current_user_id())
             .group_by(Impression.surface)
         )
     ).all()
     click_rows = (
         await db.execute(
-            select(UserFeedback.surface, func.count())
+            select(UserFeedback.surface, func.count(func.distinct(UserFeedback.article_id)))
             .where(
                 UserFeedback.user_id == current_user_id(),
                 UserFeedback.surface.isnot(None),
@@ -1512,15 +1518,18 @@ async def get_stats(db: AsyncSession = Depends(get_db)):
             .group_by(UserFeedback.surface)
         )
     ).all()
+    imp_by = {s: n for s, n in imp_rows}
     clicks_by = {s: n for s, n in click_rows}
+    # UNION of surfaces so a surface with opens but no logged impressions (e.g. a rail deep-link) is
+    # still shown (impressions=0, ctr=0.0) instead of silently dropped.
     surfaces = [
         SurfaceCTR(
             surface=s,
-            impressions=n,
+            impressions=imp_by.get(s, 0),
             clicks=clicks_by.get(s, 0),
-            ctr=(clicks_by.get(s, 0) / n) if n else 0.0,
+            ctr=min(1.0, clicks_by.get(s, 0) / imp_by[s]) if imp_by.get(s) else 0.0,
         )
-        for s, n in sorted(imp_rows)
+        for s in sorted(set(imp_by) | set(clicks_by))
     ]
 
     return StatsResponse(
