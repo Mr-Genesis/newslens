@@ -169,6 +169,9 @@ export interface FeedResponse {
   total: number;
   page: number;
   per_page: number;
+  // WS-3 (#113): the pagination cursor. First response = now(); thread it back on later pages to pin
+  // the pool (fetched_at <= as_of). A stale cursor comes back refreshed so the client can restart.
+  as_of: string;
 }
 
 export interface TopicsResponse {
@@ -197,7 +200,9 @@ export async function getFeed(
   perPage = 20,
   topicId?: number,
   // Phase 2 · #82 — source-type filter: "news" | "research" | "expert" (omit/"all" = every tier).
-  sourceType?: string
+  sourceType?: string,
+  // WS-3 (#113) — pagination cursor. URLSearchParams encodes the "+00:00"/"Z" offset safely.
+  asOf?: string
 ): Promise<FeedResponse> {
   const params = new URLSearchParams({
     page: String(page),
@@ -205,6 +210,7 @@ export async function getFeed(
   });
   if (topicId) params.set("topic", String(topicId));
   if (sourceType && sourceType !== "all") params.set("source_type", sourceType);
+  if (asOf) params.set("as_of", asOf);
   return fetchJSON(`/feed?${params}`);
 }
 

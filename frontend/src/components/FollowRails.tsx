@@ -7,7 +7,7 @@
  * "see all" clears that rail's badge (POST /seen) — scrolling past does NOT. Section hidden when the
  * user follows nothing (the "+" to start lives on /following and here in the header).
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { getFollowRails, markFollowSeen, type FollowRail } from "@/lib/api";
@@ -67,13 +67,25 @@ function RailPanel({ rail, onOpen }: { rail: FollowRail; onOpen: (r: FollowRail,
   );
 }
 
-export function FollowRails() {
+export function FollowRails({
+  onClusterIdsRendered,
+}: {
+  /** WS-3 (#113): report the cluster ids these rails render so the home feed can dedupe them out
+   *  (cross-section precedence hero > rails > categories > feed). */
+  onClusterIdsRendered?: (ids: number[]) => void;
+} = {}) {
   const router = useRouter();
   const [rails, setRails] = useState<FollowRail[] | null>(null);
+  // Ref so the single-fetch mount effect always calls the latest callback without re-fetching.
+  const onIdsRef = useRef(onClusterIdsRendered);
+  onIdsRef.current = onClusterIdsRendered;
 
   useEffect(() => {
     getFollowRails()
-      .then(setRails)
+      .then((rs) => {
+        setRails(rs);
+        onIdsRef.current?.(rs.flatMap((r) => r.stories.map((s) => s.cluster_id)));
+      })
       .catch(() => setRails([])); // a failed rails fetch must never break the briefing
   }, []);
 
