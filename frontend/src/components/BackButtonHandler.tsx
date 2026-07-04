@@ -1,38 +1,67 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { Capacitor } from "@capacitor/core";
 
-/** Bottom-tab roots: hardware back from any of these minimizes the app instead of navigating. */
-const ROOTS = new Set(["/", "/discover", "/search", "/saved", "/following", "/settings"]);
+import { ToastContainer } from "@/components/ui/Toast";
+import { useToast } from "@/hooks/useToast";
+import { isTabRoot } from "@/lib/navRoots";
+
+const EXIT_CONFIRM_MS = 2000;
 
 /**
- * Android hardware back support. A Capacitor WebView receives NO back-button behavior by
- * default — without this listener the system back button does nothing (device-QA #5).
- * In-app history → router.back(); at a tab root (or no history) → minimize, never exit.
+ * WS-4 (#114): Android hardware back-button behavior. A Capacitor WebView gets NO back handling by
+ * default. This is native-only (web keeps stock browser back). Branches:
+ *   (a) a stacked screen with real history (story, settings sub-screen)  → router.back()  (pop)
+ *   (b) a NON-home tab root (Discover/Saved/Search/Following/Profile)     → router.replace("/")  (one hop to Today)
+ *   (c) home (Today), OR any empty-history route (deep link / cold start) → toast "Press back again
+ *       to exit", second press within 2s → App.minimizeApp(). Never App.exitApp().
+ * The listener reads the CURRENT path via a ref, so it registers once (no re-subscribe per nav).
  */
 export function BackButtonHandler() {
   const router = useRouter();
   const pathname = usePathname();
+  const { toasts, addToast, removeToast } = useToast();
+  const pathRef = useRef(pathname);
+  pathRef.current = pathname;
+  const confirmExitRef = useRef(false);
 
   useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
+    if (!Capacitor.isNativePlatform()) return; // web: stock browser back semantics
 
     let remove: (() => void) | undefined;
     import("@capacitor/app").then(({ App }) => {
       App.addListener("backButton", ({ canGoBack }) => {
-        if (!ROOTS.has(pathname) && canGoBack) {
-          router.back();
-        } else {
-          App.minimizeApp(); // keep state; never exitApp()
+        const path = pathRef.current;
+        const root = isTabRoot(path);
+
+        if (!root && canGoBack) {
+          router.back(); // (a) pop a stacked screen
+          return;
         }
+        if (root && path !== "/") {
+          router.replace("/"); // (b) non-home tab root → one hop to Today
+          return;
+        }
+        // (c) home, or empty-history anywhere → confirm-then-minimize (never exit)
+        if (confirmExitRef.current) {
+          confirmExitRef.current = false;
+          void App.minimizeApp(); // keep state; NEVER exitApp()
+          return;
+        }
+        confirmExitRef.current = true;
+        addToast("Press back again to exit", "info");
+        setTimeout(() => {
+          confirmExitRef.current = false;
+        }, EXIT_CONFIRM_MS);
       }).then((sub) => {
         remove = () => sub.remove();
       });
     });
-    return () => remove?.();
-  }, [pathname, router]);
 
-  return null;
+    return () => remove?.();
+  }, [router, addToast]);
+
+  return <ToastContainer toasts={toasts} onRemove={removeToast} />;
 }

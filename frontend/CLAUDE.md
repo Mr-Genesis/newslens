@@ -94,3 +94,19 @@ npm run apk:debug       # Gradle assembleDebug
 ```
 
 **Splash:** `@capacitor/splash-screen` holds the native splash (`launchAutoHide: false`, `#0C0C0E`) and `src/components/SplashScreen.tsx` calls `SplashScreen.hide({ fadeOutDuration: 250 })` on native once the web overlay paints — a controlled native-splash → WebView fade. Native splash images + launcher icon come from the official brand kit. Verify on a physical device after building (no emulator on Windows ARM).
+
+## Back-behavior guideline (WS-4 · #114)
+
+Android hardware back and tab history are handled in exactly two places, **native-only** (gated by `Capacitor.isNativePlatform()` — web keeps stock browser semantics, so the browser back button never exits the site):
+
+- **`src/components/BackButtonHandler.tsx`** (mounted once in `layout.tsx`) owns the hardware back:
+  - **Real history anywhere** (a stacked screen like `/story`, a settings sub-screen) → `router.back()` (pop).
+  - **Non-home tab root** (Discover / Saved / Search / Following / Profile) → `router.replace("/")` — one hop to Today.
+  - **Empty history anywhere** — home (Today), OR a deep-linked / cold-started non-root route with no history → toast **"Press back again to exit"**, second press within 2 s → `App.minimizeApp()`. **Never `App.exitApp()`.**
+- **`src/components/layout/BottomTabBar.tsx`** — tab navigations use `router.replace` on native (tabs never stack history) and `<Link>` push on web.
+
+Rules when adding a route:
+- **Classify every new route.** If it's a bottom-tab destination, add it to `src/lib/navRoots.ts` `TAB_ROOTS` (the shared set both files read — they must not drift). Otherwise it's a stacked screen and just pops.
+- **`ROOTS` matter ONLY for the hop-to-Today / minimize branches.** Any route with real history just pops — you don't need to touch anything.
+- **Stacked navigations use `push`; tab-bar navigations use `replace`.** Don't push a tab (it would stack history and make back walk through tab switches).
+- The shared **`NavBar`** renders a back control (→ `router.back()`) on non-root deep-dive routes; **do not add a "← Back" header to a tab root** — the tab bar is its navigation.

@@ -134,6 +134,13 @@ The Android emulator does not run on Windows ARM, so a built APK must be checked
 **Smoke**
 - [ ] Briefing, Discover, and a Deep Dive load against the configured backend (`build:android` → `http://10.0.2.2:8000`; `build:android:prod` → the deployed backend).
 
+**Hardware back button (WS-4 · #114)** — no emulator on Windows ARM, so verify on the device:
+- [ ] Open a story (Today → tap) then press **hardware back** → returns to the previous screen (pop), not the launcher.
+- [ ] Switch to a non-home tab (Discover / Saved / Search / Profile), press **back** → lands on **Today** in one hop (not walking back through prior tab switches).
+- [ ] Switch tabs a few times, then press **back** repeatedly → each press goes to Today / exits cleanly, never replaying the tab-switch history.
+- [ ] On **Today**, press **back** → a toast **"Press back again to exit"** appears; a second back within 2 s **minimizes** the app (Today reappears on relaunch with state intact); the app is **never killed/exited**.
+- [ ] Cold-start a deep link / notification into a story, press **back** with no history → same toast + double-press-to-minimize (does not blank or crash).
+
 ## Code Style
 
 - **Python:** Enforced by `ruff` — run `cd backend && ruff check .`
