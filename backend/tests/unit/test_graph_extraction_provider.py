@@ -13,7 +13,7 @@ class _Cluster:
 
 @pytest.mark.asyncio
 async def test_extraction_uses_active_provider_model_not_hardcoded_gpt(monkeypatch):
-    async def _active():
+    async def _active(user_id=None):
         return ("anthropic", {})
     monkeypatch.setattr(llm, "_active_settings", _active)
     monkeypatch.setattr(llm.settings, "anthropic_model", "claude-haiku-4-5")

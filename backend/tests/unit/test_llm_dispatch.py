@@ -5,7 +5,7 @@ from app.services import llm
 
 
 def _patch_active(monkeypatch, provider, prefs):
-    async def _fake():
+    async def _fake(user_id=None):
         return (provider, prefs)
     monkeypatch.setattr(llm, "_active_settings", _fake)
 

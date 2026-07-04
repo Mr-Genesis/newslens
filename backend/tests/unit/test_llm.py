@@ -34,7 +34,7 @@ class TestGenerateRouting:
         # directly (no cache, no DB) — active-settings resolution is covered by its own tests.
         from app.config import settings as _s
 
-        async def _fake():
+        async def _fake(user_id=None):
             return ((_s.generation_provider or "openai").lower(), {})
 
         monkeypatch.setattr(llm, "_active_settings", _fake)
@@ -78,7 +78,7 @@ class TestGenerateRouting:
         monkeypatch.setattr(settings, "openai_api_key", "")
         import app.services.embeddings as emb
 
-        async def none_client():
+        async def none_client(user_id=None):
             return None
 
         monkeypatch.setattr(emb, "_get_client_async", none_client)
@@ -122,7 +122,7 @@ async def test_generate_no_key_returns_unavailable(monkeypatch):
     monkeypatch.setattr(settings, "generation_provider", "gemini")
     monkeypatch.setattr(settings, "gemini_api_key", "")
 
-    async def no_gem_key():
+    async def no_gem_key(user_id=None):
         return None
 
     monkeypatch.setattr(llm, "_resolve_gemini_key", no_gem_key)
@@ -148,15 +148,15 @@ async def test_gemini_key_cache_slot_separate_from_openai(monkeypatch):
     # OpenAI key set to a different value to prove the slots don't cross-contaminate.
     monkeypatch.setattr(settings, "openai_api_key", "sk-openai-key")
 
-    # Reset the Gemini cache slot so the fallback path runs deterministically.
-    monkeypatch.setattr(llm, "_gem_key_cache", None)
-    monkeypatch.setattr(llm, "_gem_key_ts", 0.0)
+    # Reset the Gemini cache (WS-6: now a per-user dict) so the fallback path runs deterministically.
+    llm._gem_key_cache.clear()
 
+    from app.services.auth import current_user_id
     key = await llm._resolve_gemini_key()
     assert key == "gem-env-key"
-    # The dedicated Gemini cache slot now holds the Gemini key, not the OpenAI one.
-    assert llm._gem_key_cache == "gem-env-key"
-    assert llm._gem_key_cache != settings.openai_api_key
+    # The dedicated Gemini cache holds the Gemini key for the default user, not the OpenAI one.
+    assert llm._gem_key_cache[current_user_id()][0] == "gem-env-key"
+    assert llm._gem_key_cache[current_user_id()][0] != settings.openai_api_key
 
 
 @pytest.mark.asyncio

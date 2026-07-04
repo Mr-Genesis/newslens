@@ -19,47 +19,55 @@ from app.models import Article, EmbeddingStatus
 logger = structlog.get_logger()
 
 
-_cached_user_key: str | None = None
-_cached_user_key_ts: float = 0
-_USER_KEY_TTL = 300  # 5 minutes cache
+# WS-6 (#116): per-user cache {user_id: (key|None, ts)} — was a single global slot that returned
+# user #1's key to every caller. TTL 60s so a freshly-saved key takes effect within a minute.
+_user_key_cache: dict[int, tuple[str | None, float]] = {}
+_USER_KEY_TTL = 60
 
 
-async def _get_user_api_key() -> str | None:
-    """Check DB for per-user OpenAI key. Cached for 5 minutes."""
+def invalidate_user(user_id: int) -> None:
+    """Drop a user's cached OpenAI key so a just-saved key takes effect at once (with the 60s TTL)."""
+    _user_key_cache.pop(user_id, None)
+
+
+async def _get_user_api_key(user_id: int | None = None) -> str | None:
+    """The per-user OpenAI key (verified), cached 60s. Resolves for the CURRENT request's user
+    (current_user_id() — an async-task-local set by get_current_user) unless an explicit user_id is
+    passed. Multi-user correct: user #2's request no longer resolves user #1's key."""
     import time
 
-    global _cached_user_key, _cached_user_key_ts
+    from app.services.auth import current_user_id
 
+    uid = user_id if user_id is not None else current_user_id()
     now = time.time()
-    if _cached_user_key is not None and (now - _cached_user_key_ts) < _USER_KEY_TTL:
-        return _cached_user_key
+    hit = _user_key_cache.get(uid)
+    if hit is not None and (now - hit[1]) < _USER_KEY_TTL:
+        return hit[0]
 
+    key: str | None = None
     try:
         from sqlalchemy import select as sa_select
         from app.models import UserSetting
 
         async with async_session() as session:
-            result = await session.execute(
-                sa_select(UserSetting).where(
-                    UserSetting.user_id == 1,
-                    UserSetting.openai_api_key_encrypted.isnot(None),
-                    UserSetting.openai_key_verified.is_(True),
+            setting = (
+                await session.execute(
+                    sa_select(UserSetting).where(
+                        UserSetting.user_id == uid,
+                        UserSetting.openai_api_key_encrypted.isnot(None),
+                        UserSetting.openai_key_verified.is_(True),
+                    )
                 )
-            )
-            setting = result.scalar_one_or_none()
-
+            ).scalar_one_or_none()
             if setting and setting.openai_api_key_encrypted:
                 from app.services.encryption import decrypt_value
 
-                _cached_user_key = decrypt_value(setting.openai_api_key_encrypted)
-                _cached_user_key_ts = now
-                return _cached_user_key
+                key = decrypt_value(setting.openai_api_key_encrypted)
     except Exception as e:
         logger.debug("user_key_lookup_failed", error=str(e))
 
-    _cached_user_key = None
-    _cached_user_key_ts = now
-    return None
+    _user_key_cache[uid] = (key, now)
+    return key
 
 
 def _get_client() -> AsyncOpenAI | None:
@@ -76,9 +84,9 @@ def _get_client_platform() -> AsyncOpenAI | None:
     return _get_client()
 
 
-async def _get_client_async() -> AsyncOpenAI | None:
-    """Get OpenAI client: per-user DB key first, env var fallback."""
-    user_key = await _get_user_api_key()
+async def _get_client_async(user_id: int | None = None) -> AsyncOpenAI | None:
+    """Get OpenAI client: per-user DB key first (current request's user), env var fallback."""
+    user_key = await _get_user_api_key(user_id)
     if user_key:
         return AsyncOpenAI(api_key=user_key)
     if settings.openai_api_key:
@@ -86,12 +94,12 @@ async def _get_client_async() -> AsyncOpenAI | None:
     return None
 
 
-async def _resolve_embedding_key() -> str | None:
+async def _resolve_embedding_key(user_id: int | None = None) -> str | None:
     """Gemini key for embeddings: the owner's verified per-user key, else the platform env key.
     Reuses the generation-side resolver (lazy import avoids a circular import with llm)."""
     from app.services.llm import _resolve_gemini_key
 
-    return await _resolve_gemini_key()
+    return await _resolve_gemini_key(user_id)
 
 
 def vector_literal(embedding) -> str:
