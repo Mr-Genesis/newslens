@@ -5,17 +5,12 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { cn } from "@/lib/utils";
-import {
-  getProfile,
-  updateProfile,
-  setGeminiKey,
-  testGeminiKey,
-} from "@/lib/api";
+import { getProfile, updateProfile } from "@/lib/api";
 
 const LOCALES = ["IN", "US", "GB", "global"];
 
-/** v2 Profile additions: Profession + Locale (drives the impact lens) and the
- *  Gemini API key. Self-contained — manages its own fetch/save. */
+/** v2 Profile additions: Profession + Locale (drives the impact lens) + Depth. Self-contained.
+ *  (WS-6: the Gemini key moved into the unified ModelProviderCard.) */
 export function ProfileFields() {
   const [profession, setProfession] = useState("");
   const [locale, setLocale] = useState("IN");
@@ -23,10 +18,6 @@ export function ProfileFields() {
   const [loaded, setLoaded] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileSaved, setProfileSaved] = useState(false);
-
-  const [geminiKey, setGeminiKeyInput] = useState("");
-  const [savingKey, setSavingKey] = useState(false);
-  const [keyMsg, setKeyMsg] = useState<string | null>(null);
 
   useEffect(() => {
     getProfile()
@@ -53,25 +44,7 @@ export function ProfileFields() {
     }
   }
 
-  async function saveGemini() {
-    if (!geminiKey.trim()) return;
-    setSavingKey(true);
-    setKeyMsg(null);
-    try {
-      await setGeminiKey(geminiKey.trim());
-      const res = await testGeminiKey();
-      setKeyMsg(res.success ? "Gemini key verified" : res.error || "Couldn't verify key");
-      if (res.success) setGeminiKeyInput("");
-    } catch {
-      setKeyMsg("Couldn't save the key");
-    } finally {
-      setSavingKey(false);
-    }
-  }
-
   return (
-    <>
-      {/* PROFILE */}
       <Card variant="raised">
         <div className="p-3.5">
           <h2 className="text-category text-[var(--text-muted)] mb-3">PROFILE</h2>
@@ -143,37 +116,5 @@ export function ProfileFields() {
           </Button>
         </div>
       </Card>
-
-      {/* GEMINI KEY */}
-      <Card variant="raised">
-        <div className="p-3.5">
-          <h2 className="text-category text-[var(--text-muted)] mb-1">
-            Gemini API key
-          </h2>
-          <p className="text-mono text-[var(--text-ghost)] mb-3">
-            Optional second AI provider for summaries and analysis.
-          </p>
-          <Input
-            type="password"
-            value={geminiKey}
-            onChange={(e) => setGeminiKeyInput(e.target.value)}
-            placeholder="AIza…"
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={saveGemini}
-            loading={savingKey}
-            disabled={!geminiKey.trim()}
-            className="mt-3"
-          >
-            Save &amp; verify
-          </Button>
-          {keyMsg && (
-            <p className="text-mono text-[var(--text-muted)] mt-2">{keyMsg}</p>
-          )}
-        </div>
-      </Card>
-    </>
   );
 }

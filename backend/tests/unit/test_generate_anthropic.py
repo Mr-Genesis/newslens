@@ -60,7 +60,7 @@ async def test_text_path_joins_blocks_and_top_level_system(monkeypatch):
 async def test_no_key_raises(monkeypatch):
     monkeypatch.setattr(llm.settings, "anthropic_api_key", "")
 
-    async def _no_key():
+    async def _no_key(user_id=None):
         return None
 
     monkeypatch.setattr(llm, "_resolve_anthropic_key", _no_key)

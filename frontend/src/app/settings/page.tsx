@@ -13,14 +13,9 @@ import { ProfileFields } from "@/components/ProfileFields";
 import { ModelProviderCard } from "@/components/ModelProviderCard";
 import { AccountCard } from "@/components/AccountCard";
 import {
-  getSettings,
   getStats,
   getTopics,
-  updateSettings,
   updateProfile,
-  testApiKey,
-  type UserSettings,
-  type KeyTestResult,
   type StatsResponse,
   type Topic,
 } from "@/lib/api";
@@ -59,11 +54,6 @@ const fadeUp = {
 
 export default function ProfilePage() {
   const [state, setState] = useState<PageState>("loading");
-  const [settings, setSettings] = useState<UserSettings | null>(null);
-  const [keyInput, setKeyInput] = useState("");
-  const [showKey, setShowKey] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<KeyTestResult | null>(null);
 
   // Local preferences (persisted to localStorage)
   const [selectedTopics, setSelectedTopics] = useState<Set<string>>(() => {
@@ -82,17 +72,14 @@ export default function ProfilePage() {
   const fetchSettings = useCallback(async () => {
     try {
       setState("loading");
-      const [settingsData, statsData, topicsData] = await Promise.all([
-        getSettings(),
+      const [statsData, topicsData] = await Promise.all([
         getStats().catch(() => null),
         getTopics().catch(() => null),
       ]);
-      setSettings(settingsData);
       if (statsData) setStats(statsData);
       if (topicsData) setTopics(topicsData.your_topics);
       setState("idle");
     } catch {
-      setError("Failed to load settings");
       setState("idle");
     }
   }, []);
@@ -120,65 +107,12 @@ export default function ProfilePage() {
     });
   };
 
-  const handleSave = async () => {
-    if (!keyInput.trim()) return;
-    try {
-      setState("saving");
-      setError(null);
-      setTestResult(null);
-      const data = await updateSettings({ openai_api_key: keyInput.trim() });
-      setSettings(data);
-      setKeyInput("");
-      setShowKey(false);
-      setState("idle");
-    } catch {
-      setError("Failed to save API key");
-      setState("editing");
-    }
-  };
-
-  const handleRemove = async () => {
-    try {
-      setState("saving");
-      setError(null);
-      setTestResult(null);
-      const data = await updateSettings({ openai_api_key: null });
-      setSettings(data);
-      setKeyInput("");
-      setState("idle");
-    } catch {
-      setError("Failed to remove API key");
-      setState("idle");
-    }
-  };
-
-  const handleTest = async () => {
-    try {
-      setState("testing");
-      setError(null);
-      const result = await testApiKey();
-      setTestResult(result);
-      const data = await getSettings();
-      setSettings(data);
-      setState("idle");
-    } catch {
-      setTestResult({
-        success: false,
-        error: "Connection failed",
-        models_available: 0,
-      });
-      setState("idle");
-    }
-  };
-
   const handleClearHistory = () => {
     localStorage.removeItem("newslens-topics");
     localStorage.removeItem("newslens-theme");
     setSelectedTopics(new Set(defaultTopics));
     setTheme("dark");
   };
-
-  const isEditing = state === "editing" || keyInput.length > 0;
 
   return (
     <div className="mx-auto max-w-[640px] w-full px-[var(--space-md)]">
@@ -363,198 +297,6 @@ export default function ProfilePage() {
             <ModelProviderCard />
           </motion.div>
 
-          {/* AI Configuration (OpenAI key) */}
-          <motion.div variants={fadeUp} className="mb-4">
-            <Card variant="raised">
-              <div className="p-3.5">
-                <div className="flex items-center gap-2 mb-1">
-                  <h2 className="text-heading text-[var(--text-primary)]">
-                    AI Configuration
-                  </h2>
-                  {settings?.has_openai_key && settings.openai_key_verified && (
-                    <Badge variant="free" size="sm">
-                      Active
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-mono text-[var(--text-ghost)] mb-4">
-                  Powers AI summaries and related-story matching
-                </p>
-
-                {/* Current key display */}
-                {settings?.has_openai_key && !isEditing && (
-                  <div>
-                    <div className="flex items-center gap-2 py-2.5 px-3 rounded-[var(--radius-sm)] bg-[var(--surface)]">
-                      <span className="text-small text-[var(--text-muted)] tracking-wider flex-1">
-                        {"••••••••••••" +
-                          (settings.openai_key_last4 || "****")}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setState("editing")}
-                      >
-                        Change
-                      </Button>
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        onClick={handleRemove}
-                        loading={state === "saving"}
-                      >
-                        Remove
-                      </Button>
-                    </div>
-
-                    {/* Test connection */}
-                    <div className="mt-3">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        fullWidth
-                        onClick={handleTest}
-                        loading={state === "testing"}
-                      >
-                        Test Connection
-                      </Button>
-                    </div>
-
-                    {/* Status */}
-                    <div className="mt-3 flex items-center gap-2">
-                      {testResult ? (
-                        testResult.success ? (
-                          <>
-                            <span className="w-2 h-2 rounded-full bg-[var(--agree)]" />
-                            <span className="text-mono text-[var(--agree)]">
-                              Connected
-                            </span>
-                            <span className="text-mono text-[var(--text-ghost)]">
-                              &middot; {testResult.models_available} models
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <span className="w-2 h-2 rounded-full bg-[var(--dismiss)]" />
-                            <span className="text-mono text-[var(--dismiss)]">
-                              {testResult.error || "Test failed"}
-                            </span>
-                          </>
-                        )
-                      ) : settings.openai_key_verified ? (
-                        <>
-                          <span className="w-2 h-2 rounded-full bg-[var(--agree)]" />
-                          <span className="text-mono text-[var(--agree)]">
-                            Verified
-                          </span>
-                          {settings.openai_key_verified_at && (
-                            <span className="text-mono text-[var(--text-ghost)]">
-                              &middot;{" "}
-                              {relativeTime(settings.openai_key_verified_at)}
-                            </span>
-                          )}
-                        </>
-                      ) : (
-                        <>
-                          <span className="w-2 h-2 rounded-full bg-[var(--text-ghost)]" />
-                          <span className="text-mono text-[var(--text-ghost)]">
-                            Not tested
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Input field */}
-                {(!settings?.has_openai_key || isEditing) && (
-                  <div>
-                    <Input
-                      type={showKey ? "text" : "password"}
-                      value={keyInput}
-                      onChange={(e) => {
-                        setKeyInput(e.target.value);
-                        if (state !== "editing") setState("editing");
-                      }}
-                      placeholder="sk-..."
-                      rightAction={
-                        <button
-                          type="button"
-                          onClick={() => setShowKey(!showKey)}
-                          className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
-                          aria-label={showKey ? "Hide key" : "Show key"}
-                        >
-                          {showKey ? (
-                            <svg
-                              width="18"
-                              height="18"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-                              <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-                              <line x1="1" y1="1" x2="23" y2="23" />
-                            </svg>
-                          ) : (
-                            <svg
-                              width="18"
-                              height="18"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-                              <circle cx="12" cy="12" r="3" />
-                            </svg>
-                          )}
-                        </button>
-                      }
-                    />
-                    <div className="flex gap-2 mt-3">
-                      <Button
-                        variant="primary"
-                        size="md"
-                        fullWidth
-                        onClick={handleSave}
-                        loading={state === "saving"}
-                      >
-                        Save Key
-                      </Button>
-                      {settings?.has_openai_key && (
-                        <Button
-                          variant="ghost"
-                          size="md"
-                          onClick={() => {
-                            setKeyInput("");
-                            setState("idle");
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* Error */}
-                {error && (
-                  <div className="mt-3 p-3 rounded-[var(--radius-sm)] bg-[var(--dismiss-muted)]">
-                    <p className="text-mono text-[var(--dismiss)]">{error}</p>
-                  </div>
-                )}
-
-                <p className="mt-4 text-mono text-[var(--text-ghost)]">
-                  Your key is encrypted and stored securely.
-                </p>
-              </div>
-            </Card>
-          </motion.div>
 
           {/* Data & Privacy */}
           <motion.div variants={fadeUp} className="mb-4">

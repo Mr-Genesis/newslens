@@ -1341,6 +1341,7 @@ async def update_settings(
 
     await db.commit()
     await db.refresh(setting)
+    _invalidate_llm_caches(current_user_id())  # WS-6: provider/model/key change live at once
     return _settings_out(setting)
 
 
@@ -1370,6 +1371,7 @@ async def test_api_key(db: AsyncSession = Depends(get_db)):
         setting.openai_key_verified = True
         setting.openai_key_verified_at = datetime.now(timezone.utc)
         await db.commit()
+        _invalidate_llm_caches(current_user_id())  # WS-6: verified→live now (not after ≤60s TTL)
 
         logger.info("settings_key_test_success", models=model_count)
         return KeyTestResult(success=True, models_available=model_count)
@@ -1650,6 +1652,14 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
 
 
 # ── E1: per-user Gemini key ──
+def _invalidate_llm_caches(uid: int) -> None:
+    """WS-6 (#116): drop this user's cached key/provider so a settings write takes effect at once."""
+    from app.services import embeddings as _emb
+    from app.services import llm as _llm
+    _llm.invalidate_user(uid)
+    _emb.invalidate_user(uid)
+
+
 @router.put("/settings/gemini-key", dependencies=[Depends(get_current_user)])
 async def set_gemini_key(body: GeminiKeyUpdate, db: AsyncSession = Depends(get_db)):
     from app.services.encryption import encrypt_value
@@ -1676,6 +1686,7 @@ async def set_gemini_key(body: GeminiKeyUpdate, db: AsyncSession = Depends(get_d
         setting.gemini_api_key_encrypted = None
         setting.gemini_key_verified = False
     await db.commit()
+    _invalidate_llm_caches(current_user_id())  # WS-6: saved key live at once (with the 60s TTL)
     return {"has_gemini_key": bool(setting.gemini_api_key_encrypted)}
 
 
@@ -1697,6 +1708,7 @@ async def test_gemini_key(db: AsyncSession = Depends(get_db)):
         setting.gemini_key_verified = True
         setting.gemini_key_verified_at = datetime.now(timezone.utc)
         await db.commit()
+        _invalidate_llm_caches(current_user_id())  # WS-6: verified→live now
         return KeyTestResult(success=True, models_available=len(models))
     except Exception as e:  # noqa: BLE001
         return KeyTestResult(success=False, error=str(e)[:200])
@@ -1726,6 +1738,7 @@ async def set_anthropic_key(body: AnthropicKeyUpdate, db: AsyncSession = Depends
         setting.anthropic_api_key_encrypted = None
         setting.anthropic_key_verified = False
     await db.commit()
+    _invalidate_llm_caches(current_user_id())  # WS-6
     return {"has_anthropic_key": bool(setting.anthropic_api_key_encrypted)}
 
 
@@ -1751,6 +1764,7 @@ async def test_anthropic_key(db: AsyncSession = Depends(get_db)):
         setting.anthropic_key_verified = True
         setting.anthropic_key_verified_at = datetime.now(timezone.utc)
         await db.commit()
+        _invalidate_llm_caches(current_user_id())  # WS-6: verified→live now
         return KeyTestResult(success=True, models_available=1)
     except Exception as e:  # noqa: BLE001
         # REDACT: Anthropic exception text can echo the key / request metadata — never return str(e).
