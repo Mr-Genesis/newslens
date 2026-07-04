@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     # its org entity, and the feed shows it only to a user whose OWN watchlist/follows resolve to that
     # entity. Off ⇒ those sources ingest nothing AND the read-path widening is skipped (byte-identical).
     exchange_filings_enabled: bool = True
+    # WS-1 (#111) — impression/dwell logging (the rec engine's perishable signal) + negative UER.
+    # impressions record what a user SAW per surface (deduped daily, capped); `less` feedback now
+    # DEMOTES the article's entities (negative bump, clamped at -1, decay clock not refreshed).
+    impressions_enabled: bool = True
+    impression_daily_cap: int = 500     # rows/user/day — server drops (and logs) beyond
+    uer_less_weight: float = -0.5       # negative bump per 'less' on each of the article's entities
 
     # DB SSL: verified by default for cloud (Neon/Supabase). Opt out only if a cert
     # chain genuinely can't be verified in your environment.

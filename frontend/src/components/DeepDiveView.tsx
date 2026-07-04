@@ -21,6 +21,7 @@ import {
   getCluster,
   getClusterImpact,
   isStoryImpact,
+  postDwell,
   postFeedback,
   type ClusterDetail,
   type ImpactResult,
@@ -72,6 +73,32 @@ export default function DeepDiveView({
       .catch(() => alive && setImpact({ unavailable: true }));
     return () => {
       alive = false;
+    };
+  }, [clusterId]);
+
+  // WS-1 (#111) dwell: time-on-story, sent on close/hide against the auto-read row (server keeps
+  // the GREATEST). Surface = where the story was opened from (set by the tapping card wrapper).
+  useEffect(() => {
+    if (!clusterId || isNaN(clusterId)) return;
+    const openedAt = Date.now();
+    const surfaces = ["briefing", "feed", "rail", "discover", "search"] as const;
+    const raw = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("nl_surface") : null;
+    const surface = (surfaces as readonly string[]).includes(raw ?? "")
+      ? (raw as (typeof surfaces)[number])
+      : "feed";
+    const send = () => {
+      const elapsed = Date.now() - openedAt;
+      if (elapsed >= 1000) void postDwell(clusterId, elapsed, surface).catch(() => {});
+    };
+    const onHide = () => {
+      if (document.visibilityState === "hidden") send();
+    };
+    window.addEventListener("pagehide", send);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      window.removeEventListener("pagehide", send);
+      document.removeEventListener("visibilitychange", onHide);
+      send(); // navigating away in-app
     };
   }, [clusterId]);
 

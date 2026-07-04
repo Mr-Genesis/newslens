@@ -13,6 +13,7 @@ import { DailyTriviaCard } from "@/components/ui/DailyTriviaCard";
 import { PersonalizeBanner } from "@/components/ui/PersonalizeBanner";
 import { WhileAwayCard } from "@/components/ui/WhileAwayCard";
 import { LaunchScreen } from "@/components/LaunchScreen";
+import { useImpressions } from "@/hooks/useImpressions";
 import { AnimatedMark } from "@/components/SplashScreen";
 import { getBriefing, getTopics, type Briefing, type BriefingStory, type Topic } from "@/lib/api";
 import { isStale } from "@/lib/utils";
@@ -49,6 +50,8 @@ export default function BriefingPage() {
   const [rechecking, setRechecking] = useState(false);
   const [userTopics, setUserTopics] = useState<Topic[]>([]);
   const router = useRouter();
+  // WS-1: log which briefing stories were actually SEEN (>=50% for >=1s); tag taps with the surface.
+  const { observe } = useImpressions("briefing");
 
   // The user's topics (with real article counts) — chips shouldn't be limited to whatever
   // categories happen to appear in today's 8 briefing stories.
@@ -288,7 +291,14 @@ export default function BriefingPage() {
               <h2 className="text-category text-[var(--text-muted)] mb-2">
                 TOP STORY
               </h2>
-              <HeroStoryCard story={heroStory} />
+              <div
+                ref={observe}
+                data-impression-cluster={heroStory.cluster_id ?? undefined}
+                data-impression-article={heroStory.cluster_id ? undefined : heroStory.article_id ?? undefined}
+                onClickCapture={() => sessionStorage.setItem("nl_surface", "briefing")}
+              >
+                <HeroStoryCard story={heroStory} />
+              </div>
             </div>
           )}
 
@@ -309,12 +319,28 @@ export default function BriefingPage() {
                     {category}
                   </h2>
                   {stories.map((story, i) => (
-                    <StoryCard key={story.cluster_id ?? `${category}-${i}`} story={story} />
+                    <div
+                      key={story.cluster_id ?? `${category}-${i}`}
+                      ref={observe}
+                      data-impression-cluster={story.cluster_id ?? undefined}
+                      data-impression-article={story.cluster_id ? undefined : story.article_id ?? undefined}
+                      onClickCapture={() => sessionStorage.setItem("nl_surface", "briefing")}
+                    >
+                      <StoryCard story={story} />
+                    </div>
                   ))}
                 </section>
               ))
             : remainingStories.map((story, i) => (
-                <StoryCard key={story.cluster_id ?? `story-${i}`} story={story} />
+                <div
+                  key={story.cluster_id ?? `story-${i}`}
+                  ref={observe}
+                  data-impression-cluster={story.cluster_id ?? undefined}
+                  data-impression-article={story.cluster_id ? undefined : story.article_id ?? undefined}
+                  onClickCapture={() => sessionStorage.setItem("nl_surface", "briefing")}
+                >
+                  <StoryCard story={story} />
+                </div>
               ))}
 
           {/* Refresh */}

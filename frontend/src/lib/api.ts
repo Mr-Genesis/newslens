@@ -246,6 +246,40 @@ export async function postFeedback(
   });
 }
 
+/* ── WS-1 (#111): impressions + dwell ── */
+
+export type ImpressionItem = {
+  cluster_id?: number | null;
+  article_id?: number | null;
+  surface: "briefing" | "feed" | "rail" | "discover" | "search";
+};
+
+/** Batched, fire-and-forget: what the user SAW. Server dedupes per day + caps volume. */
+export async function postImpressions(items: ImpressionItem[]): Promise<void> {
+  if (!items.length) return;
+  await fetchJSON("/impressions", { method: "POST", body: JSON.stringify({ items }) });
+}
+
+/** Dwell: recorded on story close against the cluster's auto-read row (server-side GREATEST). */
+export async function postDwell(
+  clusterId: number,
+  durationMs: number,
+  surface: ImpressionItem["surface"]
+): Promise<void> {
+  await fetchJSON("/feedback", {
+    method: "POST",
+    body: JSON.stringify({
+      // article_id is schema-required but ignored for the dwell target (server resolves the
+      // cluster's canonical read row); pass the cluster id to satisfy the field.
+      article_id: clusterId,
+      feedback_type: "read",
+      cluster_id: clusterId,
+      duration_ms: Math.max(0, Math.round(durationMs)),
+      surface,
+    }),
+  });
+}
+
 /* ── Settings ── */
 
 export interface UserSettings {

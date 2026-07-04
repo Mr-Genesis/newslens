@@ -13,6 +13,7 @@ from app.models import (
     ClusterArticle,
     FeedbackType,
     Follow,
+    Impression,
     Source,
     SourceType,
     StoryCluster,
@@ -36,6 +37,7 @@ from app.schemas import (
     DiscoverCardOut,
     FeedbackCreate,
     FeedbackOut,
+    ImpressionsBatch,
     FeedResponse,
     AnthropicKeyUpdate,
     GeminiKeyUpdate,
@@ -562,10 +564,53 @@ async def create_feedback(
     body: FeedbackCreate,
     db: AsyncSession = Depends(get_db),
 ):
+    # WS-1 dwell: read + cluster_id upserts duration onto the EXISTING auto-read row instead of
+    # creating a new one. Target = the cluster's min article id (deterministic — the cluster open
+    # marks ALL its articles read, so "the" read row needs one canonical choice; the synthetic
+    # fallback path, where cluster_id IS an article id, resolves the same way).
+    if body.feedback_type == FeedbackType.read and body.cluster_id is not None:
+        target = (
+            await db.execute(
+                select(func.min(ClusterArticle.article_id)).where(
+                    ClusterArticle.cluster_id == body.cluster_id
+                )
+            )
+        ).scalar_one_or_none()
+        if target is None:
+            # briefing fallback: the "cluster" was a bare article id
+            target = (
+                await db.execute(select(Article.id).where(Article.id == body.cluster_id))
+            ).scalar_one_or_none()
+        if target is not None:
+            row = (
+                await db.execute(
+                    select(UserFeedback).where(
+                        UserFeedback.user_id == current_user_id(),
+                        UserFeedback.article_id == target,
+                        UserFeedback.feedback_type == FeedbackType.read,
+                    )
+                )
+            ).scalars().first()
+            if row is None:
+                row = UserFeedback(user_id=current_user_id(), article_id=target,
+                                   feedback_type=FeedbackType.read)
+                db.add(row)
+            if body.duration_ms is not None:
+                row.duration_ms = max(row.duration_ms or 0, body.duration_ms)  # GREATEST
+            if body.surface:
+                row.surface = body.surface
+            await db.commit()
+            await db.refresh(row)
+            logger.info("dwell_recorded", cluster_id=body.cluster_id,
+                        duration_ms=row.duration_ms, surface=row.surface)
+            return FeedbackOut.model_validate(row)
+        # unresolvable target → fall through to the plain create below
+
     feedback = UserFeedback(
         user_id=current_user_id(),
         article_id=body.article_id,
         feedback_type=body.feedback_type,
+        surface=body.surface,
     )
     db.add(feedback)
     await db.commit()
@@ -577,18 +622,79 @@ async def create_feedback(
         feedback_type=body.feedback_type.value,
     )
 
-    # G2: positive feedback seeds per-user relevance for the article's entities (decay at read time).
-    if body.feedback_type != FeedbackType.less:
-        from app.config import settings
-        from app.services import entities
+    from app.config import settings
+    from app.services import entities
 
-        n = await entities.bump_relevance_for_article(
-            db, current_user_id(), body.article_id, source="feedback", weight=settings.uer_follow_weight
-        )
-        if n:
-            await db.commit()
+    # G2: positive feedback seeds per-user relevance for the article's entities (decay at read
+    # time). WS-1: 'less' now writes a NEGATIVE bump — dislike demotes the story's entities.
+    weight = settings.uer_less_weight if body.feedback_type == FeedbackType.less \
+        else settings.uer_follow_weight
+    n = await entities.bump_relevance_for_article(
+        db, current_user_id(), body.article_id, source="feedback", weight=weight
+    )
+    if n:
+        await db.commit()
 
     return FeedbackOut.model_validate(feedback)
+
+
+@router.post("/impressions", status_code=202, dependencies=[Depends(get_current_user)])
+async def record_impressions(body: ImpressionsBatch, db: AsyncSession = Depends(get_db)):
+    """WS-1 (#111): batched impression logging — what the user SAW per surface. Deduped per
+    (user, story, surface, day) via the COALESCE expression index (ON CONFLICT DO NOTHING);
+    capped per day (drop + log beyond); unknown story ids dropped (a stale client buffer must
+    not 500 the whole batch). Fire-and-forget contract: always 202 with counts."""
+    from app.config import settings as app_settings
+
+    if not app_settings.impressions_enabled or not body.items:
+        return {"accepted": 0, "dropped": len(body.items)}
+
+    uid = current_user_id()
+    today_count = (
+        await db.execute(
+            select(func.count()).select_from(Impression).where(
+                Impression.user_id == uid, Impression.day == func.current_date()
+            )
+        )
+    ).scalar_one()
+    budget = max(0, app_settings.impression_daily_cap - today_count)
+
+    # Pre-validate targets in bulk — a deleted article/cluster in a stale buffer must not blow the
+    # batch on FK violation (which would poison the transaction mid-flush).
+    cluster_ids = {i.cluster_id for i in body.items if i.cluster_id is not None}
+    article_ids = {i.article_id for i in body.items if i.article_id is not None}
+    ok_clusters = set(
+        (await db.execute(select(StoryCluster.id).where(StoryCluster.id.in_(cluster_ids)))).scalars()
+    ) if cluster_ids else set()
+    ok_articles = set(
+        (await db.execute(select(Article.id).where(Article.id.in_(article_ids)))).scalars()
+    ) if article_ids else set()
+
+    accepted = 0
+    dropped = 0
+    for item in body.items:
+        if accepted >= budget:
+            dropped += 1
+            continue
+        cid = item.cluster_id if item.cluster_id in ok_clusters else None
+        aid = item.article_id if item.article_id in ok_articles else None
+        if cid is None and aid is None:
+            dropped += 1
+            continue
+        result = await db.execute(
+            text(
+                "INSERT INTO impressions (user_id, cluster_id, article_id, surface, day) "
+                "VALUES (:u, :c, :a, :s, CURRENT_DATE) "
+                "ON CONFLICT (user_id, COALESCE(cluster_id, 0), COALESCE(article_id, 0), surface, day) "
+                "DO NOTHING"
+            ),
+            {"u": uid, "c": cid, "a": aid, "s": item.surface},
+        )
+        accepted += result.rowcount or 0
+    await db.commit()
+    if dropped:
+        logger.info("impressions_dropped", user_id=uid, dropped=dropped, accepted=accepted)
+    return {"accepted": accepted, "dropped": dropped}
 
 
 # ── Briefing ──────────────────────────────────────────────

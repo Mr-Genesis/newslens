@@ -106,9 +106,13 @@ async def resolve_existing(db: AsyncSession, value: str) -> int | None:
 
 
 async def bump_relevance(db: AsyncSession, user_id: int, entity_id: int, *, source: str, weight: float) -> None:
-    """G2: upsert the per-user affinity row for (user, entity) — add `weight`, refresh last_event_at.
-    Called on follow (source='follow') + reading feedback (source='feedback'). Decay is computed at
-    READ time from engagement_raw + last_event_at (no cron), so this only accumulates raw signal."""
+    """G2: upsert the per-user affinity row for (user, entity) — add `weight`. Decay is computed at
+    READ time from engagement_raw + last_event_at (no cron), so this only accumulates raw signal.
+
+    WS-1 (#111) negative support: `weight` may be negative ('less' feedback demotes the article's
+    entities). engagement_raw is clamped at >= -1.0 (a pile-on of dislikes can't dig a bottomless
+    hole), and a NEGATIVE bump does NOT refresh last_event_at — refreshing would reset the decay
+    clock on previously accumulated POSITIVE signal, silently re-strengthening it."""
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)
@@ -122,10 +126,11 @@ async def bump_relevance(db: AsyncSession, user_id: int, entity_id: int, *, sour
     ).scalar_one_or_none()
     if row is None:
         db.add(UserEntityRelevance(user_id=user_id, entity_id=entity_id, source=source,
-                                   engagement_raw=weight, last_event_at=now))
+                                   engagement_raw=max(weight, -1.0), last_event_at=now))
     else:
-        row.engagement_raw = (row.engagement_raw or 0.0) + weight
-        row.last_event_at = now
+        row.engagement_raw = max((row.engagement_raw or 0.0) + weight, -1.0)
+        if weight > 0:
+            row.last_event_at = now
 
 
 async def bump_relevance_for_article(db: AsyncSession, user_id: int, article_id: int, *,
