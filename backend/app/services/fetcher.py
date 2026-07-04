@@ -243,6 +243,39 @@ def _best_body(entry) -> str:
     return content if len(content) > len(summary) else summary
 
 
+_URL_ONLY_RE = re.compile(r"https?://\S+")
+
+
+def _is_thin_content(text: str | None) -> bool:
+    """True when a feed item's 'content' is really just a link (Hacker News and other link-aggregators)
+    or empty/near-empty — it carries no article body of its own, so the linked page must be fetched for
+    the card/deep-dive to show anything useful."""
+    t = (text or "").strip()
+    if len(t) < 50:
+        return True
+    url_chars = sum(len(u) for u in _URL_ONLY_RE.findall(t))
+    return url_chars / len(t) > 0.6
+
+
+async def _extract_linked_content(url: str) -> tuple[str | None, str | None]:
+    """Fetch `url` and extract (snippet, full_body) via trafilatura — reuses the GDELT extractor.
+    Skips Hacker News discussion links (they are the comments page, not the article). Best-effort:
+    returns (None, None) on any failure so ingestion never breaks on a bad link."""
+    if not url or "news.ycombinator.com/item" in url:
+        return None, None
+    from app.services.gdelt import _extract  # lazy: gdelt imports assign_topics from this module
+
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=15.0,
+            headers={"User-Agent": "NewsLensBot/1.0 (+https://newslens.app)"},
+        ) as client:
+            return await _extract(client, url)
+    except Exception:
+        return None, None
+
+
 _DOUBLE_PREFIX = re.compile(r"^https?://[^/]+/(https?://.+)$", re.IGNORECASE)
 
 
@@ -360,6 +393,9 @@ async def _ingest_feed_entries(session, source: Source, feed) -> int:
 
     new_count = 0
     meta = source.credibility_meta or {}
+    # Link-aggregator sources (Hacker News) submit external links with no article body of their own —
+    # fetch + extract the linked page so cards aren't just a headline + URL. Gated per-source.
+    fetch_full = bool(meta.get("fetch_full_content"))
 
     # Filing tier (Phase 3): a `filing_watchlist` source is an exchange firehose that must be reduced
     # to only companies SOMEONE watchlists. Compute the aggregate name-key set once per fetch. When
@@ -414,6 +450,13 @@ async def _ingest_feed_entries(session, source: Source, feed) -> int:
         raw = html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
         snippet = raw[:300]
         body = raw[:16000] if raw else None
+
+        # A link-only submission (HN et al.) has no body → fetch + extract the linked article's text.
+        if fetch_full and _is_thin_content(raw):
+            s2, b2 = await _extract_linked_content(link)
+            if b2:
+                snippet, body = (s2 or b2[:300]), b2
+                logger.info("full_content_fetched", source=source.name, url=link, chars=len(b2))
 
         pub_date = parse_pub_date(entry)
 
