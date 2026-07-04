@@ -191,6 +191,18 @@ export async function getHealth(): Promise<HealthResponse> {
   return fetchJSON("/health");
 }
 
+// WS-8 (#118): the data-pipeline status behind the Settings "System" card.
+export interface PipelineStatus {
+  articles: { total: number; by_embedding_status: Record<string, number> };
+  clusters: { total: number; articles_clustered: number };
+  freshness: { latest_article_fetched_at: string | null; latest_cluster_created_at: string | null };
+  last_embedding_error: string | null;
+}
+
+export async function getPipeline(): Promise<PipelineStatus> {
+  return fetchJSON("/pipeline");
+}
+
 export async function getBriefing(): Promise<Briefing> {
   return fetchJSON("/briefing");
 }

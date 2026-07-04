@@ -36,10 +36,15 @@
   monthly credibility-review cron.
 - ⏸️ **Render paid-tier revisit trigger** (decision 2026-07-04, re-opens itself): chose free tier +
   keepalive. **Trigger to upgrade the WEB service to Starter ($7/mo): two pipeline stalls in one week OR
-  the first real second user.** Rationale on file: a separate background worker was REJECTED — Render has
-  no free worker tier (same $7), and splitting jobs out of the web process breaks the in-process SSE
-  events hub (`events.py`) without a Postgres LISTEN/NOTIFY bridge; Starter-web gets always-on scheduler +
-  no user cold-starts with zero code changes.
+  the first real second user OR the DB-budget trigger below.** Rationale on file: a separate background
+  worker was REJECTED — Render has no free worker tier (same $7), and splitting jobs out of the web
+  process breaks the in-process SSE events hub (`events.py`) without a Postgres LISTEN/NOTIFY bridge;
+  Starter-web gets always-on scheduler + no user cold-starts with zero code changes.
+- ⏸️ **DB budget pre-flight trigger** (WS-8 · #118): the signal-first wave makes the Postgres provider
+  (Neon/Supabase free) never sleep — always-warm keepalive + rails queries + impression writes + the
+  nightly entity-edge aggregation. **Measure the provider's compute-hours burn once WS-2+ is live; if it
+  exceeds 70% of the free monthly quota, the paid-tier trigger fires on DB grounds** (independent of the
+  web-service trigger above). This is a measurement task, not code — track burn in the provider console.
 - ⏸️ **§2b — `_source_hash` widening** — deliberately deferred until a lens becomes entity/user-dependent.
   No lens reads graph/user data yet, so widening now would only add per-user lens-cache cost. Widen the
   hash to include entity ids + content version + user scope the moment a personalized/graph-reading lens

@@ -46,7 +46,24 @@ curl https://your-app.onrender.com/health
 
 curl https://your-app.onrender.com/briefing
 # Expected: JSON with stories array
+
+curl -i https://your-app.onrender.com/health/fresh
+# 200 {"fresh":true,...} when the pipeline is producing; 503 when the newest article was
+# fetched > 45 min ago (the stall alarm).
 ```
+
+### 4b. Freshness alarm — external pinger (WS-8, #118)
+
+GitHub auto-disables scheduled workflows after **60 days of repo inactivity** — the moment hands-off
+monitoring matters most. So the freshness assert lives in the app (`GET /health/fresh` → 503 on stale),
+and an **independent** pinger emails you on any non-200. The `keep-alive` GitHub Action stays the
+*warmer* (and a secondary alarm); [cron-job.org](https://cron-job.org) (free) is the *primary alarm*:
+
+1. Create a free cron-job.org account → **Create cronjob**.
+2. URL: `https://your-app.onrender.com/health/fresh`, schedule every **15 min**.
+3. Under **Notifications**, enable "on failure" (it treats a non-2xx response as failure) → your email.
+4. Save. A stalled pipeline (embeddings dead / no new articles for 45 min) now emails you even if the
+   GitHub keepalive has been auto-disabled.
 
 ### 5. Update Capacitor APK
 
