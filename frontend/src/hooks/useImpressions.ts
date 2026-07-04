@@ -37,11 +37,12 @@ export function useImpressions(surface: Surface) {
     [surface]
   );
 
-  const flush = useCallback(async () => {
+  const flush = useCallback(async (keepalive = false) => {
     if (buffer.current.length === 0) return;
     const items = buffer.current.splice(0, buffer.current.length);
     try {
-      await postImpressions(items);
+      // keepalive on exit paths (pagehide/unmount) so the browser doesn't cancel the final batch.
+      await postImpressions(items, keepalive);
       retried.current = false;
     } catch {
       // one re-buffer so a sleeping backend doesn't eat the batch; second failure drops it
@@ -91,19 +92,22 @@ export function useImpressions(surface: Surface) {
       );
     }
 
-    const interval = setInterval(flush, FLUSH_INTERVAL_MS);
-    const onHide = () => void flush();
-    window.addEventListener("pagehide", onHide);
-    document.addEventListener("visibilitychange", onHide);
+    const interval = setInterval(() => void flush(false), FLUSH_INTERVAL_MS);
+    const onPageHide = () => void flush(true); // exit → keepalive
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") void flush(true);
+    };
+    window.addEventListener("pagehide", onPageHide);
+    document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
       clearInterval(interval);
-      window.removeEventListener("pagehide", onHide);
-      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("visibilitychange", onVisibility);
       for (const t of timers.current.values()) clearTimeout(t);
       timers.current.clear();
       observer.current?.disconnect();
-      void flush(); // unmount flush
+      void flush(true); // unmount flush — treat as exit
     };
   }, [surface, enqueue, flush]);
 

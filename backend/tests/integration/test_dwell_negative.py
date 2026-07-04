@@ -80,6 +80,52 @@ async def test_dwell_upserts_min_article_read_row_with_greatest(aclient, db_sess
     assert len(n) == 1
 
 
+@pytest.mark.asyncio
+async def test_dwell_for_missing_story_is_noop_not_500(aclient, db_session):
+    """Review fix (C1): dwell for a deleted/deep-linked story id resolves no target — must be a
+    fire-and-forget no-op, NOT a fall-through insert that violates the articles FK (500)."""
+    from app.models import User
+    if await db_session.get(User, 1) is None:
+        db_session.add(User(id=1, locale="IN"))
+        await db_session.flush()
+    r = await aclient.post("/feedback", json={
+        "article_id": 999_999, "feedback_type": "read",
+        "cluster_id": 999_999, "duration_ms": 12000, "surface": "briefing",
+    })
+    assert r.status_code == 201            # no 500
+    assert r.json()["id"] == 0             # synthetic, not persisted
+    n = (await db_session.execute(select(UserFeedback).where(
+        UserFeedback.article_id == 999_999))).scalars().all()
+    assert n == []                         # nothing inserted
+
+
+@pytest.mark.asyncio
+async def test_dwell_clamps_over_4h_instead_of_rejecting(aclient, db_session):
+    """Review fix (C9): a long-lived tab (>4h) is CLAMPED, not 422'd — its dwell must not be lost."""
+    c, arts = await _cluster(db_session, n_articles=1)
+    assert (await aclient.get(f"/clusters/{c.id}")).status_code == 200
+    r = await aclient.post("/feedback", json={
+        "article_id": arts[0].id, "feedback_type": "read",
+        "cluster_id": c.id, "duration_ms": 99_999_999, "surface": "feed",
+    })
+    assert r.status_code == 201
+    row = (await db_session.execute(select(UserFeedback).where(
+        UserFeedback.article_id == arts[0].id,
+        UserFeedback.feedback_type == FeedbackType.read))).scalars().first()
+    assert row.duration_ms == 14_400_000   # clamped to 4h
+
+
+@pytest.mark.asyncio
+async def test_feedback_rejects_unknown_surface(aclient, db_session):
+    """Review fix (C3): an out-of-vocab / overlong surface is 422'd, not a VARCHAR(16) commit 500."""
+    c, arts = await _cluster(db_session, n_articles=1)
+    r = await aclient.post("/feedback", json={
+        "article_id": arts[0].id, "feedback_type": "read", "cluster_id": c.id,
+        "surface": "notifications-center-overflow",
+    })
+    assert r.status_code == 422
+
+
 # ── negative signal: 'less' demotes the article's entities in UER ──
 @pytest.mark.asyncio
 async def test_less_feedback_writes_negative_uer(aclient, db_session):

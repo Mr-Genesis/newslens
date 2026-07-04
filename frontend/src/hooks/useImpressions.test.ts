@@ -68,6 +68,19 @@ describe("useImpressions", () => {
     expect(postImpressions).toHaveBeenCalledTimes(2);
   });
 
+  it("uses keepalive on the pagehide exit flush (review C4/C6 — survive teardown)", async () => {
+    const { result } = renderHook(() => useImpressions("feed"));
+    act(() => {
+      result.current.logNow({ articleId: 9 });
+    });
+    await act(async () => {
+      window.dispatchEvent(new Event("pagehide"));
+      await Promise.resolve();
+    });
+    expect(postImpressions).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(postImpressions).mock.calls[0][1]).toBe(true); // keepalive flag
+  });
+
   it("ignores empty targets", async () => {
     const { result } = renderHook(() => useImpressions("rail"));
     act(() => {

@@ -76,29 +76,48 @@ export default function DeepDiveView({
     };
   }, [clusterId]);
 
-  // WS-1 (#111) dwell: time-on-story, sent on close/hide against the auto-read row (server keeps
-  // the GREATEST). Surface = where the story was opened from (set by the tapping card wrapper).
+  // WS-1 (#111) dwell: FOREGROUND time-on-story, sent on close/hide against the auto-read row
+  // (server keeps the GREATEST). Accumulate only VISIBLE time — wall-clock would count backgrounded
+  // hours and, via GREATEST, lock in an inflated value (review C2/C5). Surface = where the story was
+  // opened from (set by the tapping card wrapper).
   useEffect(() => {
     if (!clusterId || isNaN(clusterId)) return;
-    const openedAt = Date.now();
     const surfaces = ["briefing", "feed", "rail", "discover", "search"] as const;
     const raw = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("nl_surface") : null;
     const surface = (surfaces as readonly string[]).includes(raw ?? "")
       ? (raw as (typeof surfaces)[number])
       : "feed";
-    const send = () => {
-      const elapsed = Date.now() - openedAt;
-      if (elapsed >= 1000) void postDwell(clusterId, elapsed, surface).catch(() => {});
+
+    let accumulated = 0;
+    let segmentStart: number | null =
+      typeof document === "undefined" || document.visibilityState === "visible" ? Date.now() : null;
+
+    const visibleMs = () =>
+      accumulated + (segmentStart !== null ? Date.now() - segmentStart : 0);
+
+    const send = (useKeepalive: boolean) => {
+      const ms = Math.min(visibleMs(), 14_400_000); // client-clamp so a huge value isn't 422-dropped
+      if (ms >= 1000) void postDwell(clusterId, ms, surface, useKeepalive).catch(() => {});
     };
-    const onHide = () => {
-      if (document.visibilityState === "hidden") send();
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        if (segmentStart !== null) {
+          accumulated += Date.now() - segmentStart;
+          segmentStart = null;
+        }
+        send(true); // tab hidden — may precede a hard kill
+      } else if (segmentStart === null) {
+        segmentStart = Date.now(); // resume clock
+      }
     };
-    window.addEventListener("pagehide", send);
-    document.addEventListener("visibilitychange", onHide);
+    const onPageHide = () => send(true);
+
+    window.addEventListener("pagehide", onPageHide);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      window.removeEventListener("pagehide", send);
-      document.removeEventListener("visibilitychange", onHide);
-      send(); // navigating away in-app
+      window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("visibilitychange", onVisibility);
+      send(false); // in-app navigation away — normal fetch is fine
     };
   }, [clusterId]);
 

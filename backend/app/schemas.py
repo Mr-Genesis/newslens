@@ -85,6 +85,12 @@ class TopicListResponse(BaseModel):
     trending_topics: list[TopicOut]
 
 
+# WS-1 (#111): the surface vocabulary — one whitelist shared by BOTH the impression denominator and
+# the feedback/CTR numerator, so a numerator surface can never be a value the denominator can't hold.
+IMPRESSION_SURFACES = ("briefing", "feed", "rail", "discover", "search")
+DWELL_MAX_MS = 14_400_000  # 4h — clamp, never reject (a long-lived tab must not lose its dwell)
+
+
 # --- Feedback ---
 class FeedbackCreate(BaseModel):
     article_id: int
@@ -93,12 +99,17 @@ class FeedbackCreate(BaseModel):
     # duration_ms (GREATEST upsert; server resolves the deterministic min-article target — clients
     # must not guess an article id). surface = where the story was opened from (CTR numerator).
     cluster_id: int | None = None
-    duration_ms: int | None = Field(default=None, ge=0, le=14_400_000)  # clamp at 4h — junk guard
+    duration_ms: int | None = Field(default=None, ge=0)  # clamped (not rejected) server-side
     surface: str | None = None
 
-
-# WS-1 (#111): batched impression logging.
-IMPRESSION_SURFACES = ("briefing", "feed", "rail", "discover", "search")
+    @field_validator("surface")
+    @classmethod
+    def _surface_known(cls, v: str | None) -> str | None:
+        # Bounds length AND vocabulary — an unbounded string hits the VARCHAR(16) column and 500s at
+        # commit; a junk value pollutes the CTR key. Reuse the impression whitelist for symmetry.
+        if v is not None and v not in IMPRESSION_SURFACES:
+            raise ValueError(f"surface must be one of {IMPRESSION_SURFACES}")
+        return v
 
 
 class ImpressionItem(BaseModel):

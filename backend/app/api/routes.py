@@ -35,6 +35,7 @@ from app.schemas import (
     ClusterDetailOut,
     ClusterSourceCard,
     DiscoverCardOut,
+    DWELL_MAX_MS,
     FeedbackCreate,
     FeedbackOut,
     ImpressionsBatch,
@@ -581,30 +582,38 @@ async def create_feedback(
             target = (
                 await db.execute(select(Article.id).where(Article.id == body.cluster_id))
             ).scalar_one_or_none()
-        if target is not None:
-            row = (
-                await db.execute(
-                    select(UserFeedback).where(
-                        UserFeedback.user_id == current_user_id(),
-                        UserFeedback.article_id == target,
-                        UserFeedback.feedback_type == FeedbackType.read,
-                    )
+        if target is None:
+            # Dwell for a story that no longer exists (deleted / stale deep-link). Fire-and-forget
+            # no-op — do NOT fall through to a plain insert: body.article_id on this path is the
+            # cluster id we just proved absent from `articles`, so the insert would 500 on the FK.
+            logger.info("dwell_target_missing", cluster_id=body.cluster_id)
+            from datetime import datetime, timezone
+            return FeedbackOut(id=0, article_id=body.article_id,
+                               feedback_type=body.feedback_type,
+                               created_at=datetime.now(timezone.utc))
+        row = (
+            await db.execute(
+                select(UserFeedback).where(
+                    UserFeedback.user_id == current_user_id(),
+                    UserFeedback.article_id == target,
+                    UserFeedback.feedback_type == FeedbackType.read,
                 )
-            ).scalars().first()
-            if row is None:
-                row = UserFeedback(user_id=current_user_id(), article_id=target,
-                                   feedback_type=FeedbackType.read)
-                db.add(row)
-            if body.duration_ms is not None:
-                row.duration_ms = max(row.duration_ms or 0, body.duration_ms)  # GREATEST
-            if body.surface:
-                row.surface = body.surface
-            await db.commit()
-            await db.refresh(row)
-            logger.info("dwell_recorded", cluster_id=body.cluster_id,
-                        duration_ms=row.duration_ms, surface=row.surface)
-            return FeedbackOut.model_validate(row)
-        # unresolvable target → fall through to the plain create below
+            )
+        ).scalars().first()
+        if row is None:
+            row = UserFeedback(user_id=current_user_id(), article_id=target,
+                               feedback_type=FeedbackType.read)
+            db.add(row)
+        if body.duration_ms is not None:
+            dur = min(body.duration_ms, DWELL_MAX_MS)  # clamp, never reject
+            row.duration_ms = max(row.duration_ms or 0, dur)  # GREATEST
+        if body.surface:
+            row.surface = body.surface
+        await db.commit()
+        await db.refresh(row)
+        logger.info("dwell_recorded", cluster_id=body.cluster_id,
+                    duration_ms=row.duration_ms, surface=row.surface)
+        return FeedbackOut.model_validate(row)
 
     feedback = UserFeedback(
         user_id=current_user_id(),
