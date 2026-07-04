@@ -1,0 +1,42 @@
+# Keep the Render free-tier backend awake so its in-process APScheduler actually runs.
+#
+# WHY: the data pipeline (RSS fetch → embeddings → clustering → summaries) runs on APScheduler
+# INSIDE the FastAPI process. Render's free tier spins the web service down after ~15 min with no
+# inbound HTTP, which stops the scheduler — so articles ingest but never embed/cluster, and story
+# details (which open a cluster) go missing. A periodic inbound ping resets the idle timer.
+#
+# NOTE: this only helps if embeddings SUCCEED. If GET /pipeline shows last_embedding_error.category
+# == "quota"/"auth", fix the Gemini key/quota first — a warm service still can't embed without it.
+#
+# Scheduled workflows run only from the default branch and may be delayed under GitHub load; 10 min
+# gives margin against the ~15 min sleep. Free for public repos.
+name: keep-alive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend /health (cold start can take ~40s; retry a few times)
+        env:
+          BACKEND_URL: https://newslens-3gpu.onrender.com
+        run: |
+          code=000
+          for i in 1 2 3 4; do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 120 "$BACKEND_URL/health" || echo 000)
+            echo "attempt $i: HTTP $code"
+            [ "$code" = "200" ] && break
+            sleep 15
+          done
+          # Surface a one-line pipeline snapshot in the run log (handy when checking why data is stale).
+          curl -sS --max-time 120 "$BACKEND_URL/pipeline" || true
+          echo
+          test "$code" = "200"

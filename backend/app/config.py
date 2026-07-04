@@ -181,6 +181,14 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 768
     embedding_task_document: str = "retrieval_document"  # stored article/topic vectors
     embedding_task_query: str = "retrieval_query"        # search-query vectors (asymmetric retrieval)
+    # Free-tier Gemini embeddings are capped at ~1,000 requests/DAY (100 RPM). One-request-per-article
+    # torched that in a single backfill pass and then the retry-failed-every-5-min loop hammered a dead
+    # quota (all 429). So the backfill sends ONE batched request per N articles (BatchEmbedContents),
+    # and on a 429 it backs off for a cooldown instead of re-firing every cycle.
+    embedding_batch_size: int = 50               # texts per batched embed call (also the fetch limit)
+    embedding_quota_cooldown_minutes: int = 30   # after a 429, skip backfill runs this long (RPD resets)
+    embedding_error_cooldown_minutes: int = 10   # after a systemic non-quota failure (nothing embedded
+                                                 # even per-text), back off this long instead of re-firing
 
     # Summary config
     summary_model: str = "gpt-4o-mini"
