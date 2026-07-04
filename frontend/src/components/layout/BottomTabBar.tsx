@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { Capacitor } from "@capacitor/core";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 
@@ -108,6 +109,16 @@ const tabs = [
 
 export function BottomTabBar() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  // WS-4 (#114): on native, tab navigations REPLACE (tabs never stack history, so hardware back
+  // can't walk back through every prior tab switch). On web we let <Link> push — replace-on-tab
+  // would make the browser back button exit the site from any tab.
+  function onTabClick(e: React.MouseEvent, href: string) {
+    if (!Capacitor.isNativePlatform()) return; // web: stock Link push
+    e.preventDefault();
+    if (href !== pathname) router.replace(href);
+  }
 
   // Hide tab bar on deep dive + first-run flows (full-screen)
   if (
@@ -151,6 +162,7 @@ export function BottomTabBar() {
             <Link
               key={tab.href}
               href={tab.href}
+              onClick={(e) => onTabClick(e, tab.href)}
               className={cn(
                 "flex flex-col items-center justify-center gap-0.5 flex-1 h-full",
                 "transition-colors duration-[var(--duration-short)]",
