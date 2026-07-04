@@ -230,7 +230,11 @@ class Settings(BaseSettings):
 
     # Summary config
     summary_model: str = "gpt-4o-mini"
-    summary_batch_size: int = 5
+    summary_batch_size: int = 12  # per backfill run (was 5) — keep up with ingest so fewer cold on-demands
+    # Non-blocking + eager summaries: the read paths return a snippet fallback instantly and generate the
+    # real summary in the background; new clusters are summarized eagerly on creation. Kill-switch → the
+    # read paths still fall back to snippets, just without the background warm.
+    eager_summaries_enabled: bool = True
 
     # Impact engine v2 (Wave A): structured + validated + guarded WIIFM.
     # Flip off to fall back to the legacy free-text impact lens.

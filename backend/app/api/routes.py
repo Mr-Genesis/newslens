@@ -457,15 +457,14 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
             ],
         )
 
-    # On-demand summary generation if batch missed this cluster
+    # Non-blocking summary: return a snippet fallback instantly and generate the real summary in the
+    # background (schedule_summary) so the next view is warm. NEVER mutate cluster.summary here — the
+    # db.commit() below (for read marks) would persist the snippet and make backfill skip this cluster.
+    response_summary = cluster.summary
     if not cluster.summary:
-        try:
-            from app.services.summarizer import summarize_cluster
-            summary_result = await summarize_cluster(cluster.id)
-            if summary_result:
-                cluster.summary, cluster.coherence = summary_result
-        except Exception as e:
-            logger.warning("on_demand_summary_failed", cluster_id=cluster.id, error=str(e))
+        from app.services.summarizer import snippet_summary, schedule_summary
+        response_summary = snippet_summary([ca.article.snippet or "" for ca in cluster.articles])
+        schedule_summary(cluster.id)
 
     # Mark all articles in cluster as read
     article_ids = [ca.article.id for ca in cluster.articles]
@@ -511,7 +510,7 @@ async def get_cluster(cluster_id: int, db: AsyncSession = Depends(get_db)):
     return ClusterDetailOut(
         id=cluster.id,
         title=cluster.title,
-        summary=cluster.summary,
+        summary=response_summary,
         created_at=cluster.created_at,
         # Real source-agreement ratio when a consensus pass is cached; else stored value / heuristic.
         coherence=lenses.cluster_coherence(cluster, [ca.article for ca in cluster.articles]),
@@ -887,19 +886,13 @@ async def get_briefing(db: AsyncSession = Depends(get_db)):
                     ca.article.source.category, category
                 )
 
-        # Use real summary or on-demand generate
+        # Non-blocking summary: use the cached real one if present, else return the snippet fallback
+        # instantly and warm the real summary in the background (schedule_summary) for the next view.
         summary = cluster.summary
         coherence = cluster.coherence
         if not summary:
-            try:
-                from app.services.summarizer import summarize_cluster
-                sr = await summarize_cluster(cluster.id)
-                if sr:
-                    summary, coherence = sr
-            except Exception as e:
-                logger.warning("briefing_summary_failed", cluster_id=cluster.id, error=str(e))
-
-        if not summary:
+            from app.services.summarizer import schedule_summary
+            schedule_summary(cluster.id)
             summary = first_snippet or "No summary available."
             sentences = summary.split(". ")
             if len(sentences) > 2:
