@@ -176,6 +176,18 @@ async def start_scheduler():
         id="topic_embedding_sweep",
         replace_existing=True,
     )
+    # WS-8 (#118): one-shot RSS fetch ~5s after startup so freshness recovers AT wake — the interval
+    # job otherwise fires first only at wake+rss_fetch_interval, leaving /health/fresh reporting the
+    # stale pre-sleep timestamp right after a cold wake and false-alarming the keepalive + cron-job.org.
+    scheduler.add_job(
+        fetch_all_rss,
+        "date",
+        run_date=datetime.now(tz.utc) + timedelta(seconds=5),
+        id="rss_fetch_kick",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.add_job(
         fetch_all_rss,
         "interval",

@@ -62,6 +62,9 @@ and an **independent** pinger emails you on any non-200. The `keep-alive` GitHub
 1. Create a free cron-job.org account → **Create cronjob**.
 2. URL: `https://your-app.onrender.com/health/fresh`, schedule every **15 min**.
 3. Under **Notifications**, enable "on failure" (it treats a non-2xx response as failure) → your email.
+   If the option exists, alert only after **2 consecutive** failures — a ping that itself wakes a
+   cold-sleeping service can catch the one-off window before the startup RSS fetch lands (freshness
+   recovers ~seconds after wake via the `rss_fetch_kick` job, so the next 15-min ping is green).
 4. Save. A stalled pipeline (embeddings dead / no new articles for 45 min) now emails you even if the
    GitHub keepalive has been auto-disabled.
 

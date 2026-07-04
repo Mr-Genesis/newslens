@@ -50,6 +50,14 @@ jobs:
         env:
           BACKEND_URL: https://newslens-3gpu.onrender.com
         run: |
-          fresh=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 120 "$BACKEND_URL/health/fresh" || echo 000)
-          echo "freshness (/health/fresh): HTTP $fresh"
+          # Retry so a transient blip AND the brief post-wake fetch window (the startup rss_fetch_kick
+          # lands a few seconds after wake) don't false-alarm — only a PERSISTENT 503 (a real stall)
+          # fails the job. Mirrors the warmer's retry above.
+          fresh=000
+          for i in 1 2 3; do
+            fresh=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 120 "$BACKEND_URL/health/fresh" || echo 000)
+            echo "freshness attempt $i (/health/fresh): HTTP $fresh"
+            [ "$fresh" = "200" ] && break
+            sleep 20
+          done
           test "$fresh" = "200"
