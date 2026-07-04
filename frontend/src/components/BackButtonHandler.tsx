@@ -26,6 +26,18 @@ export function BackButtonHandler() {
   const pathRef = useRef(pathname);
   pathRef.current = pathname;
   const confirmExitRef = useRef(false);
+  const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // The exit-confirm is a gesture on ONE screen: two CONSECUTIVE back presses. Any navigation in
+  // between (a pop, a tab hop, a push) disarms it — otherwise the flag would leak across routes and a
+  // later single press on home would minimize with no confirmation (WS-4 review).
+  useEffect(() => {
+    confirmExitRef.current = false;
+    if (exitTimerRef.current) {
+      clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = null;
+    }
+  }, [pathname]);
 
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return; // web: stock browser back semantics
@@ -52,8 +64,10 @@ export function BackButtonHandler() {
         }
         confirmExitRef.current = true;
         addToast("Press back again to exit", "info");
-        setTimeout(() => {
+        if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = setTimeout(() => {
           confirmExitRef.current = false;
+          exitTimerRef.current = null;
         }, EXIT_CONFIRM_MS);
       }).then((sub) => {
         remove = () => sub.remove();

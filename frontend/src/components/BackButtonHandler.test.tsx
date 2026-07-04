@@ -77,6 +77,25 @@ describe("BackButtonHandler (WS-4 Android back)", () => {
     expect(back).not.toHaveBeenCalled();
   });
 
+  it("disarms the exit gesture on navigation (no single-press minimize after a hop)", async () => {
+    // Regression (WS-4 review): the armed exit flag must not leak across routes. Arm on home, hop
+    // away and back, then a single press must RE-ARM (toast), not minimize.
+    mockPath = "/";
+    const { rerender } = render(<BackButtonHandler />);
+    await waitFor(() => expect(addListener).toHaveBeenCalled());
+
+    await press(false); // arm on home
+    expect(minimizeApp).not.toHaveBeenCalled();
+
+    mockPath = "/discover"; // navigate away → disarm
+    rerender(<BackButtonHandler />);
+    mockPath = "/"; // and back home
+    rerender(<BackButtonHandler />);
+
+    await press(false); // single press on home → must re-arm, NOT minimize
+    expect(minimizeApp).not.toHaveBeenCalled();
+  });
+
   it("a deep-linked route with NO history takes the exit path, never pops", async () => {
     mockPath = "/story/5";
     render(<BackButtonHandler />);
