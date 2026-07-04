@@ -16,6 +16,7 @@ from sqlalchemy import select, text
 from app.database import async_session
 from app.models import Article, ArticleTopic, Source, Topic
 from app.services.dedup import is_duplicate
+from app.services.embeddings import vector_literal
 
 logger = structlog.get_logger()
 
@@ -41,7 +42,7 @@ async def assign_topics(session, article: Article):
                         "SELECT embedding <=> :topic_emb AS distance "
                         "FROM articles WHERE id = :article_id"
                     ),
-                    {"topic_emb": str(topic.embedding), "article_id": article.id},
+                    {"topic_emb": vector_literal(topic.embedding), "article_id": article.id},
                 )
                 row = dist_result.first()
                 if row and row.distance < settings.new_topic_max_similarity:

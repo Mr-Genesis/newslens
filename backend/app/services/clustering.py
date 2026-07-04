@@ -19,6 +19,7 @@ from app.models import (
     EmbeddingStatus,
     StoryCluster,
 )
+from app.services.embeddings import vector_literal
 
 logger = structlog.get_logger()
 
@@ -139,24 +140,28 @@ async def _find_nearest_cluster(article: Article) -> int | None:
     or None if this should start a new cluster.
     """
     async with async_session() as session:
-        # Use pgvector cosine distance operator to find similar articles
-        # that are already in clusters
-        result = await session.execute(
-            text("""
-                SELECT ca.cluster_id, a.embedding <=> :embedding AS distance
-                FROM articles a
-                JOIN cluster_articles ca ON ca.article_id = a.id
-                WHERE a.embedding IS NOT NULL
-                  AND a.embedding <=> :embedding < :threshold
-                ORDER BY distance
-                LIMIT 1
-            """),
-            {
-                "embedding": str(article.embedding),
-                "threshold": settings.cluster_similarity_threshold,
-            },
-        )
-        row = result.first()
+        # Use pgvector cosine distance operator to find similar articles that are already in clusters.
+        try:
+            result = await session.execute(
+                text("""
+                    SELECT ca.cluster_id, a.embedding <=> :embedding AS distance
+                    FROM articles a
+                    JOIN cluster_articles ca ON ca.article_id = a.id
+                    WHERE a.embedding IS NOT NULL
+                      AND a.embedding <=> :embedding < :threshold
+                    ORDER BY distance
+                    LIMIT 1
+                """),
+                {
+                    "embedding": vector_literal(article.embedding),
+                    "threshold": settings.cluster_similarity_threshold,
+                },
+            )
+            row = result.first()
+        except Exception as e:  # noqa: BLE001 — a NN lookup failure must not abort the whole run;
+            # fall back to "no match" so the article still starts its own cluster.
+            logger.warning("cluster_nn_lookup_failed", article_id=getattr(article, "id", None), error=str(e))
+            return None
 
         if row:
             return row[0]  # cluster_id
