@@ -110,6 +110,15 @@ class Settings(BaseSettings):
     uer_briefing_blend_weight: float = 0.2  # additive scaler on cluster relevance into story_weights
     uer_search_rerank_boost: float = 10.0   # max within-tier rank improvement (must stay < the 100 gap)
     uer_search_relevance_threshold: float = 0.3  # min relevance before any search boost applies
+    # WS-5 (#115) entity co-occurrence graph + one-hop interest expansion. The nightly job aggregates
+    # entities that shared a cluster into decayed edges (top-K per source). Expansion adds a small
+    # bounded "adjacent interests" term into the cluster relevance score — a NO-OP for a user with no
+    # affinity signal (no seed entities → no expansion), so the G2 invariant holds.
+    entity_edge_enabled: bool = True          # nightly co-occurrence aggregation job on/off
+    entity_edge_top_k: int = 50               # max edges kept per source entity (by weight)
+    entity_edge_half_life_days: float = 30.0  # exponential decay applied to prior edge weight nightly
+    expansion_enabled: bool = True            # one-hop expansion term in score_clusters_relevance
+    expansion_weight: float = 0.1             # bounded additive scaler on the adjacent-interest term
 
     # Phase 1 source expansion — credibility floors for the gated tiers (research/expert). A gated
     # source below the feed floor is discover/search-only; below the briefing floor it never enters

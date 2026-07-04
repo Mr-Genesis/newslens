@@ -486,6 +486,28 @@ class UserEntityRelevance(Base):
     # (user_id, score) index if/when score is materialized for a global-ranking query.
 
 
+class EntityEdge(Base):
+    """WS-5 (#115): a co-occurrence edge — two entities that shared a story cluster — carrying an
+    exponentially-decayed weight. GLOBAL (content-scoped, like entities/clusters — NOT in _RLS_TABLES).
+    The nightly job upserts BOTH directions (a→b and b→a) and keeps the top-50 by weight per source,
+    so a one-hop read is `WHERE src_entity_id IN (the user's affinity entities)`. That read is served
+    by the composite PK's leftmost column, so — like UserEntityRelevance — there is deliberately NO
+    extra b-tree index (keeps Alembic autogenerate parity + avoids write-side dead weight)."""
+
+    __tablename__ = "entity_edges"
+
+    src_entity_id: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True
+    )
+    dst_entity_id: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True
+    )
+    weight: Mapped[float] = mapped_column(Float, server_default="0", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 # ── Row-Level Security (Wave D Phase A) ──────────────────────────────────────────────
 # Per-user tables are isolated by the `app.user_id` GUC, which get_current_user sets per request
 # (SET LOCAL). "Enforce-when-set": when the GUC is unset — background jobs reading the owner's API

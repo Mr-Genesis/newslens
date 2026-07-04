@@ -155,6 +155,7 @@ async def start_scheduler():
     from app.services.pubmed import ingest_pubmed
     from app.services.arxiv_gen import generate_arxiv_sources
     from app.services.lenses import backfill_tension_lines
+    from app.services.graph import aggregate_entity_edges
 
     scheduler = AsyncIOScheduler()
     # One-shot: seed topic embeddings 10s after startup (non-blocking)
@@ -280,6 +281,18 @@ async def start_scheduler():
         max_instances=1,
         coalesce=True,
         misfire_grace_time=300,
+    )
+    # WS-5 · #115: nightly entity co-occurrence graph rebuild (02:00). Full recompute → idempotent +
+    # skip-tolerant; no-op when entity_edge_enabled=false. Feeds one-hop interest expansion.
+    scheduler.add_job(
+        aggregate_entity_edges,
+        "cron",
+        hour=2,
+        id="entity_edge_aggregation",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     scheduler.start()
     logger.info("scheduler_started", jobs=len(scheduler.get_jobs()))

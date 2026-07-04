@@ -148,6 +148,26 @@ async def bump_relevance_for_article(db: AsyncSession, user_id: int, article_id:
 # ── Surface personalization (G2 S5): one shared per-cluster relevance score ──────────
 
 
+async def _seed_affinities(db: AsyncSession, user_id: int) -> dict[int, float]:
+    """WS-5 (#115): the user's POSITIVE-affinity entities with their decayed weight — the SEEDS for
+    one-hop interest expansion. Same half-life decay as the scorer. Empty for a zero-signal user, so
+    expansion collapses to a no-op (only positive affinity seeds; a disliked entity never expands)."""
+    age_days = func.greatest(
+        0.0, func.extract("epoch", func.now() - UserEntityRelevance.last_event_at) / 86400.0
+    )
+    decayed = UserEntityRelevance.engagement_raw * func.exp(
+        -_LN2 * age_days / settings.uer_half_life_days
+    )
+    rows = (
+        await db.execute(
+            select(UserEntityRelevance.entity_id, decayed.label("aff")).where(
+                UserEntityRelevance.user_id == user_id
+            )
+        )
+    ).all()
+    return {int(eid): float(aff) for eid, aff in rows if aff and aff > 0}
+
+
 async def score_clusters_relevance(
     db: AsyncSession, cluster_ids: list[int], user_id: int | None
 ) -> dict[int, float]:
@@ -183,7 +203,39 @@ async def score_clusters_relevance(
     )
     q = select(per_entity.c.cid, func.avg(per_entity.c.decayed)).group_by(per_entity.c.cid)
     rows = (await db.execute(q)).all()
-    return {cid: float(score) for cid, score in rows if score is not None}
+    base = {cid: float(score) for cid, score in rows if score is not None}
+
+    # WS-5 (#115): one-hop interest expansion — a small additive "adjacent interests" nudge. Gated,
+    # and short-circuited when the user has no positive-affinity seeds, so a zero-signal user takes
+    # the EXACT base path (no extra queries, byte-identical) — the G2 no-op invariant holds.
+    if not settings.expansion_enabled:
+        return base
+    seeds = await _seed_affinities(db, user_id)
+    if not seeds:
+        return base
+    from app.services import graph
+    candidates = await graph.one_hop_candidates(db, seeds)
+    if not candidates:
+        return base
+    cent = (
+        await db.execute(
+            select(ClusterArticle.cluster_id, ArticleEntity.entity_id)
+            .join(ArticleEntity, ArticleEntity.article_id == ClusterArticle.article_id)
+            .where(ClusterArticle.cluster_id.in_(cluster_ids))
+            .distinct()
+        )
+    ).all()
+    by_cluster: dict[int, list[int]] = {}
+    for cid, eid in cent:
+        by_cluster.setdefault(cid, []).append(eid)
+    out = dict(base)
+    for cid, eids in by_cluster.items():
+        # AVG adjacency over the cluster's entities, CLAMPED to 1.0 so the term is at most
+        # expansion_weight (a bounded nudge that can't drown the recency/base-relevance signal).
+        adj = min(1.0, sum(candidates.get(e, 0.0) for e in eids) / len(eids))
+        if adj:
+            out[cid] = out.get(cid, 0.0) + settings.expansion_weight * adj
+    return out
 
 
 async def score_cluster_relevance(db: AsyncSession, cluster_id: int, user_id: int | None) -> float:

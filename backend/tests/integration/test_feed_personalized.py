@@ -143,7 +143,9 @@ async def test_feed_on_zero_uer_identical_to_off(aclient, db_session, monkeypatc
 
 @pytest.mark.asyncio
 async def test_feed_on_no_n_plus_one(aclient, db_session, engine, monkeypatch):
-    """The on-path adds only the one score aggregate — query count stays bounded (no per-article N+1)."""
+    """The on-path adds only bounded aggregates — query count stays constant in the article count (no
+    per-article N+1). WS-5 adds one-hop expansion: a couple more single IN-clause queries (seed
+    affinities + graph neighbours), still O(1) in the pool size."""
     from app.config import settings as s
     monkeypatch.setattr(s, "uer_enabled", True)
     await _ensure_user1(db_session)
@@ -171,4 +173,4 @@ async def test_feed_on_no_n_plus_one(aclient, db_session, engine, monkeypatch):
 
     assert resp.status_code == 200
     assert len(resp.json()["articles"]) == 25
-    assert counter["n"] <= 13, f"feed (personalized) issued {counter['n']} SELECTs (possible N+1)"
+    assert counter["n"] <= 15, f"feed (personalized) issued {counter['n']} SELECTs (possible N+1)"
