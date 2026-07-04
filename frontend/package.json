@@ -24,6 +24,7 @@
     "clsx": "^2.1.1",
     "firebase": "^12.15.0",
     "framer-motion": "^12.38.0",
+    "idb-keyval": "^6.2.6",
     "next": "16.2.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",

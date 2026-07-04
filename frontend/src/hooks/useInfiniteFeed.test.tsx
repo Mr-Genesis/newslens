@@ -6,6 +6,7 @@ vi.mock("@/lib/api", () => ({ getFeed: vi.fn() }));
 
 import { getFeed } from "@/lib/api";
 import { useInfiniteFeed } from "./useInfiniteFeed";
+import { memoryBackend, _setBackend, _resetCache } from "@/lib/cache";
 
 const art = (id: number) => ({
   id, title: `S${id}`, url: `https://ex/${id}`, snippet: "s", ai_summary: null,
@@ -17,7 +18,13 @@ const pageResp = (ids: number[], opts: { total?: number; as_of?: string } = {}) 
 });
 const ids = (r: { items: { id: number }[] }) => r.items.map((i) => i.id);
 
-beforeEach(() => vi.mocked(getFeed).mockReset());
+beforeEach(() => {
+  vi.mocked(getFeed).mockReset();
+  // The hook now seeds page 1 from the two-tier cache — isolate it so one test's page-1 write can't
+  // seed the next test's "cold" load (which would mask a first-load error with stale rows).
+  _setBackend(memoryBackend());
+  _resetCache();
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe("useInfiniteFeed", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { AISummaryBox } from "@/components/ui/AISummaryBox";
@@ -26,6 +26,8 @@ import {
   type ClusterDetail,
   type ImpactResult,
 } from "@/lib/api";
+import { useCachedResource } from "@/hooks/useCachedResource";
+import { CACHE_TTL_MS } from "@/lib/cache";
 
 type PageState = "loading" | "success" | "error";
 
@@ -57,9 +59,31 @@ export default function DeepDiveView({
   const params = useParams();
   const clusterId = clusterIdOverride ?? Number(params.clusterId);
 
-  const [state, setState] = useState<PageState>("loading");
-  const [cluster, setCluster] = useState<ClusterDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const validId = !!clusterId && !isNaN(clusterId);
+  // Story detail is served stale-first from the two-tier cache: a previously-viewed (or prefetched)
+  // cluster paints INSTANTLY instead of flashing the skeleton, then revalidates in the background.
+  const {
+    data: cluster,
+    status: clusterStatus,
+    refresh: refetchCluster,
+  } = useCachedResource<ClusterDetail>(
+    validId ? `cluster:${clusterId}` : null,
+    () => getCluster(clusterId),
+    { maxAgeMs: CACHE_TTL_MS.cluster }
+  );
+  // Map onto the existing 3-state view: cached → success, cold miss → skeleton, hard fail / bad id → error.
+  const state: PageState = !validId
+    ? "error"
+    : cluster
+      ? "success"
+      : clusterStatus === "error"
+        ? "error"
+        : "loading";
+  const error = !validId
+    ? "Invalid story ID"
+    : clusterStatus === "error" && !cluster
+      ? "Failed to load story details"
+      : null;
   const [saved, setSaved] = useState(false);
   const [impact, setImpact] = useState<ImpactResult | null>(null);
   const [expandAll, setExpandAll] = useState(false); // BRIEF / FULL toggle (v4)
@@ -121,28 +145,6 @@ export default function DeepDiveView({
     };
   }, [clusterId]);
 
-  const fetchCluster = useCallback(async () => {
-    if (!clusterId || isNaN(clusterId)) {
-      setError("Invalid story ID");
-      setState("error");
-      return;
-    }
-    try {
-      setState("loading");
-      setError(null);
-      const data = await getCluster(clusterId);
-      setCluster(data);
-      setState("success");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load story details");
-      setState("error");
-    }
-  }, [clusterId]);
-
-  useEffect(() => {
-    fetchCluster();
-  }, [fetchCluster]);
-
   const sortedSources = cluster?.sources
     ? [...cluster.sources].sort((a, b) => {
         if (a.is_free !== b.is_free) return a.is_free ? -1 : 1;
@@ -191,7 +193,7 @@ export default function DeepDiveView({
             Couldn&apos;t load this story
           </p>
           {error && <p className="text-mono text-[var(--text-muted)] mt-2">{error}</p>}
-          <Button variant="secondary" onClick={fetchCluster} className="mt-4">
+          <Button variant="secondary" onClick={() => refetchCluster()} className="mt-4">
             Try again
           </Button>
         </div>
