@@ -89,6 +89,29 @@ describe("useInfiniteFeed", () => {
     expect(result.current.status).toBe("done"); // total 2 == one page → caught up
   });
 
+  it("recovers when a mid-scroll page (a prefetch) fails and retry is tapped", async () => {
+    // Regression (WS-3 review, HIGH): a rejected prefetch must not wedge retry by re-awaiting the
+    // same dead promise. Page 1 succeeds + prefetches page 2; page 2 fails once, then recovers.
+    let page2 = 0;
+    vi.mocked(getFeed).mockImplementation(async (p) => {
+      if (p === 1) return pageResp([1, 2], { total: 100 });
+      if (p === 2) {
+        page2 += 1;
+        if (page2 === 1) throw new Error("API 500: prefetch blip");
+        return pageResp([3, 4], { total: 100 });
+      }
+      return pageResp([5, 6], { total: 100 });
+    });
+    const { result } = renderHook(() => useInfiniteFeed({ perPage: 2 }));
+    await waitFor(() => expect(ids(result.current)).toEqual([1, 2]));
+
+    await act(async () => { await result.current.loadMore(); }); // consumes the rejected prefetch
+    await waitFor(() => expect(result.current.status).toBe("error"));
+
+    await act(async () => { result.current.retry(); }); // must issue a FRESH page-2 fetch
+    await waitFor(() => expect(ids(result.current)).toEqual([1, 2, 3, 4]));
+  });
+
   it("fires exactly one loadMore per sentinel intersection (single-fire guard)", async () => {
     let cb: (entries: { isIntersecting: boolean }[]) => void = () => {};
     const observe = vi.fn();

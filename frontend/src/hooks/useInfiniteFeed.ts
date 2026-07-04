@@ -101,6 +101,10 @@ export function useInfiniteFeed({ perPage = 20, topicId, sourceType }: Options =
       resp = await (prefetchRef.current ?? fetchPage(nextPage));
       prefetchRef.current = null;
     } catch {
+      // Drop the poisoned prefetch — otherwise retry() would re-await this same already-rejected
+      // promise (awaiting a settled rejection re-throws) and the feed would be wedged in "error"
+      // forever. Clearing it makes the next loadMore issue a fresh fetchPage(nextPage).
+      prefetchRef.current = null;
       setStatus("error");
       return;
     }
