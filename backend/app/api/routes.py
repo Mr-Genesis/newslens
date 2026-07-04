@@ -169,10 +169,13 @@ async def get_feed(
     # or clears the credibility floor and matches the user's profession-derived audience tags.
     from app.services import audience as _audience
     from app.services import pubmed as _pubmed
-    _profession, _, _pv = await _user_profession_locale(db)
+    _profession, _locale, _pv = await _user_profession_locale(db)
     # #88: keyword map first, LLM fallback for the long tail (cached on persona_version).
     _tags = await _audience.resolve_tags(_profession, user_id=current_user_id(), persona_version=_pv)
     _user_specialty = _pubmed.term_for_profession(_profession)  # #94: for the specialty rank boost
+    # WS-7 (#117): locale region-affinity applies ONLY after an explicit profile save (persona_version
+    # > 1) and when enabled — else None → ranking.locale_mult is a strict ×1.0 no-op.
+    _locale_user = _locale if (app_settings.locale_affinity_enabled and _pv > 1) else None
     _followed = await _audience.followed_source_ids(db, current_user_id())  # #81 opt-in override
     _base_allowed = Article.source_id.in_(
         _audience.allowed_source_ids(
@@ -303,7 +306,7 @@ async def get_feed(
                 ranking.credibility_mult(a.source.credibility_score if a.source else None),
                 ranking.specialty_mult(src_specialty, _user_specialty),
                 ratio,
-            )
+            ) * ranking.locale_mult(a.source.region if a.source else None, _locale_user)
 
         blends = {a.id: _blend(a) for a in articles}
         articles.sort(
@@ -1557,6 +1560,15 @@ async def _user_profession_locale(db: AsyncSession):
     )
 
 
+async def _user_depth(db: AsyncSession) -> str:
+    """WS-7 (#117): the caller's depth preference (brief/standard/expert) — drives the retrieval
+    budget + answer-style suffix across every lens (analysis already did this)."""
+    u = (
+        await db.execute(select(User).where(User.id == current_user_id()))
+    ).scalar_one_or_none()
+    return u.depth_pref if u and u.depth_pref else "standard"
+
+
 async def _user_persona(db: AsyncSession) -> dict:
     """Assemble the full impact persona for the default user. Interests come from the
     user_preferences topic rows (not duplicated onto users)."""
@@ -1820,21 +1832,21 @@ async def cluster_ask(
     q = (body.question or "").strip()
     if not q or len(q) > 500:
         raise HTTPException(status_code=400, detail="question must be 1-500 characters")
-    return await lenses.ask(db, cluster_id, q)
+    return await lenses.ask(db, cluster_id, q, depth_pref=await _user_depth(db))
 
 
 @router.get("/clusters/{cluster_id}/frameworks")
 async def cluster_frameworks(cluster_id: int, db: AsyncSession = Depends(get_db)):
     from app.services import lenses
 
-    return await lenses.frameworks(db, cluster_id)
+    return await lenses.frameworks(db, cluster_id, depth_pref=await _user_depth(db))
 
 
 @router.get("/clusters/{cluster_id}/consensus")
 async def cluster_consensus(cluster_id: int, db: AsyncSession = Depends(get_db)):
     from app.services import lenses
 
-    return await lenses.consensus(db, cluster_id)
+    return await lenses.consensus(db, cluster_id, depth_pref=await _user_depth(db))
 
 
 @router.get("/clusters/{cluster_id}/timeline")
@@ -2089,7 +2101,7 @@ async def cluster_strategic(cluster_id: int, db: AsyncSession = Depends(get_db))
     if not is_geopolitical:
         return {"unavailable": True, "reason": "not_offered_for_topic"}
 
-    return await lenses.strategic(db, cluster_id)
+    return await lenses.strategic(db, cluster_id, depth_pref=await _user_depth(db))
 
 
 @router.get("/clusters/{cluster_id}/trivia")
@@ -2102,7 +2114,7 @@ async def cluster_trivia(
 
     if difficulty not in ("easy", "medium", "hard"):
         raise HTTPException(status_code=400, detail="invalid difficulty")
-    return await lenses.trivia(db, cluster_id, difficulty)
+    return await lenses.trivia(db, cluster_id, difficulty, depth_pref=await _user_depth(db))
 
 
 @router.get("/trivia/daily")

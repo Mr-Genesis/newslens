@@ -36,6 +36,15 @@ def specialty_mult(source_specialty: str | None, user_specialty: str | None) -> 
     return settings.specialty_rank_boost if source_specialty == user_specialty else 1.0
 
 
+def locale_mult(source_region: str | None, user_locale: str | None) -> float:
+    """WS-7 (#117): a bounded region-affinity nudge — ×locale_affinity_boost when the source's region
+    matches the user's locale (case-insensitive), else ×1.0. Pass user_locale=None to disable (the
+    caller gates on locale_affinity_enabled + an explicit persona), so it's a strict no-op by default."""
+    if not user_locale or not source_region:
+        return 1.0
+    return settings.locale_affinity_boost if source_region.strip().lower() == user_locale.strip().lower() else 1.0
+
+
 def blend_score(
     recency: float, relevance: float, cred: float, specialty: float, ratio: float | None = None
 ) -> float:
