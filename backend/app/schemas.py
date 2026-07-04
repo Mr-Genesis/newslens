@@ -328,10 +328,19 @@ class SavedListResponse(BaseModel):
 
 
 # --- Stats ---
+class SurfaceCTR(BaseModel):
+    surface: str
+    impressions: int  # DISTINCT stories impressed on this surface (lifetime)
+    clicks: int       # DISTINCT stories opened (read + interesting) on this surface (lifetime)
+    ctr: float        # clicks / impressions, bounded to [0,1]; a lifetime aggregate, not a session rate
+
+
 class StatsResponse(BaseModel):
     articles_read: int
     stories_saved: int
     topics_explored: int
+    # WS-5 (#115): per-surface impressions + click-through rate (consumes WS-1's surface-tagged log).
+    surfaces: list[SurfaceCTR] = []
 
 
 # --- Impact engine v2 (Wave A) ---

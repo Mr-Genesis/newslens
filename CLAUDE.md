@@ -68,7 +68,7 @@ news-app/
 │   │   ├── main.py                   # FastAPI app, lifespan, scheduler setup
 │   │   ├── config.py                 # Pydantic settings (env vars)
 │   │   ├── database.py               # SQLAlchemy async engine + session
-│   │   ├── models.py                 # SQLAlchemy ORM models (16 tables) + RLS DDL events
+│   │   ├── models.py                 # SQLAlchemy ORM models (17 tables) + RLS DDL events
 │   │   │                             #   incl. entities, entity_aliases, article_entities (G1),
 │   │   │                             #   user_entity_relevance (G2), follows (C), cluster_edges (D2)
 │   │   ├── schemas.py                # Pydantic request/response schemas
@@ -161,7 +161,7 @@ news-app/
 | POST | /settings/test-key | Validate OpenAI API key |
 | GET | /saved | User's saved articles list |
 | DELETE | /saved/{article_id} | Remove a saved article |
-| GET | /stats | Reading stats (articles read, saved, topics explored) |
+| GET | /stats | Reading stats (articles read, saved, topics explored) + per-surface impressions & CTR (`surfaces[]`, opens=read+interesting / impressions; WS-5) |
 | GET/PUT | /profile | Persona: profession, locale, interests, watchlist, depth_pref, region |
 | PUT | /settings/gemini-key | Save/remove per-user Gemini key (Fernet) |
 | POST | /settings/test-gemini-key | Validate Gemini key |
@@ -200,6 +200,7 @@ news-app/
 6. **Credibility Review** (monthly, 03:00 on the 1st) → propose-only LLM pass over gated rows unreviewed >90d → writes `credibility_meta.proposed_score` + `reviewed_by="llm-proposed"`; never touches the live score, preserves the admin lock, no-ops without a platform LLM key
 7. **PubMed Ingest** (weekly, Mon 04:00; gated by `PUBMED_ENABLED`) → NCBI E-utilities → recent abstracts for each medical profession as gated research articles (`audience=["medicine"]`), deduped by PMID, ≤3 req/s
 8. **arXiv Generate** (weekly, Mon 04:30) → maps subscribed-topic interests to arXiv categories and idempotently ensures those research sources
+9. **Entity Edge Aggregation** (nightly, 02:00; gated by `ENTITY_EDGE_ENABLED`) → rebuilds `entity_edges` from scratch: co-occurrence weight = Σ over shared clusters of `exp(-ln2·cluster_age/half_life)`, top-K per source, both directions. Full recompute ⇒ idempotent + skip-tolerant. Feeds one-hop interest expansion (WS-5)
 
 ## Key Patterns
 
