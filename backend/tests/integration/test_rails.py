@@ -57,8 +57,10 @@ async def _story(db, title, *, topic=None, entity=None, hours_ago=1):
 @pytest.fixture(autouse=True)
 def _clear_rail_cache():
     rails_svc._cache.clear()
+    rails_svc._generation.clear()
     yield
     rails_svc._cache.clear()
+    rails_svc._generation.clear()
 
 
 @pytest.mark.asyncio
@@ -174,3 +176,27 @@ async def test_one_failing_rail_does_not_kill_the_section(aclient, db_session, m
     values = {x["value"] for x in rails}
     assert "Good" in values          # the healthy rail survived
     assert "boom" not in values      # the exploded rail was dropped, not fatal
+
+
+@pytest.mark.asyncio
+async def test_invalidate_mid_build_skips_stale_cache_write(db_session, monkeypatch):
+    """LOW (review): a create/delete/seen that lands WHILE rails_for_user is building must not be
+    masked by a stale write-back for a full TTL. Simulate the race by invalidating during the build."""
+    await _ensure_user(db_session)
+    await _story(db_session, "Flood", topic="Weather")
+    db_session.add(Follow(user_id=1, kind="topic", value="Weather"))
+    await db_session.flush()
+    rails_svc._cache.clear()
+    rails_svc._generation.clear()
+
+    real_eval = rails_svc.evaluate_topic
+
+    async def _eval_then_invalidate(db, name, since):
+        out = await real_eval(db, name, since)
+        rails_svc.invalidate(1)  # a concurrent mutation lands mid-build
+        return out
+
+    monkeypatch.setattr(rails_svc, "evaluate_topic", _eval_then_invalidate)
+    await rails_svc.rails_for_user(db_session, 1)
+    # The generation advanced during the build → the stale result was NOT cached.
+    assert 1 not in rails_svc._cache

@@ -43,18 +43,36 @@ RAIL_KINDS = ("saved_search", "topic", "entity")
 # 60s per-user cache: {user_id: (expires_epoch, payload)}. Process-local (a restart re-warms); a
 # follow create/delete or a /seen tap busts the caller's entry (see invalidate()).
 _cache: dict[int, tuple[float, list]] = {}
+# Per-user generation, bumped on every invalidate(). rails_for_user captures it before it starts
+# building and only writes the cache back if it's unchanged — so a create/delete/seen that lands
+# mid-build isn't masked by a stale write-back for a full TTL (compare-and-set).
+_generation: dict[int, int] = {}
 
 
 def invalidate(user_id: int) -> None:
     _cache.pop(user_id, None)
+    _generation[user_id] = _generation.get(user_id, 0) + 1
 
 
-def _admit(dist: float | None, keyword_hit: bool, entity_hit: bool) -> bool:
-    """The precision guard. A cluster joins a saved-search rail iff it's semantically near AND a
-    proper-noun hit confirms it, OR it's a very tight pure-semantic match. dist is None when the
-    semantic leg was unavailable — then a keyword/entity hit alone admits (keyword-only fallback)."""
+def _escape_like(s: str) -> str:
+    r"""Escape LIKE metacharacters so a saved-search phrase is matched LITERALLY — otherwise a
+    stray % or _ in the phrase acts as a wildcard and widens the keyword leg. Pairs with
+    ilike(..., escape='\\')."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _admit(dist: float | None, keyword_hit: bool, entity_hit: bool, *, semantic_available: bool) -> bool:
+    """The precision guard. When the semantic leg ran, a cluster joins a saved-search rail iff it's
+    semantically near AND a proper-noun hit confirms it, OR it's a very tight pure-semantic match —
+    keyword/entity hits are ONLY confirmation, never independent admission (else "US Iran war" pulls
+    in every Iran story via the entity leg). ONLY when the semantic leg was entirely unavailable
+    (embeddings down) do we degrade to a keyword-or-entity match. Distinguishing these two `dist is
+    None` cases is the whole point — a keyword/entity hit that merely fell outside the ANN top-k is
+    NOT the same as "we couldn't embed the query at all"."""
+    if not semantic_available:
+        return keyword_hit or entity_hit  # degraded: proper-noun match only
     if dist is None:
-        return keyword_hit or entity_hit
+        return False  # semantic ran but this candidate wasn't near enough to surface — reject
     if dist < settings.rails_dist_tight:
         return True
     if dist < settings.rails_dist_loose and (keyword_hit or entity_hit):
@@ -112,16 +130,21 @@ async def evaluate_saved_search(db: AsyncSession, phrase: str, since) -> set[int
         if dist_by_article:
             _log_distance_histogram(phrase, list(dist_by_article.values()))
 
-    # Keyword leg: exact substring in the title (recency-scoped).
-    like = f"%{phrase}%"
+    # Keyword leg: literal substring in the title (recency-scoped; LIKE metacharacters escaped so
+    # "%" / "_" in the phrase don't act as wildcards). Bounded to the newest rails_ann_k so a broad
+    # phrase ("India") can't union thousands of rows into one IN(...).
+    like = f"%{_escape_like(phrase)}%"
     kw_ids = set(
         (
             await db.execute(
-                select(Article.id).where(
-                    Article.title.ilike(like),
+                select(Article.id)
+                .where(
+                    Article.title.ilike(like, escape="\\"),
                     Article.published_at.isnot(None),
                     Article.published_at >= since,
                 )
+                .order_by(Article.published_at.desc())
+                .limit(settings.rails_ann_k)
             )
         ).scalars()
     )
@@ -129,12 +152,20 @@ async def evaluate_saved_search(db: AsyncSession, phrase: str, since) -> set[int
     # Entity leg: the phrase (or a token of it) matches a known entity alias → its recent articles.
     ent_ids = await _entity_leg(db, phrase, since)
 
-    # Union of every candidate, then admit per the precision guard.
-    candidates = set(dist_by_article) | kw_ids | ent_ids
+    # Admit per the precision guard. When the semantic leg ran, ONLY its top-k are candidates —
+    # keyword/entity legs are confirmation flags, never independent admission (see _admit). When it
+    # was unavailable, the proper-noun legs are all we have, so THEY become the candidate set.
+    semantic_available = emb is not None
+    candidates = set(dist_by_article) if semantic_available else (kw_ids | ent_ids)
     admitted = {
         aid
         for aid in candidates
-        if _admit(dist_by_article.get(aid), aid in kw_ids, aid in ent_ids)
+        if _admit(
+            dist_by_article.get(aid),
+            aid in kw_ids,
+            aid in ent_ids,
+            semantic_available=semantic_available,
+        )
     }
     return set((await _recent_cluster_of(db, sorted(admitted), since)).values())
 
@@ -163,6 +194,8 @@ async def _entity_leg(db: AsyncSession, phrase: str, since) -> set[int]:
                     Article.published_at.isnot(None),
                     Article.published_at >= since,
                 )
+                .order_by(Article.published_at.desc())
+                .limit(settings.rails_ann_k)  # bound: a hot entity ("Iran") can tag hundreds in 72h
             )
         ).scalars()
     )
@@ -268,6 +301,9 @@ async def rails_for_user(db: AsyncSession, user_id: int) -> list[dict]:
     if cached and cached[0] > now:
         return cached[1]
 
+    # Capture the generation BEFORE building. If a create/delete/seen invalidate() bumps it while we
+    # await DB calls below, we skip the stale write-back rather than mask the mutation for a full TTL.
+    gen_at_start = _generation.get(user_id, 0)
     since = datetime.now(timezone.utc) - timedelta(hours=settings.rails_recency_hours)
     follows = (
         await db.execute(
@@ -324,5 +360,7 @@ async def rails_for_user(db: AsyncSession, user_id: int) -> list[dict]:
             }
         )
 
-    _cache[user_id] = (now + settings.rails_cache_ttl_seconds, rails)
+    # Compare-and-set: only cache if no invalidate() landed while we were building (see gen_at_start).
+    if _generation.get(user_id, 0) == gen_at_start:
+        _cache[user_id] = (now + settings.rails_cache_ttl_seconds, rails)
     return rails
