@@ -355,8 +355,19 @@ def cluster_coherence(cluster: StoryCluster, articles: list[Article]) -> float:
     from a cached consensus pass for the current sources — so a contested story can score below the
     heuristic floor — then the stored value, then the source-overlap heuristic. Pure read (no LLM, no
     extra query): it only inspects the already-loaded cluster + the consensus cache."""
+    sh = _source_hash(articles)
     try:
-        cons = _cache_read(cluster, "extra_json", "consensus", _source_hash(articles))
+        cons = _cache_read(cluster, "extra_json", "consensus", sh)
+        if cons is None:
+            # WS-7: a non-standard-depth consensus is cached under "consensus:<depth>" — fall back to
+            # any of them for the CURRENT sources so coherence isn't lost for brief/expert users (the
+            # depth-scoped cache subkeys otherwise hide the agreement ratio from this standard-slot read).
+            extra = getattr(cluster, "extra_json", None) or {}
+            for k in extra:
+                if k.startswith("consensus:"):
+                    cons = _cache_read(cluster, "extra_json", k, sh)
+                    if cons is not None:
+                        break
     except AttributeError:
         cons = None  # cluster-like object without the JSONB column → fall through (never crash a read)
     if isinstance(cons, dict):

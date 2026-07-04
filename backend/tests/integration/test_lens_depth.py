@@ -74,3 +74,27 @@ async def test_trivia_depth_scoped_cache_subkey(db_session, monkeypatch):
     await lenses.trivia(db_session, c.id, "medium", depth_pref="standard")
     await lenses.trivia(db_session, c.id, "medium", depth_pref="expert")
     assert len(prompts) == 2  # "medium" vs "medium:expert" — a brief/standard answer never cross-serves
+
+
+@pytest.mark.asyncio
+async def test_coherence_reads_a_non_standard_depth_consensus(db_session, monkeypatch):
+    """Review regression: cluster_coherence reads the plain 'consensus' slot, but a brief/expert user's
+    consensus lands under 'consensus:<depth>'. Coherence must fall back to it so the honest agreement
+    ratio survives non-standard depth (not silently revert to the source-overlap heuristic)."""
+    from sqlalchemy import select
+
+    c = await _cluster(db_session)
+
+    async def _gen(prompt, **kw):
+        return {"agree_count": 0, "summary": "", "dissent": []}  # 0 of 1 agree → coherence 0.0
+
+    monkeypatch.setattr(lenses.llm, "generate", _gen)
+    await lenses.consensus(db_session, c.id, depth_pref="expert")  # writes "consensus:expert" only
+    await db_session.refresh(c)
+
+    arts = (await db_session.execute(
+        select(Article).join(ClusterArticle, ClusterArticle.article_id == Article.id)
+        .where(ClusterArticle.cluster_id == c.id)
+    )).scalars().all()
+    coh = lenses.cluster_coherence(c, arts)
+    assert coh == 0.0  # used the expert-depth consensus (0/1), NOT the 1-source heuristic (0.65)
