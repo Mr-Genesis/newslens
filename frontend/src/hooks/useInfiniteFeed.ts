@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getFeed, type Article, type FeedResponse } from "@/lib/api";
+import { peek, store } from "@/lib/cache";
 
 export type FeedStatus = "loading" | "idle" | "paging" | "done" | "error";
 
@@ -40,6 +41,11 @@ export function useInfiniteFeed({ perPage = 20, topicId, sourceType }: Options =
   const mountedRef = useRef(true);
   const optsRef = useRef({ perPage, topicId, sourceType });
   optsRef.current = { perPage, topicId, sourceType };
+  // Cache key for the FIRST page of this query — a remount (back-navigation) seeds its initial paint
+  // from here instead of a skeleton; loadFirst then revalidates and replaces the page-1 window.
+  const cacheKey = `feed:${topicId ?? "all"}:${sourceType ?? "all"}:${perPage}`;
+  const cacheKeyRef = useRef(cacheKey);
+  cacheKeyRef.current = cacheKey;
 
   const setStatus = (s: FeedStatus) => {
     statusRef.current = s;
@@ -73,14 +79,18 @@ export function useInfiniteFeed({ perPage = 20, topicId, sourceType }: Options =
   }, []);
 
   const loadFirst = useCallback(async (): Promise<void> => {
-    setStatus("loading");
+    if (idsRef.current.size === 0) setStatus("loading"); // seeded-from-cache → revalidate silently
     try {
       const { perPage, topicId, sourceType } = optsRef.current;
       const resp = await getFeed(1, perPage, topicId, sourceType);  // first page: NO cursor (unfiltered)
       asOfRef.current = resp.as_of ?? null;
       pageRef.current = 1;
-      append(resp.articles);
+      // REPLACE the page-1 window (not append) so a fresh page 1 supersedes any cache-seeded rows in
+      // the correct order; loadMore keeps appending pages 2+.
+      idsRef.current = new Set(resp.articles.map((a) => a.id));
+      if (mountedRef.current) setItems(resp.articles);
       setTotal(resp.total);
+      void store(cacheKeyRef.current, resp); // cache page 1 for the next remount
       if (hasMore(resp, 1)) {
         prefetch(2);
         setStatus("idle");
@@ -88,11 +98,17 @@ export function useInfiniteFeed({ perPage = 20, topicId, sourceType }: Options =
         setStatus("done");
       }
     } catch {
-      setStatus("error");
+      if (idsRef.current.size === 0) setStatus("error"); // keep cache-seeded rows on a failed revalidate
     }
-  }, [append, hasMore, prefetch]);
+  }, [hasMore, prefetch]);
 
   const loadMore = useCallback(async function loadMore(): Promise<void> {
+    // WS-3 cursor safety: never page until a cursor has been pinned. A cache-seeded feed is 'idle'
+    // with pageRef=0 AND asOfRef=null before loadFirst's first fetch lands, and the sentinel can already
+    // be on screen — without this a scroll fires a page-1 fetch with a null cursor (unpinned window).
+    // (The stale-cursor recovery below also sets pageRef=0, but with asOfRef already pinned, so it is
+    // NOT blocked here.)
+    if (pageRef.current === 0 && asOfRef.current === null) return;
     if (statusRef.current !== "idle") return;  // only page from a settled, has-more state (single-fire)
     setStatus("paging");
     const nextPage = pageRef.current + 1;
@@ -149,9 +165,19 @@ export function useInfiniteFeed({ perPage = 20, topicId, sourceType }: Options =
     mountedRef.current = true;
     pageRef.current = 0;
     asOfRef.current = null;
-    idsRef.current = new Set();
     prefetchRef.current = null;
-    setItems([]);
+    // Seed the first paint from cache (in-session back-navigation) so the feed shows instantly rather
+    // than a skeleton; loadFirst then revalidates and replaces the page-1 window.
+    const seeded = peek<FeedResponse>(cacheKeyRef.current);
+    if (seeded && seeded.articles.length) {
+      idsRef.current = new Set(seeded.articles.map((a) => a.id));
+      setItems(seeded.articles);
+      setTotal(seeded.total);
+      setStatus("idle");
+    } else {
+      idsRef.current = new Set();
+      setItems([]);
+    }
     void loadFirst();
     return () => {
       mountedRef.current = false;

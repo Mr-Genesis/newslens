@@ -7,6 +7,7 @@ vi.mock("@/lib/api", () => ({ getFeed: vi.fn(), postImpressions: vi.fn().mockRes
 
 import { getFeed } from "@/lib/api";
 import { InfiniteFeed } from "./InfiniteFeed";
+import { memoryBackend, _setBackend, _resetCache } from "@/lib/cache";
 
 const art = (id: number) => ({
   id, title: `S${id}`, url: `https://ex/${id}`, snippet: "snip", ai_summary: null,
@@ -17,7 +18,13 @@ const pageResp = (ids: number[], total = ids.length) => ({
   articles: ids.map(art), total, page: 1, per_page: 20, as_of: "T0",
 });
 
-beforeEach(() => vi.mocked(getFeed).mockReset());
+beforeEach(() => {
+  vi.mocked(getFeed).mockReset();
+  // The feed now seeds page 1 from the two-tier cache — isolate it so a prior test's page-1 write
+  // can't seed the "cold skeleton" test with stale rows.
+  _setBackend(memoryBackend());
+  _resetCache();
+});
 
 describe("InfiniteFeed", () => {
   it("renders feed rows and the caught-up terminal when the window fits one page", async () => {

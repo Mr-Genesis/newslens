@@ -18,8 +18,10 @@ import { InfiniteFeed } from "@/components/InfiniteFeed";
 import { useImpressions } from "@/hooks/useImpressions";
 import { AnimatedMark } from "@/components/SplashScreen";
 import { getBriefing, getTopics, type Briefing, type BriefingStory, type Topic } from "@/lib/api";
+import { useCachedResource } from "@/hooks/useCachedResource";
+import { usePrefetchClusters } from "@/hooks/usePrefetchClusters";
+import { CACHE_TTL_MS } from "@/lib/cache";
 import { isStale } from "@/lib/utils";
-import { cn } from "@/lib/utils";
 
 type PageState = "loading" | "success" | "error" | "empty" | "refreshing";
 
@@ -45,11 +47,7 @@ const staggerContainer = {
 };
 
 export default function BriefingPage() {
-  const [state, setState] = useState<PageState>("loading");
-  const [briefing, setBriefing] = useState<Briefing | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string>("All");
-  const [rechecking, setRechecking] = useState(false);
   const [userTopics, setUserTopics] = useState<Topic[]>([]);
   // WS-3 (#113): cross-section dedupe — cluster ids the rails render, lifted up so the "All stories"
   // feed can filter them out (precedence hero > rails > categories > feed). And a key that pull-to-
@@ -59,6 +57,34 @@ export default function BriefingPage() {
   const router = useRouter();
   // WS-1: log which briefing stories were actually SEEN (>=50% for >=1s); tag taps with the surface.
   const { observe } = useImpressions("briefing");
+
+  // Briefing is served stale-first from the two-tier cache: the last-known briefing paints INSTANTLY
+  // (masking a cold Render backend and every back-navigation to home), then revalidates in the
+  // background. Cold first-ever launch has no cache → the loader shows until the first fetch returns.
+  const {
+    data: briefing,
+    status: cacheStatus,
+    validating,
+    refresh,
+  } = useCachedResource<Briefing>("briefing", getBriefing, { maxAgeMs: CACHE_TTL_MS.briefing });
+
+  // Prefetch the top few story details while the briefing is on screen → tapping a card opens instantly.
+  usePrefetchClusters(briefing?.stories.map((s) => s.cluster_id) ?? []);
+
+  const hasStories = !!briefing && briefing.stories.length > 0;
+  const pageState: PageState = hasStories
+    ? "success"
+    : briefing
+      ? "empty" // fetched, but zero stories → cold-start pipeline still warming up
+      : cacheStatus === "error"
+        ? "error"
+        : "loading";
+
+  // Pull-to-refresh / manual refresh: reset the feed's as_of cursor AND revalidate the briefing.
+  const handleRefresh = useCallback(async () => {
+    setFeedKey((k) => k + 1);
+    await refresh();
+  }, [refresh]);
 
   // The user's topics (with real article counts) — chips shouldn't be limited to whatever
   // categories happen to appear in today's 8 briefing stories.
@@ -75,56 +101,13 @@ export default function BriefingPage() {
     }
   }, [router]);
 
-  const fetchBriefing = useCallback(async (isRefresh = false) => {
-    try {
-      setState(isRefresh ? "refreshing" : "loading");
-      setError(null);
-      if (isRefresh) setFeedKey((k) => k + 1); // pull-to-refresh resets the feed's as_of cursor
-      const data = await getBriefing();
-
-      if (!data.stories || data.stories.length === 0) {
-        setState("empty");
-        return;
-      }
-
-      setBriefing(data);
-      setState("success");
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to load briefing"
-      );
-      setState("error");
-    }
-  }, []);
-
+  // While the first briefing is still warming up (empty), quietly revalidate every 20s so the launch
+  // screen advances to the feed on its own.
   useEffect(() => {
-    fetchBriefing();
-  }, [fetchBriefing]);
-
-  // Silent cold-start re-check: keeps the launch screen mounted (no "refreshing"
-  // flash) and only flips to success once stories arrive.
-  const recheckBriefing = useCallback(async () => {
-    setRechecking(true);
-    try {
-      const data = await getBriefing();
-      if (data.stories && data.stories.length > 0) {
-        setBriefing(data);
-        setState("success");
-      }
-    } catch {
-      /* still warming up — stay on the launch screen */
-    } finally {
-      setRechecking(false);
-    }
-  }, []);
-
-  // While the first briefing is still warming up (empty), quietly re-check every
-  // 20s so the launch screen advances to the feed on its own.
-  useEffect(() => {
-    if (state !== "empty") return;
-    const id = setInterval(recheckBriefing, 20000);
+    if (pageState !== "empty") return;
+    const id = setInterval(() => void refresh(), 20000);
     return () => clearInterval(id);
-  }, [state, recheckBriefing]);
+  }, [pageState, refresh]);
 
   // Chips = union of today's briefing categories AND the user's topics that actually have
   // articles. Before, chips came only from the ≤8 briefing stories' categories, so the row was
@@ -176,10 +159,10 @@ export default function BriefingPage() {
   );
 
   return (
-    <PullToRefresh onRefresh={() => fetchBriefing(true)}>
+    <PullToRefresh onRefresh={handleRefresh}>
     <div className="mx-auto max-w-[640px] w-full px-[var(--space-md)]">
       {/* Greeting + Date */}
-      {(state === "success" || state === "refreshing") && (
+      {pageState === "success" && (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -199,7 +182,7 @@ export default function BriefingPage() {
       )}
 
       {/* Topic chips */}
-      {(state === "success" || state === "refreshing") &&
+      {pageState === "success" &&
         categories.length > 2 && (
           <div className="flex flex-nowrap gap-2 overflow-x-auto no-scrollbar overscroll-x-contain py-3 -mx-4 px-4">
             {categories.map((cat) => (
@@ -215,7 +198,7 @@ export default function BriefingPage() {
         )}
 
       {/* Follow the topic you've filtered to — kept quiet until a topic is picked */}
-      {(state === "success" || state === "refreshing") &&
+      {pageState === "success" &&
         activeCategory !== "All" && (
           <div className="flex justify-end mb-2">
             <FollowButton
@@ -230,7 +213,7 @@ export default function BriefingPage() {
       {/* Loading state — FIRST load (no content yet) gets the branded animated-mark loader
           (device-QA #11: "I see news loading instead of the loader screen"); skeletons only
           when we already have content on screen (refresh / topic switch). */}
-      {state === "loading" &&
+      {pageState === "loading" &&
         (!briefing || briefing.stories.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-center min-h-[60vh]">
             <AnimatedMark size={120} loop />
@@ -249,12 +232,12 @@ export default function BriefingPage() {
         ))}
 
       {/* Empty / first-run state — cold-start launch experience */}
-      {state === "empty" && (
-        <LaunchScreen onRetry={recheckBriefing} refreshing={rechecking} />
+      {pageState === "empty" && (
+        <LaunchScreen onRetry={refresh} refreshing={validating} />
       )}
 
       {/* Error state */}
-      {state === "error" && (
+      {pageState === "error" && (
         <div className="flex flex-col items-center justify-center pt-[var(--space-3xl)] text-center">
           <div className="w-12 h-12 rounded-full bg-[var(--dismiss-muted)] flex items-center justify-center mb-4">
             <svg
@@ -275,13 +258,10 @@ export default function BriefingPage() {
           <p className="text-heading text-[var(--text-primary)]">
             Couldn&apos;t load briefing
           </p>
-          {error && (
-            <p className="text-mono text-[var(--dismiss)] mt-2">{error}</p>
-          )}
           <Button
             variant="secondary"
             size="md"
-            onClick={() => fetchBriefing()}
+            onClick={() => refresh()}
             className="mt-4"
           >
             Try again
@@ -290,9 +270,8 @@ export default function BriefingPage() {
       )}
 
       {/* Success: hero + categorized stories */}
-      {(state === "success" || state === "refreshing") && (
+      {pageState === "success" && (
         <motion.div
-          className={cn(state === "refreshing" && "opacity-80")}
           variants={staggerContainer}
           initial="initial"
           animate="animate"
@@ -372,8 +351,8 @@ export default function BriefingPage() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => fetchBriefing(true)}
-              loading={state === "refreshing"}
+              onClick={handleRefresh}
+              loading={validating}
             >
               Refresh briefing
             </Button>
