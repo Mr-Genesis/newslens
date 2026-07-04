@@ -1682,6 +1682,7 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
         u.profession = body.profession.strip() or None
     if body.locale is not None:
         u.locale = body.locale.strip() or "IN"
+    new_topic_ids: list[int] = []
     if body.interests is not None:
         await db.execute(
             UserPreference.__table__.delete().where(
@@ -1699,6 +1700,7 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
                 topic = Topic(name=name)
                 db.add(topic)
                 await db.flush()
+                new_topic_ids.append(topic.id)
             db.add(
                 UserPreference(user_id=current_user_id(), topic_id=topic.id, weight=1.0)
             )
@@ -1711,6 +1713,14 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
     # Any profile edit bumps persona_version → lazily invalidates this user's cached impacts.
     u.persona_version = (u.persona_version or 1) + 1
     await db.commit()
+    # A freshly-created interest has no tagged articles yet — retroactively tag existing articles in the
+    # background (the topic is committed above, so the job's own session sees it) so the interest
+    # surfaces content within seconds instead of waiting for the next matching article.
+    if new_topic_ids:
+        from app.services.fetcher import schedule_topic_backfill
+
+        for tid in new_topic_ids:
+            schedule_topic_backfill(tid)
     return await get_profile(db)
 
 

@@ -1,5 +1,6 @@
 """RSS feed fetcher service with retry and structured logging."""
 
+import asyncio
 import html
 import json
 import re
@@ -90,6 +91,127 @@ async def assign_topics(session, article: Article):
                 session.add(
                     ArticleTopic(article_id=article.id, topic_id=topic.id)
                 )
+
+
+async def backfill_topic_articles(session, topic_id: int, limit: int = 200) -> int:
+    """Retroactively tag EXISTING articles to a (usually just-created) topic — the inverse of
+    assign_topics. Seeds the topic embedding if missing, then: (1) pgvector-NN the closest articles
+    within the similarity threshold, and (2) a keyword pass on the exact topic name. Bounded by `limit`.
+    Returns the number of ArticleTopic rows created. Without this, a freshly-created interest stays at
+    0 articles until the NEXT matching article happens to arrive.
+    """
+    from sqlalchemy import or_
+
+    from app.config import settings
+    from app.services.embeddings import generate_embedding, vector_literal
+
+    topic = (await session.execute(select(Topic).where(Topic.id == topic_id))).scalar_one_or_none()
+    if topic is None:
+        return 0
+
+    # A pgvector literal for the topic's embedding — generate + persist one if it's missing.
+    emb_literal: str | None = None
+    if topic.embedding is not None:
+        emb_literal = vector_literal(topic.embedding)
+    else:
+        try:
+            emb = await generate_embedding(f"News about {topic.name}")
+        except Exception:
+            emb = None
+        if emb:
+            emb_literal = vector_literal(emb)
+            await session.execute(
+                text("UPDATE topics SET embedding = :emb WHERE id = :tid"),
+                {"emb": emb_literal, "tid": topic_id},
+            )
+            await session.flush()
+
+    already = set(
+        (
+            await session.execute(
+                select(ArticleTopic.article_id).where(ArticleTopic.topic_id == topic_id)
+            )
+        ).scalars().all()
+    )
+    created = 0
+
+    # 1) semantic pass — the K nearest articles within the distance threshold.
+    if emb_literal is not None:
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT id, (embedding <=> :emb) AS distance FROM articles "
+                    "WHERE embedding IS NOT NULL ORDER BY embedding <=> :emb LIMIT :k"
+                ),
+                {"emb": emb_literal, "k": limit},
+            )
+        ).all()
+        for row in rows:
+            if row.id in already or row.distance >= settings.new_topic_max_similarity:
+                continue
+            session.add(
+                ArticleTopic(article_id=row.id, topic_id=topic_id, relevance_score=1.0 - row.distance)
+            )
+            already.add(row.id)
+            created += 1
+
+    # 2) keyword pass — the exact topic name as a whole word in title/snippet (catches e.g. "AI").
+    kw = (
+        await session.execute(
+            select(Article.id, Article.title, Article.snippet)
+            .where(or_(Article.title.ilike(f"%{topic.name}%"), Article.snippet.ilike(f"%{topic.name}%")))
+            .limit(limit)
+        )
+    ).all()
+    pat = re.compile(rf"\b{re.escape(topic.name.lower())}\b")
+    for aid, title, snippet in kw:
+        if aid in already:
+            continue
+        if pat.search(f"{title or ''} {snippet or ''}".lower()):
+            session.add(ArticleTopic(article_id=aid, topic_id=topic_id))
+            already.add(aid)
+            created += 1
+
+    await session.flush()
+    return created
+
+
+# Topics with a backfill in flight — dedupe + strong task refs so a fire-and-forget backfill can't be
+# GC-cancelled mid-run (same footgun as schedule_summary).
+_topic_backfill_scheduled: set[int] = set()
+_topic_backfill_tasks: "set[asyncio.Task]" = set()
+
+
+def schedule_topic_backfill(topic_id: int) -> "asyncio.Task | None":
+    """Fire-and-forget: retroactively tag existing articles to a newly-created topic in the background,
+    so a seeded interest surfaces content within seconds. Deduped per topic, gated by
+    settings.topic_backfill_enabled, strong task reference retained until done."""
+    from app.config import settings
+
+    if not getattr(settings, "topic_backfill_enabled", True):
+        return None
+    if topic_id in _topic_backfill_scheduled:
+        return None
+    _topic_backfill_scheduled.add(topic_id)
+
+    async def _run() -> None:
+        try:
+            async with async_session() as session:
+                await backfill_topic_articles(session, topic_id)
+                await session.commit()
+        except Exception as e:  # noqa: BLE001 — best-effort; the periodic backfill catches misses
+            logger.warning("topic_backfill_failed", topic_id=topic_id, error=str(e))
+        finally:
+            _topic_backfill_scheduled.discard(topic_id)
+
+    try:
+        task = asyncio.create_task(_run())
+    except RuntimeError:
+        _topic_backfill_scheduled.discard(topic_id)
+        return None
+    _topic_backfill_tasks.add(task)
+    task.add_done_callback(_topic_backfill_tasks.discard)
+    return task
 
 
 async def backfill_topic_assignments():

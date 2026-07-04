@@ -235,6 +235,9 @@ class Settings(BaseSettings):
     # real summary in the background; new clusters are summarized eagerly on creation. Kill-switch → the
     # read paths still fall back to snippets, just without the background warm.
     eager_summaries_enabled: bool = True
+    # Retroactively tag existing articles when a user subscribes to a brand-new topic, so the interest
+    # surfaces content within seconds instead of waiting for the next matching article. Kill-switch.
+    topic_backfill_enabled: bool = True
 
     # Impact engine v2 (Wave A): structured + validated + guarded WIIFM.
     # Flip off to fall back to the legacy free-text impact lens.
