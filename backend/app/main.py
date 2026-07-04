@@ -129,9 +129,10 @@ async def seed_topic_embeddings():
             for topic_id, topic_name in topics:
                 embedding = await generate_embedding(f"News about {topic_name}")
                 if embedding:
+                    from app.services.embeddings import vector_literal
                     await session.execute(
                         text("UPDATE topics SET embedding = :emb WHERE id = :tid"),
-                        {"emb": str(embedding), "tid": topic_id},
+                        {"emb": vector_literal(embedding), "tid": topic_id},
                     )
                     seeded += 1
             await session.commit()

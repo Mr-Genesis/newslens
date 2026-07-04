@@ -94,6 +94,18 @@ async def _resolve_embedding_key() -> str | None:
     return await _resolve_gemini_key()
 
 
+def vector_literal(embedding) -> str:
+    """A pgvector text literal — COMMA-separated: "[0.1,0.2,0.3]".
+
+    A pgvector column round-trips as a numpy ndarray, and `str(ndarray)` is SPACE-separated
+    ("[0.1 0.2 ...]") and truncates long arrays with "..." — both of which pgvector's parser rejects
+    with a syntax error. Every raw `embedding <=> :param` query must build the literal through here
+    (works for ndarray AND plain-list embeddings) rather than str(), or the query silently blows up.
+    """
+    values = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
+    return "[" + ",".join(str(v) for v in values) + "]"
+
+
 class QuotaExceeded(Exception):
     """A Gemini 429 (rate/daily-quota). Raised so the backfill can circuit-break instead of
     re-firing a dead quota every 5 minutes (which torches the ~1,000/day free-tier embedding cap)."""

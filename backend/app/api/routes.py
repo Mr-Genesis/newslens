@@ -2122,7 +2122,7 @@ async def search(
 
     # Semantic (pgvector NN) — lower priority than exact keyword.
     # Use the cached query-embedding helper to avoid re-embedding repeated queries.
-    from app.services.embeddings import embed_query_cached
+    from app.services.embeddings import embed_query_cached, vector_literal
 
     try:
         emb = await embed_query_cached(query_str)
@@ -2135,7 +2135,7 @@ async def search(
                     "SELECT id FROM articles WHERE embedding IS NOT NULL "
                     "ORDER BY embedding <=> :v LIMIT :k"
                 ),
-                {"v": str(emb), "k": limit},
+                {"v": vector_literal(emb), "k": limit},
             )
         ).all()
         for i, (aid,) in enumerate(rows):
