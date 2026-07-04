@@ -64,6 +64,14 @@ gate.
 - Web: `/api` (proxied to backend via Next.js rewrites in `next.config.ts`)
 - Capacitor: `NEXT_PUBLIC_API_BASE_URL` env var (e.g., `http://10.0.2.2:8000`)
 
+**Caching (PR #127):** `src/lib/cache.ts` is a two-tier stale-while-revalidate cache (in-memory `Map` +
+IndexedDB via `idb-keyval`) behind the `useCachedResource` hook. The briefing (`page.tsx`), story detail
+(`DeepDiveView`), and feed page-1 (`useInfiniteFeed`) paint the last-known response **instantly**, then
+revalidate in the background — masking the free-tier cold start and killing the refetch on every "back
+to home". Per-namespace TTL + oldest-first eviction; `usePrefetchClusters` warms the top-3 story details
+so a tap opens instantly. When adding a new cached surface, key it as `<namespace>:<id>` and reuse the
+hook — never hand-roll a fetch-in-`useState`.
+
 **Auth:** when Firebase is configured, the client attaches the user's ID token as a Bearer header; the
 backend `get_current_user` verifies it and scopes per-user data. With `AUTH_REQUIRED=false` (default
 dev) the backend falls back to the default user, so the app works unauthenticated.

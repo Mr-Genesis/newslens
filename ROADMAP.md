@@ -21,6 +21,7 @@
 - Mobile: Capacitor Android APK builds
 - Brand: authentic NewsLens launcher icon (adaptive) + native splash (mark + Fraunces wordmark on #0C0C0E) + web/PWA favicons, all from the official brand kit; `@capacitor/splash-screen` controlled splash → WebView fade
 - Per-user **OpenAI + Anthropic + Gemini** API key + model management with Fernet encryption
+- **Perf — background caching + non-blocking summaries (PR #127/#128):** a client two-tier stale-while-revalidate cache (in-memory + IndexedDB) paints the briefing / story / feed **instantly** and revalidates in the background; the read paths return a **snippet fallback instantly** and generate the real LLM summary in the background (eagerly on cluster creation). Masks the free-tier cold start and kills the reload-on-back-navigation. See **Performance** section below.
 
 **Still stubbed / heuristic:**
 - Cluster `coherence` now prefers the **real source-agreement ratio** (agree/total from a cached
@@ -142,6 +143,39 @@ Adds persona-gated **research** + **expert** source tiers on top of the news fee
 - `audience.resolve_tags()` — keyword map fast path + LLM classifier fallback constrained to the fixed tag vocabulary, cached per user on `persona_version`; wired into the feed + briefing gates; no key → keyword-only (#88).
 - `entities._extraction_candidates()` — research-tier clusters extract at **1** source (`graph_extract_research_min_sources`); news keeps the min-2 "settled" bar (#89).
 - Three new APScheduler cron jobs in `main.py`: `credibility_review` (monthly, 1st @ 03:00), `pubmed_ingest` (weekly Mon 04:00), `arxiv_generate` (weekly Mon 04:30).
+
+---
+
+## Performance — Background Caching + Non-Blocking Summaries ✅ Shipped (PR #127, #128)
+
+Two independent problems made the app feel slow on-device: a 3-min blank home on open, and a full
+refetch on every "back to home" / article tap. Root causes were distinct — a cold Render backend
+**stacked with** on-demand LLM summary generation, and **zero client-side caching**.
+
+**Client stale-while-revalidate cache (PR #127, frontend):**
+- `frontend/src/lib/cache.ts` — two-tier cache: in-memory `Map` (survives SPA navigation) + **IndexedDB**
+  via `idb-keyval` (survives app restart; Firebase already proves IDB works in the WebView). `peek` /
+  `load` / `store` / `revalidate` with deduped in-flight requests, per-namespace **TTL** (briefing 6h /
+  cluster 2h / feed 30m) + **oldest-first count/byte eviction** (`trimMemory` bounds memory even if the
+  IDB write rejects). Degrades to memory-only under SSR/jsdom.
+- `frontend/src/hooks/useCachedResource.ts` — the one React binding: seeds from cache, revalidates on
+  mount + foreground, keeps stale data on a failed revalidate (a **monotonic run token** drops a
+  superseded old-key result so an in-place story→story navigation can't cross-serve).
+- Wired into the **briefing** (`page.tsx`), **story detail** (`DeepDiveView`), and **feed page-1**
+  (`useInfiniteFeed` — seed + replace-and-write-through, WS-3 cursor logic intact; `loadMore` is guarded
+  from firing before the cursor is pinned). `usePrefetchClusters` warms the top-3 story details.
+- The residual first-ever-install cold open is intentionally left on the free tier and masked by the
+  cache (decision 2026-07-04; see the paid-tier trigger above).
+
+**Non-blocking + eager cluster summaries (PR #128, backend):**
+- `services/summarizer.py` `snippet_summary()` — no-LLM fallback (first snippet, ~2 sentences), and
+  `schedule_summary()` — fire-and-forget background generation, **deduped per cluster**, gated by
+  `eager_summaries_enabled`, with a strong task reference so it can't be GC-cancelled mid-run.
+- `GET /clusters/{id}` + `GET /briefing` return the snippet fallback **instantly** + schedule the real
+  summary; the snippet is **never persisted** (else `backfill_summaries` would skip the real one —
+  `get_cluster` uses a local response var because it commits read-marks).
+- `clustering.run_clustering()` eagerly schedules a summary the moment a new cluster forms; the on-demand
+  path becomes a rare cold case. `summary_batch_size` 5 → 12.
 
 ---
 
