@@ -145,6 +145,7 @@ news-app/
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | /health | Health check (DB status) |
+| GET | /pipeline | Pipeline health: article counts by `embedding_status`, cluster counts, freshness, and `last_embedding_error` (quota/auth/no_key) — diagnoses a stalled embed→cluster stage without the log stream |
 | GET | /feed | Paginated feed with explore/exploit mix |
 | GET | /feed?topic={id} | Topic-filtered feed |
 | GET | /feed?source_type={news\|research\|expert} | Source-tier-filtered feed (invalid → 400; chip UI deferred) |

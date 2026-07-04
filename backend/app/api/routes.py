@@ -100,6 +100,44 @@ async def health_check():
     )
 
 
+@router.get("/pipeline")
+async def pipeline_status(db: AsyncSession = Depends(get_db)):
+    """At-a-glance data-pipeline health (unauthenticated, like /health). Makes a stalled stage obvious:
+    if `articles.by_embedding_status` is all pending/failed and `clusters.total` is ~0, embeddings
+    are dead → nothing clusters → story details can't open. `last_embedding_error` names WHY (quota /
+    auth / no_key) so the cause is visible without the log stream."""
+    from app.services import embeddings as _embeddings
+
+    status_rows = (
+        await db.execute(
+            select(Article.embedding_status, func.count()).group_by(Article.embedding_status)
+        )
+    ).all()
+    by_status: dict[str, int] = {}
+    for st, cnt in status_rows:
+        key = st.value if hasattr(st, "value") else str(st)
+        by_status[key] = cnt
+
+    total_clusters = (
+        await db.execute(select(func.count()).select_from(StoryCluster))
+    ).scalar_one()
+    articles_clustered = (
+        await db.execute(select(func.count(func.distinct(ClusterArticle.article_id))))
+    ).scalar_one()
+    latest_article = (await db.execute(select(func.max(Article.fetched_at)))).scalar_one()
+    latest_cluster = (await db.execute(select(func.max(StoryCluster.created_at)))).scalar_one()
+
+    return {
+        "articles": {"total": sum(by_status.values()), "by_embedding_status": by_status},
+        "clusters": {"total": total_clusters, "articles_clustered": articles_clustered},
+        "freshness": {
+            "latest_article_fetched_at": latest_article.isoformat() if latest_article else None,
+            "latest_cluster_created_at": latest_cluster.isoformat() if latest_cluster else None,
+        },
+        "last_embedding_error": _embeddings.last_embedding_error(),
+    }
+
+
 @router.get("/feed", response_model=FeedResponse, dependencies=[Depends(get_current_user)])
 async def get_feed(
     topic: int | None = None,

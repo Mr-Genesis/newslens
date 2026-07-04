@@ -105,19 +105,57 @@ def _embed_sync(key: str, model: str, content: str, task_type: str, output_dim: 
     return result["embedding"]
 
 
+# Last embedding failure, surfaced over HTTP by GET /pipeline so the cause of a stalled pipeline
+# (quota vs auth vs no-key) is visible at a glance WITHOUT the Render log stream. Process-local: a
+# restart clears it, and the next success clears it too (see generate_embedding).
+_last_embedding_error: dict | None = None
+
+
+def _classify_embedding_error(msg: str) -> str:
+    """Bucket an embedding error message into an actionable category. `quota` (429 / rate limit —
+    the usual free-tier Gemini embedding cap) and `auth` (bad/absent key, permission) are the two
+    that change what you do next; everything else is `other`."""
+    m = (msg or "").lower()
+    if any(k in m for k in ("429", "quota", "resource has been exhausted", "resourceexhausted",
+                            "rate limit", "rate_limit")):
+        return "quota"
+    if any(k in m for k in ("api key", "api_key", "permission", "unauthenticated", "401", "403",
+                            "invalid key", "invalid_argument api key")):
+        return "auth"
+    return "other"
+
+
+def _record_embedding_error(category: str, message: str) -> None:
+    global _last_embedding_error
+    from datetime import datetime, timezone
+
+    _last_embedding_error = {
+        "when": datetime.now(timezone.utc).isoformat(),
+        "category": category,
+        "message": (message or "")[:500],
+    }
+
+
+def last_embedding_error() -> dict | None:
+    """The most recent embedding failure (or None if the last attempt succeeded / none yet)."""
+    return _last_embedding_error
+
+
 async def generate_embedding(text: str, *, task_type: str | None = None) -> list[float] | None:
     """Generate a Gemini embedding for a text string. Returns None on failure (never raises).
 
     task_type defaults to the stored-document type; search passes the query type for asymmetric
     retrieval. Runs the synchronous SDK call in a thread so it never blocks the event loop.
     """
+    global _last_embedding_error
     key = await _resolve_embedding_key()
     if not key:
         logger.warning("embedding_no_gemini_key")
+        _record_embedding_error("no_key", "no Gemini key resolved (per-user key or GEMINI_API_KEY env)")
         return None
 
     try:
-        return await asyncio.to_thread(
+        vec = await asyncio.to_thread(
             _embed_sync,
             key,
             settings.embedding_model,
@@ -125,8 +163,13 @@ async def generate_embedding(text: str, *, task_type: str | None = None) -> list
             task_type or settings.embedding_task_document,
             settings.embedding_dimensions,
         )
+        _last_embedding_error = None  # a success clears the sticky error so /pipeline recovers
+        return vec
     except Exception as e:
-        logger.error("embedding_generation_failed", error=str(e))
+        msg = str(e)
+        category = _classify_embedding_error(msg)
+        _record_embedding_error(category, msg)
+        logger.error("embedding_generation_failed", category=category, error=msg)
         return None
 
 
