@@ -99,3 +99,23 @@ async def test_background_force_platform_uses_env_key_and_never_the_user_resolve
     out = await llm._generate_gemini("hi", force_platform_key=True)
     assert out == "ok"
     assert captured["key"] == "ENV-GEMINI"  # env platform key, not any per-user key
+
+
+@pytest.mark.asyncio
+async def test_test_key_endpoint_busts_the_resolver_cache(aclient, db_session, monkeypatch):
+    """Review regression: verifying a key (test-*-key flips verified→True) must bust the per-user
+    resolver cache, so the freshly-verified key is used at once instead of after the 60s TTL."""
+    if await db_session.get(User, 1) is None:
+        db_session.add(User(id=1, locale="IN"))
+        await db_session.flush()
+    db_session.add(UserSetting(user_id=1, gemini_api_key_encrypted=encrypt_value("gk"), gemini_key_verified=False))
+    await db_session.flush()
+
+    llm._gem_key_cache[1] = (None, 9e9)  # poison: as if a prior resolve saw no verified key
+    import google.generativeai as genai
+    monkeypatch.setattr(genai, "configure", lambda api_key=None: None)
+    monkeypatch.setattr(genai, "list_models", lambda: [object()])
+
+    r = await aclient.post("/settings/test-gemini-key")
+    assert r.json()["success"] is True
+    assert 1 not in llm._gem_key_cache  # busted → the next resolve re-reads the now-verified row

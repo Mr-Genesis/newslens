@@ -1371,6 +1371,7 @@ async def test_api_key(db: AsyncSession = Depends(get_db)):
         setting.openai_key_verified = True
         setting.openai_key_verified_at = datetime.now(timezone.utc)
         await db.commit()
+        _invalidate_llm_caches(current_user_id())  # WS-6: verified→live now (not after ≤60s TTL)
 
         logger.info("settings_key_test_success", models=model_count)
         return KeyTestResult(success=True, models_available=model_count)
@@ -1707,6 +1708,7 @@ async def test_gemini_key(db: AsyncSession = Depends(get_db)):
         setting.gemini_key_verified = True
         setting.gemini_key_verified_at = datetime.now(timezone.utc)
         await db.commit()
+        _invalidate_llm_caches(current_user_id())  # WS-6: verified→live now
         return KeyTestResult(success=True, models_available=len(models))
     except Exception as e:  # noqa: BLE001
         return KeyTestResult(success=False, error=str(e)[:200])
@@ -1762,6 +1764,7 @@ async def test_anthropic_key(db: AsyncSession = Depends(get_db)):
         setting.anthropic_key_verified = True
         setting.anthropic_key_verified_at = datetime.now(timezone.utc)
         await db.commit()
+        _invalidate_llm_caches(current_user_id())  # WS-6: verified→live now
         return KeyTestResult(success=True, models_available=1)
     except Exception as e:  # noqa: BLE001
         # REDACT: Anthropic exception text can echo the key / request metadata — never return str(e).
