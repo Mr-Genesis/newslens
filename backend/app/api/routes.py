@@ -1856,6 +1856,22 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     ).scalar_one_or_none()
     if existing is not None:
         return FollowOut.model_validate(existing)
+    # WS-2 (#112): cap free-text follows so the rails section stays a curated shelf, not a firehose.
+    if kind == "saved_search":
+        from app.config import settings as _cfg
+
+        count = (
+            await db.execute(
+                select(func.count()).select_from(Follow).where(
+                    Follow.user_id == current_user_id(), Follow.kind == "saved_search"
+                )
+            )
+        ).scalar_one()
+        if count >= _cfg.saved_search_cap:
+            raise HTTPException(
+                status_code=400,
+                detail=f"you follow {_cfg.saved_search_cap} topics — unfollow one first",
+            )
     f = Follow(
         user_id=current_user_id(), kind=kind, value=value,
         entity_id=(body.entity_id if kind == "entity" else None),
@@ -1863,6 +1879,8 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     db.add(f)
     await db.commit()
     await db.refresh(f)
+    from app.services import rails as _rails
+    _rails.invalidate(current_user_id())  # WS-2: a new follow changes the rails payload
     if kind == "entity":
         from app.config import settings
         from app.services import entities
@@ -1899,6 +1917,36 @@ async def delete_follow(follow_id: int, db: AsyncSession = Depends(get_db)):
     if f is not None:
         await db.delete(f)
         await db.commit()
+        from app.services import rails as _rails
+        _rails.invalidate(current_user_id())
+
+
+@router.get("/follows/rails", dependencies=[Depends(get_current_user)])
+async def follows_rails(db: AsyncSession = Depends(get_db)):
+    """WS-2 (#112): the "News You Follow" section — one rail per rail-able follow (saved_search /
+    topic / entity; source follows excluded), 72h-windowed, with a per-rail badge new_count. ONE
+    request; the server loops the follows (60s cached). A failing follow drops its rail, never the
+    section."""
+    from app.services import rails as _rails
+
+    return {"rails": await _rails.rails_for_user(db, current_user_id())}
+
+
+@router.post("/follows/{follow_id}/seen", status_code=204, dependencies=[Depends(get_current_user)])
+async def mark_follow_seen(follow_id: int, db: AsyncSession = Depends(get_db)):
+    """WS-2 (#112): clears a rail's badge — sets follows.last_viewed_at=now for THIS follow only
+    (tapping a rail story or its 'see all'). Per-follow, so viewing one rail never clears another,
+    and (unlike the global User.last_seen_at) reading the digest never clears rail badges."""
+    f = (
+        await db.execute(
+            select(Follow).where(Follow.id == follow_id, Follow.user_id == current_user_id())
+        )
+    ).scalar_one_or_none()
+    if f is not None:
+        f.last_viewed_at = datetime.now(timezone.utc)
+        await db.commit()
+        from app.services import rails as _rails
+        _rails.invalidate(current_user_id())
 
 
 @router.get("/digest", response_model=DigestResponse, dependencies=[Depends(get_current_user)])

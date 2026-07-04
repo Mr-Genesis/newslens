@@ -178,7 +178,9 @@ news-app/
 | GET | /clusters/{id}/strategic | Game-theory lens (geopolitics-gated) |
 | GET | /clusters/{id}/trivia | Story quiz (easy/medium/hard) |
 | GET | /trivia/daily | Daily quiz by topic |
-| GET/POST/DELETE | /follows[ /{id}] | List / add / remove a follow (topic, entity, saved search, or source) (Wave C; `kind=source` value = source id) |
+| GET/POST/DELETE | /follows[ /{id}] | List / add / remove a follow (topic, entity, saved search, or source) (Wave C; `kind=source` value = source id; `saved_search` capped at `saved_search_cap`) |
+| GET | /follows/rails | "News You Follow" — one recency-scoped rail per rail-able follow (saved_search hybrid / topic / entity; source excluded), per-rail `new_count` badge, 60s cached (WS-2) |
+| POST | /follows/{id}/seen | Clear a rail's badge — sets per-follow `last_viewed_at` (unlike global `last_seen_at`, digest reads never clear it) (WS-2) |
 | GET | /digest | Personalized digest of followed topics/entities (Wave C) |
 | GET/POST | /admin/sources | List / upsert sources (research/expert require credibility_score, 0-100 → else 400) |
 | PUT | /admin/sources/{id}/credibility | Admin applies a score + rationale; stamps reviewed_by="admin" (400 out-of-range, 404 unknown) |
