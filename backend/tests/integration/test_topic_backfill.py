@@ -1,8 +1,10 @@
 """A newly-created topic interest surfaces content within seconds: backfill_topic_articles
 retroactively tags existing articles (pgvector NN + keyword), and PUT /profile schedules that backfill
 for brand-new topics only."""
+from datetime import datetime, timedelta, timezone
+
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models import (
     Article,
@@ -142,3 +144,56 @@ async def test_put_profile_schedules_backfill_for_new_topics_only(aclient, db_se
     # the pre-existing topic already has (its) content → NOT scheduled; only the brand-new one is
     assert len(scheduled) == 1
     assert existing.id not in scheduled
+
+
+@pytest.mark.asyncio
+async def test_keyword_pass_scans_the_newest_candidates(db_session):
+    # Review #1: the keyword ilike LIMIT must ORDER BY fetched_at so the window is the newest N, not an
+    # arbitrary heap order (else real matches for a short/common name silently fall outside the window).
+    src = await _src(db_session)
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    arts = []
+    for i in range(4):
+        a = Article(
+            title=f"Rustlang release {i}", url=f"https://tb/rl/{i}", source_id=src.id,
+            fetched_at=base + timedelta(days=i),  # increasing recency; no embedding → semantic pass skipped
+        )
+        db_session.add(a)
+        await db_session.flush()
+        arts.append(a)
+    topic = Topic(name="Rustlang", embedding=_vec(0))  # has an embedding → no generation call
+    db_session.add(topic)
+    await db_session.flush()
+
+    await fetcher.backfill_topic_articles(db_session, topic.id, limit=2)
+
+    tagged = set(
+        (
+            await db_session.execute(
+                select(ArticleTopic.article_id).where(ArticleTopic.topic_id == topic.id)
+            )
+        ).scalars().all()
+    )
+    assert arts[3].id in tagged and arts[2].id in tagged  # the two newest candidates
+    assert arts[0].id not in tagged  # oldest is outside the ORDER BY fetched_at DESC LIMIT 2 window
+
+
+@pytest.mark.asyncio
+async def test_backfill_is_idempotent_no_duplicate_rows(db_session):
+    # Review #2: a pre-existing (article, topic) row must not crash the backfill or duplicate.
+    src = await _src(db_session)
+    near = await _article(db_session, src, "near story", _vec(0))
+    topic = Topic(name="ZZ Topic", embedding=_vec(0))
+    db_session.add(topic)
+    await db_session.flush()
+    db_session.add(ArticleTopic(article_id=near.id, topic_id=topic.id))  # already tagged
+    await db_session.flush()
+
+    await fetcher.backfill_topic_articles(db_session, topic.id)  # must not raise on the duplicate
+
+    count = (
+        await db_session.execute(
+            select(func.count()).select_from(ArticleTopic).where(ArticleTopic.topic_id == topic.id)
+        )
+    ).scalar()
+    assert count == 1  # no duplicate row

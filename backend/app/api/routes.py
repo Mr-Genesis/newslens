@@ -581,14 +581,15 @@ async def get_topics(db: AsyncSession = Depends(get_db)):
             )
         ).all()
     )
-    # Recent (7d) volume per topic — drives "trending".
+    # Recent (7d) volume per topic — drives "trending". Uses fetched_at (NOT NULL) rather than
+    # published_at, so undated items (feeds with no parseable date) still count as recent.
     recent_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
     recent = dict(
         (
             await db.execute(
                 select(ArticleTopic.topic_id, func.count(ArticleTopic.article_id))
                 .join(Article, Article.id == ArticleTopic.article_id)
-                .where(Article.published_at >= recent_cutoff)
+                .where(Article.fetched_at >= recent_cutoff)
                 .group_by(ArticleTopic.topic_id)
             )
         ).all()

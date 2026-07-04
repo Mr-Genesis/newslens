@@ -90,3 +90,28 @@ async def test_unflagged_source_does_not_fetch_linked_content(db_session, monkey
     await fetcher._ingest_feed_entries(db_session, src, feed)
 
     assert calls == []  # feature is off for this source → never fetched
+
+
+@pytest.mark.asyncio
+async def test_duplicate_item_is_not_refetched(db_session, monkeypatch):
+    # Review #4: the linked fetch runs AFTER dedup, so an already-ingested item isn't re-downloaded
+    # on every fetch cycle.
+    calls = []
+
+    async def fake_extract(url):
+        calls.append(url)
+        return ("s", "Full body text " * 20)
+
+    monkeypatch.setattr(fetcher, "_extract_linked_content", fake_extract)
+    src = Source(
+        name="HN dup", url="https://news.ycombinator.com", rss_url="https://hnrss.org/frontpage",
+        source_type=SourceType.other, per_fetch_cap=10, credibility_meta={"fetch_full_content": True},
+    )
+    db_session.add(src)
+    await db_session.flush()
+    feed = _feed("https://news.ycombinator.com/item?id=1", link="https://example.com/dup-article")
+
+    await fetcher._ingest_feed_entries(db_session, src, feed)  # first: new → fetched
+    await fetcher._ingest_feed_entries(db_session, src, feed)  # second: duplicate → skipped before fetch
+
+    assert calls == ["https://example.com/dup-article"]  # fetched exactly once

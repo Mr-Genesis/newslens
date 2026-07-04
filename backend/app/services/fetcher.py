@@ -133,7 +133,7 @@ async def backfill_topic_articles(session, topic_id: int, limit: int = 200) -> i
             )
         ).scalars().all()
     )
-    created = 0
+    to_insert: list[dict] = []
 
     # 1) semantic pass — the K nearest articles within the distance threshold.
     if emb_literal is not None:
@@ -149,17 +149,20 @@ async def backfill_topic_articles(session, topic_id: int, limit: int = 200) -> i
         for row in rows:
             if row.id in already or row.distance >= settings.new_topic_max_similarity:
                 continue
-            session.add(
-                ArticleTopic(article_id=row.id, topic_id=topic_id, relevance_score=1.0 - row.distance)
+            to_insert.append(
+                {"article_id": row.id, "topic_id": topic_id, "relevance_score": 1.0 - row.distance}
             )
             already.add(row.id)
-            created += 1
 
-    # 2) keyword pass — the exact topic name as a whole word in title/snippet (catches e.g. "AI").
+    # 2) keyword pass — the exact topic name as a whole word among the NEWEST candidates. The ORDER BY
+    #    makes the LIMIT window deterministic: without it Postgres returns arbitrary rows, so for a short
+    #    name like "AI" (whose unanchored ilike matches thousands) the real word-boundary matches could
+    #    all fall outside the window and never get tagged.
     kw = (
         await session.execute(
             select(Article.id, Article.title, Article.snippet)
             .where(or_(Article.title.ilike(f"%{topic.name}%"), Article.snippet.ilike(f"%{topic.name}%")))
+            .order_by(Article.fetched_at.desc())
             .limit(limit)
         )
     ).all()
@@ -168,12 +171,22 @@ async def backfill_topic_articles(session, topic_id: int, limit: int = 200) -> i
         if aid in already:
             continue
         if pat.search(f"{title or ''} {snippet or ''}".lower()):
-            session.add(ArticleTopic(article_id=aid, topic_id=topic_id))
+            to_insert.append({"article_id": aid, "topic_id": topic_id, "relevance_score": 0.0})
             already.add(aid)
-            created += 1
 
+    if to_insert:
+        # Conflict-tolerant bulk insert: a concurrent assign_topics (RSS ingest) can insert the same
+        # (article_id, topic_id) between our dedupe snapshot and this write — ON CONFLICT DO NOTHING
+        # stops that race from rolling back the entire backfill on uq_article_topic.
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        await session.execute(
+            pg_insert(ArticleTopic)
+            .values(to_insert)
+            .on_conflict_do_nothing(constraint="uq_article_topic")
+        )
     await session.flush()
-    return created
+    return len(to_insert)
 
 
 # Topics with a backfill in flight — dedupe + strong task refs so a fire-and-forget backfill can't be
@@ -390,10 +403,11 @@ async def _extract_linked_content(url: str) -> tuple[str | None, str | None]:
     try:
         async with httpx.AsyncClient(
             follow_redirects=True,
-            timeout=15.0,
+            timeout=8.0,
             headers={"User-Agent": "NewsLensBot/1.0 (+https://newslens.app)"},
         ) as client:
-            return await _extract(client, url)
+            # Hard cap so a slow/hanging linked host can't stall the whole RSS cycle for other sources.
+            return await asyncio.wait_for(_extract(client, url), timeout=10.0)
     except Exception:
         return None, None
 
@@ -573,18 +587,19 @@ async def _ingest_feed_entries(session, source: Source, feed) -> int:
         snippet = raw[:300]
         body = raw[:16000] if raw else None
 
-        # A link-only submission (HN et al.) has no body → fetch + extract the linked article's text.
-        if fetch_full and _is_thin_content(raw):
-            s2, b2 = await _extract_linked_content(link)
-            if b2:
-                snippet, body = (s2 or b2[:300]), b2
-                logger.info("full_content_fetched", source=source.name, url=link, chars=len(b2))
-
         pub_date = parse_pub_date(entry)
 
         # Check for duplicates
         if await is_duplicate(session, source.id, link, title):
             continue
+
+        # A link-only submission (HN et al.) has no body → fetch + extract the linked article's text.
+        # AFTER the dedup check, so an already-ingested item isn't re-downloaded on every fetch cycle.
+        if fetch_full and _is_thin_content(raw):
+            s2, b2 = await _extract_linked_content(link)
+            if b2:
+                snippet, body = (s2 or b2[:300]), b2
+                logger.info("full_content_fetched", source=source.name, url=link, chars=len(b2))
 
         article = Article(
             title=title,

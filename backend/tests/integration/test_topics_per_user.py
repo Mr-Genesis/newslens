@@ -31,7 +31,11 @@ async def _topic_with_articles(db, src, name, count, days_ago=1):
     await db.flush()
     pub = datetime.now(timezone.utc) - timedelta(days=days_ago)
     for i in range(count):
-        a = Article(title=f"{name}-{i}", url=f"https://tp/{name}/{i}", source_id=src.id, published_at=pub)
+        # fetched_at drives the trending recency window (undated feeds still count), so set both.
+        a = Article(
+            title=f"{name}-{i}", url=f"https://tp/{name}/{i}", source_id=src.id,
+            published_at=pub, fetched_at=pub,
+        )
         db.add(a)
         await db.flush()
         db.add(ArticleTopic(article_id=a.id, topic_id=t.id))
@@ -81,3 +85,26 @@ async def test_trending_reflects_recent_volume_only(aclient, db_session):
     trending = [t["name"] for t in body["trending_topics"]]
     assert "HotNow" in trending
     assert "StaleOld" not in trending  # old articles don't trend
+
+
+@pytest.mark.asyncio
+async def test_trending_counts_undated_recent_articles(aclient, db_session):
+    # Review #3: articles with no published_at (feeds without a parseable date) must still count as
+    # recent for trending — the ranking uses fetched_at (NOT NULL), not published_at.
+    src = await _src(db_session)
+    t = Topic(name="Undated Hot")
+    db_session.add(t)
+    await db_session.flush()
+    now = datetime.now(timezone.utc)
+    for i in range(3):
+        a = Article(
+            title=f"undated {i}", url=f"https://tp/u/{i}", source_id=src.id,
+            published_at=None, fetched_at=now,
+        )
+        db_session.add(a)
+        await db_session.flush()
+        db_session.add(ArticleTopic(article_id=a.id, topic_id=t.id))
+    await db_session.flush()
+
+    body = (await aclient.get("/topics")).json()
+    assert "Undated Hot" in [x["name"] for x in body["trending_topics"]]
