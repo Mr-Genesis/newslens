@@ -78,7 +78,18 @@ export default function ProfilePage() {
         getTopics().catch(() => null),
       ]);
       if (statsData) setStats(statsData);
-      if (topicsData) setTopics(topicsData.your_topics);
+      if (topicsData) {
+        setTopics(topicsData.your_topics);
+        // Finding 7 fix (HIGH): seed the toggle set from SERVER truth, never stale localStorage /
+        // the 8 hardcoded defaults. toggleTopic PUTs this whole set as the full interests list, and
+        // PUT /profile is a full-replace that also reconciles topic follows — so on a fresh device /
+        // cleared storage / first Capacitor launch (empty localStorage → defaults), one tap would
+        // otherwise DELETE every real interest AND topic follow not in the default set. Seeding from
+        // the server makes a toggle a precise add/remove against the user's actual topics.
+        const serverInterests = topicsData.your_topics.map((t) => t.name);
+        setSelectedTopics(new Set(serverInterests));
+        localStorage.setItem("newslens-topics", JSON.stringify(serverInterests));
+      }
       setState("idle");
     } catch {
       setState("idle");

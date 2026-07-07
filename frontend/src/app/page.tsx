@@ -17,7 +17,7 @@ import { FollowRails } from "@/components/FollowRails";
 import { InfiniteFeed } from "@/components/InfiniteFeed";
 import { useImpressions } from "@/hooks/useImpressions";
 import { AnimatedMark } from "@/components/SplashScreen";
-import { getBriefing, getTopics, type Briefing, type BriefingStory, type Topic } from "@/lib/api";
+import { getBriefing, getTopics, type Briefing, type BriefingStory, type TopicsResponse } from "@/lib/api";
 import { useCachedResource } from "@/hooks/useCachedResource";
 import { usePrefetchClusters } from "@/hooks/usePrefetchClusters";
 import { CACHE_TTL_MS } from "@/lib/cache";
@@ -48,12 +48,13 @@ const staggerContainer = {
 
 export default function BriefingPage() {
   const [activeCategory, setActiveCategory] = useState<string>("All");
-  const [userTopics, setUserTopics] = useState<Topic[]>([]);
   // WS-3 (#113): cross-section dedupe — cluster ids the rails render, lifted up so the "All stories"
   // feed can filter them out (precedence hero > rails > categories > feed). And a key that pull-to-
   // refresh bumps to remount the feed with a fresh as_of cursor.
   const [railClusterIds, setRailClusterIds] = useState<number[]>([]);
   const [feedKey, setFeedKey] = useState(0);
+  // Unify A: pull-to-refresh bumps this so FollowRails re-fetches without an app relaunch.
+  const [railsRefresh, setRailsRefresh] = useState(0);
   const router = useRouter();
   // WS-1: log which briefing stories were actually SEEN (>=50% for >=1s); tag taps with the surface.
   const { observe } = useImpressions("briefing");
@@ -68,6 +69,16 @@ export default function BriefingPage() {
     refresh,
   } = useCachedResource<Briefing>("briefing", getBriefing, { maxAgeMs: CACHE_TTL_MS.briefing });
 
+  // The user's topics come from the same two-tier cache: paint instantly, revalidate on foreground
+  // (WebView resume), and expose a refresh() that pull-to-refresh drives — so "Your Topics" reflects a
+  // follow/unfollow made elsewhere without an app relaunch.
+  const { data: topicsData, refresh: refreshTopics } = useCachedResource<TopicsResponse>(
+    "topics:home",
+    getTopics,
+    { maxAgeMs: CACHE_TTL_MS.topics }
+  );
+  const userTopics = useMemo(() => topicsData?.your_topics ?? [], [topicsData]);
+
   // Prefetch the top few story details while the briefing is on screen → tapping a card opens instantly.
   usePrefetchClusters(briefing?.stories.map((s) => s.cluster_id) ?? []);
 
@@ -80,19 +91,13 @@ export default function BriefingPage() {
         ? "error"
         : "loading";
 
-  // Pull-to-refresh / manual refresh: reset the feed's as_of cursor AND revalidate the briefing.
+  // Pull-to-refresh / manual refresh: reset the feed's as_of cursor AND revalidate the briefing, the
+  // topics, and the "News You Follow" rails together.
   const handleRefresh = useCallback(async () => {
     setFeedKey((k) => k + 1);
-    await refresh();
-  }, [refresh]);
-
-  // The user's topics (with real article counts) — chips shouldn't be limited to whatever
-  // categories happen to appear in today's 8 briefing stories.
-  useEffect(() => {
-    getTopics()
-      .then((t) => setUserTopics(t.your_topics ?? []))
-      .catch(() => setUserTopics([]));
-  }, []);
+    setRailsRefresh((k) => k + 1);
+    await Promise.all([refresh(), refreshTopics()]);
+  }, [refresh, refreshTopics]);
 
   // First-run: send new users through the intro (once per browser).
   useEffect(() => {
@@ -303,7 +308,7 @@ export default function BriefingPage() {
           )}
 
           {/* WS-2 (#112): News You Follow rails — renders nothing until the user has follows */}
-          <FollowRails onClusterIdsRendered={handleRailIds} />
+          <FollowRails onClusterIdsRendered={handleRailIds} refreshSignal={railsRefresh} />
 
           {/* Empty topic filter: the chip's topic has articles, just none in today's 8-story
               brief. Say so instead of rendering a blank page. */}

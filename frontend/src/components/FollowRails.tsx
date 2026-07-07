@@ -69,18 +69,21 @@ function RailPanel({ rail, onOpen }: { rail: FollowRail; onOpen: (r: FollowRail,
 
 export function FollowRails({
   onClusterIdsRendered,
+  refreshSignal = 0,
 }: {
   /** WS-3 (#113): report the cluster ids these rails render so the home feed can dedupe them out
    *  (cross-section precedence hero > rails > categories > feed). */
   onClusterIdsRendered?: (ids: number[]) => void;
+  /** Unify A: bump to force a re-fetch (pull-to-refresh from the home page). */
+  refreshSignal?: number;
 } = {}) {
   const router = useRouter();
   const [rails, setRails] = useState<FollowRail[] | null>(null);
-  // Ref so the single-fetch mount effect always calls the latest callback without re-fetching.
+  // Ref so the fetch effect always calls the latest callback without re-fetching on every render.
   const onIdsRef = useRef(onClusterIdsRendered);
   onIdsRef.current = onClusterIdsRendered;
 
-  useEffect(() => {
+  const load = useCallback(() => {
     getFollowRails()
       .then((rs) => {
         setRails(rs);
@@ -88,6 +91,23 @@ export function FollowRails({
       })
       .catch(() => setRails([])); // a failed rails fetch must never break the briefing
   }, []);
+
+  // Fetch on mount AND whenever pull-to-refresh bumps refreshSignal — so a follow/unfollow or new
+  // stories show without an app relaunch.
+  useEffect(() => {
+    load();
+  }, [load, refreshSignal]);
+
+  // Revalidate on foreground (WebView/tab resume) — the classic SWR refresh moment. Re-fetching
+  // replaces the whole rails payload, so an optimistically-cleared badge resolves to server truth.
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [load]);
 
   const onOpen = useCallback(
     (rail: FollowRail, clusterId?: number) => {
