@@ -25,6 +25,7 @@ const rail = (over = {}) => ({
 describe("FollowRails", () => {
   beforeEach(() => {
     push.mockReset();
+    vi.mocked(getFollowRails).mockClear();
     vi.mocked(markFollowSeen).mockClear().mockResolvedValue(undefined);
   });
 
@@ -76,5 +77,24 @@ describe("FollowRails", () => {
     vi.mocked(getFollowRails).mockResolvedValue([rail()]);
     render(<FollowRails onClusterIdsRendered={onIds} />);
     await waitFor(() => expect(onIds).toHaveBeenCalledWith([10, 11]));
+  });
+
+  // Unify A: refresh without an app relaunch.
+  it("re-fetches when refreshSignal changes (pull-to-refresh)", async () => {
+    vi.mocked(getFollowRails).mockResolvedValue([rail()]);
+    const { rerender } = render(<FollowRails refreshSignal={0} />);
+    await screen.findByText("US Iran war");
+    expect(getFollowRails).toHaveBeenCalledTimes(1);
+    rerender(<FollowRails refreshSignal={1} />); // pull-to-refresh bumps the signal
+    await waitFor(() => expect(getFollowRails).toHaveBeenCalledTimes(2));
+  });
+
+  it("re-fetches on foreground (visibilitychange → visible)", async () => {
+    vi.mocked(getFollowRails).mockResolvedValue([rail()]);
+    render(<FollowRails />);
+    await screen.findByText("US Iran war");
+    expect(getFollowRails).toHaveBeenCalledTimes(1);
+    document.dispatchEvent(new Event("visibilitychange")); // jsdom visibilityState defaults to 'visible'
+    await waitFor(() => expect(getFollowRails).toHaveBeenCalledTimes(2));
   });
 });
