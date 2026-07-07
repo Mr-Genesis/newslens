@@ -1684,6 +1684,7 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
     if body.locale is not None:
         u.locale = body.locale.strip() or "IN"
     new_topic_ids: list[int] = []
+    interest_names: set[str] = set()
     if body.interests is not None:
         await db.execute(
             UserPreference.__table__.delete().where(
@@ -1694,6 +1695,7 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
             name = raw.strip()
             if not name:
                 continue
+            interest_names.add(name)
             topic = (
                 await db.execute(select(Topic).where(Topic.name == name))
             ).scalar_one_or_none()
@@ -1705,6 +1707,25 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
             db.add(
                 UserPreference(user_id=current_user_id(), topic_id=topic.id, weight=1.0)
             )
+        # Unify interests ↔ topic follows: ensure a topic follow for each interest, drop topic follows
+        # whose topic is no longer an interest — so "News You Follow" mirrors the user's topics.
+        existing_follows = (
+            await db.execute(
+                select(Follow).where(
+                    Follow.user_id == current_user_id(), Follow.kind == "topic"
+                )
+            )
+        ).scalars().all()
+        have = {ef.value for ef in existing_follows}
+        for nm in interest_names:
+            if nm not in have:
+                db.add(Follow(user_id=current_user_id(), kind="topic", value=nm))
+        for ef in existing_follows:
+            if ef.value not in interest_names:
+                await db.delete(ef)
+        from app.services import rails as _rails
+
+        _rails.invalidate(current_user_id())
     if body.watchlist is not None:
         u.watchlist = [w.model_dump() for w in body.watchlist]
     if body.depth_pref is not None:
@@ -1973,6 +1994,15 @@ async def list_follows(db: AsyncSession = Depends(get_db)):
     return [FollowOut.model_validate(f) for f in rows]
 
 
+async def _get_or_create_topic(db: AsyncSession, name: str) -> Topic:
+    t = (await db.execute(select(Topic).where(Topic.name == name))).scalar_one_or_none()
+    if t is None:
+        t = Topic(name=name)
+        db.add(t)
+        await db.flush()
+    return t
+
+
 @router.post("/follows", response_model=FollowOut, status_code=201, dependencies=[Depends(get_current_user)])
 async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     from fastapi import HTTPException
@@ -2057,6 +2087,24 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
                 )
                 await db.commit()
             logger.info("entity_follow_resolved", value=value, entity_id=eid)
+    if kind == "topic":
+        # Unify: a followed topic is also an INTEREST (drives feed personalization + the topic chips),
+        # and gets a background article backfill so its "News You Follow" rail has content right away.
+        topic = await _get_or_create_topic(db, value)
+        has_pref = (
+            await db.execute(
+                select(UserPreference.id).where(
+                    UserPreference.user_id == current_user_id(),
+                    UserPreference.topic_id == topic.id,
+                )
+            )
+        ).scalar_one_or_none()
+        if has_pref is None:
+            db.add(UserPreference(user_id=current_user_id(), topic_id=topic.id, weight=1.0))
+            await db.commit()
+        from app.services.fetcher import schedule_topic_backfill
+
+        schedule_topic_backfill(topic.id)
     return FollowOut.model_validate(f)
 
 
@@ -2070,6 +2118,16 @@ async def delete_follow(follow_id: int, db: AsyncSession = Depends(get_db)):
         )
     ).scalar_one_or_none()
     if f is not None:
+        if f.kind == "topic":
+            # Unify: unfollowing a topic also drops the matching interest.
+            t = (await db.execute(select(Topic).where(Topic.name == f.value))).scalar_one_or_none()
+            if t is not None:
+                await db.execute(
+                    UserPreference.__table__.delete().where(
+                        UserPreference.user_id == current_user_id(),
+                        UserPreference.topic_id == t.id,
+                    )
+                )
         await db.delete(f)
         await db.commit()
         from app.services import rails as _rails

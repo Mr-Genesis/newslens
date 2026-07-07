@@ -99,6 +99,9 @@ async def test_backfill_keyword_fallback_on_topic_name(db_session):
 
 @pytest.mark.asyncio
 async def test_schedule_topic_backfill_dedupes_and_runs_once(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "topic_backfill_enabled", True)  # opt back in (conftest disables it)
     calls = []
 
     async def fake_backfill(session, tid):
