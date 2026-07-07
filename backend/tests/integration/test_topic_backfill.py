@@ -99,6 +99,9 @@ async def test_backfill_keyword_fallback_on_topic_name(db_session):
 
 @pytest.mark.asyncio
 async def test_schedule_topic_backfill_dedupes_and_runs_once(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "topic_backfill_enabled", True)  # opt back in (conftest disables it)
     calls = []
 
     async def fake_backfill(session, tid):
@@ -223,5 +226,5 @@ async def test_backfill_my_topics_endpoint_schedules_all_subscriptions(aclient, 
 
     r = await aclient.post("/profile/backfill-topics")
     assert r.status_code == 200
-    assert r.json() == {"topics": 2, "scheduled": 2}
+    assert r.json() == {"topics": 2, "scheduled": 2, "reconciled": 0}  # interests only, no legacy follows
     assert set(scheduled) == {t1.id, t2.id}

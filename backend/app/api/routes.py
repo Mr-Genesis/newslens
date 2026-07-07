@@ -2,6 +2,7 @@ import structlog
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -1684,6 +1685,7 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
     if body.locale is not None:
         u.locale = body.locale.strip() or "IN"
     new_topic_ids: list[int] = []
+    canonical_names: set[str] = set()  # the canonical Topic.name for each requested interest
     if body.interests is not None:
         await db.execute(
             UserPreference.__table__.delete().where(
@@ -1694,17 +1696,35 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
             name = raw.strip()
             if not name:
                 continue
-            topic = (
-                await db.execute(select(Topic).where(Topic.name == name))
-            ).scalar_one_or_none()
-            if not topic:
-                topic = Topic(name=name)
-                db.add(topic)
-                await db.flush()
-                new_topic_ids.append(topic.id)
-            db.add(
-                UserPreference(user_id=current_user_id(), topic_id=topic.id, weight=1.0)
+            topic, created = await _get_or_create_topic(db, name)  # case-insensitive + race-safe
+            canonical_names.add(topic.name)
+            if created:
+                new_topic_ids.append(topic.id)  # only brand-new topics need an article backfill
+            await db.execute(
+                pg_insert(UserPreference)
+                .values(user_id=current_user_id(), topic_id=topic.id, weight=1.0)
+                .on_conflict_do_nothing(constraint="uq_user_topic_pref")
             )
+        # Unify interests ↔ topic follows: mirror the canonical interest set into topic follows
+        # (case-insensitively, so 'AI'/'ai' never fork into two rails), dropping follows no longer wanted.
+        existing_follows = (
+            await db.execute(
+                select(Follow).where(
+                    Follow.user_id == current_user_id(), Follow.kind == "topic"
+                )
+            )
+        ).scalars().all()
+        have_lower = {ef.value.lower() for ef in existing_follows}
+        for nm in canonical_names:
+            if nm.lower() not in have_lower:
+                db.add(Follow(user_id=current_user_id(), kind="topic", value=nm))
+        wanted_lower = {n.lower() for n in canonical_names}
+        for ef in existing_follows:
+            if ef.value.lower() not in wanted_lower:
+                await db.delete(ef)
+        from app.services import rails as _rails
+
+        _rails.invalidate(current_user_id())
     if body.watchlist is not None:
         u.watchlist = [w.model_dump() for w in body.watchlist]
     if body.depth_pref is not None:
@@ -1727,18 +1747,38 @@ async def update_profile(body: ProfileUpdate, db: AsyncSession = Depends(get_db)
 
 @router.post("/profile/backfill-topics", dependencies=[Depends(get_current_user)])
 async def backfill_my_topics(db: AsyncSession = Depends(get_db)):
-    """Kick a background article→topic backfill for EVERY topic the caller subscribes to — for topics
-    that were subscribed BEFORE the on-subscribe auto-backfill existed (so they still show 0 articles).
-    Idempotent + deduped; returns how many were scheduled."""
+    """Repair + backfill the caller's topics. First RECONCILE legacy topic follows into interests:
+    topics followed before unify (e.g. seeded as follows-only) have no UserPreference, so they never
+    reach Your Topics / feed rank and the re-follow early-return can't self-heal them — insert the
+    missing interest for each. THEN kick a background article→topic backfill for every subscribed topic
+    (topics subscribed before the on-subscribe auto-backfill still show 0 articles). Idempotent + deduped."""
     from app.services.fetcher import schedule_topic_backfill
 
-    topic_ids = (
+    uid = current_user_id()
+    # Reconcile: every kind='topic' Follow should have a matching interest.
+    follows = (
         await db.execute(
-            select(UserPreference.topic_id).where(UserPreference.user_id == current_user_id())
+            select(Follow).where(Follow.user_id == uid, Follow.kind == "topic")
         )
     ).scalars().all()
+    reconciled = 0
+    for fl in follows:
+        topic, _created = await _get_or_create_topic(db, fl.value)
+        res = await db.execute(
+            pg_insert(UserPreference)
+            .values(user_id=uid, topic_id=topic.id, weight=1.0)
+            .on_conflict_do_nothing(constraint="uq_user_topic_pref")
+        )
+        if res.rowcount:
+            reconciled += 1
+    if reconciled:
+        await db.commit()
+
+    topic_ids = (
+        await db.execute(select(UserPreference.topic_id).where(UserPreference.user_id == uid))
+    ).scalars().all()
     scheduled = sum(1 for tid in topic_ids if schedule_topic_backfill(tid) is not None)
-    return {"topics": len(topic_ids), "scheduled": scheduled}
+    return {"topics": len(topic_ids), "scheduled": scheduled, "reconciled": reconciled}
 
 
 # ── E1: per-user Gemini key ──
@@ -1973,6 +2013,62 @@ async def list_follows(db: AsyncSession = Depends(get_db)):
     return [FollowOut.model_validate(f) for f in rows]
 
 
+async def _get_or_create_topic(db: AsyncSession, name: str) -> tuple[Topic, bool]:
+    """Case-INSENSITIVE get-or-create → (topic, created). Returns the canonical existing Topic when the
+    name matches case-insensitively (rails match Topic.name via lower(), so the write paths must too, or
+    'AI'/'ai' fork into two Topic rows + two rails). Race-safe: a concurrent create is absorbed by
+    ON CONFLICT DO NOTHING and we re-SELECT the winner (mirrors the auth.py User-creation guard)."""
+    t = (
+        await db.execute(select(Topic).where(func.lower(Topic.name) == name.lower()))
+    ).scalars().first()
+    if t is not None:
+        return t, False
+    await db.execute(
+        pg_insert(Topic).values(name=name).on_conflict_do_nothing(index_elements=["name"])
+    )
+    t = (
+        await db.execute(select(Topic).where(func.lower(Topic.name) == name.lower()))
+    ).scalars().first()
+    return t, True
+
+
+async def _sync_topic_follow(db: AsyncSession, name: str) -> "FollowOut":
+    """Create/repair a topic follow AND its unified UserPreference interest in ONE transaction,
+    idempotently and case-insensitively. Self-heals: re-following a topic that has a Follow but no
+    interest (the legacy pre-unify shape) inserts the missing UserPreference instead of no-op'ing at
+    the idempotency check. Stores the canonical Topic.name as the follow value so the two never drift."""
+    uid = current_user_id()
+    topic, _created = await _get_or_create_topic(db, name)
+    # Interest (idempotent + race-safe) — the unify half that drives Your Topics / chips / feed rank.
+    await db.execute(
+        pg_insert(UserPreference)
+        .values(user_id=uid, topic_id=topic.id, weight=1.0)
+        .on_conflict_do_nothing(constraint="uq_user_topic_pref")
+    )
+    # Follow (idempotent by case-insensitive value; canonical Topic.name).
+    f = (
+        await db.execute(
+            select(Follow).where(
+                Follow.user_id == uid,
+                Follow.kind == "topic",
+                func.lower(Follow.value) == topic.name.lower(),
+            )
+        )
+    ).scalars().first()
+    if f is None:
+        f = Follow(user_id=uid, kind="topic", value=topic.name)
+        db.add(f)
+    await db.commit()
+    await db.refresh(f)
+    from app.services import rails as _rails
+
+    _rails.invalidate(uid)
+    from app.services.fetcher import schedule_topic_backfill
+
+    schedule_topic_backfill(topic.id)
+    return FollowOut.model_validate(f)
+
+
 @router.post("/follows", response_model=FollowOut, status_code=201, dependencies=[Depends(get_current_user)])
 async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     from fastapi import HTTPException
@@ -1981,6 +2077,11 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     value = (body.value or "").strip()
     if kind not in _FOLLOW_KINDS or not value:
         raise HTTPException(status_code=400, detail="invalid kind or empty value")
+    # Unify: a topic follow is handled end-to-end (follow + interest, one transaction, self-healing,
+    # case-insensitive) so it never falls through the generic idempotent early-return below — which
+    # would otherwise skip the interest repair for an already-followed topic.
+    if kind == "topic":
+        return await _sync_topic_follow(db, value)
     # #81: a source-follow must reference a real source (value = source id) — 404 otherwise, so a
     # typo can't create a dangling opt-in that silently does nothing.
     if kind == "source":
@@ -2070,6 +2171,19 @@ async def delete_follow(follow_id: int, db: AsyncSession = Depends(get_db)):
         )
     ).scalar_one_or_none()
     if f is not None:
+        if f.kind == "topic":
+            # Unify: unfollowing a topic also drops the matching interest. Case-insensitive resolve so
+            # a legacy follow whose value differs in case from the canonical Topic.name still matches.
+            t = (
+                await db.execute(select(Topic).where(func.lower(Topic.name) == f.value.lower()))
+            ).scalars().first()
+            if t is not None:
+                await db.execute(
+                    UserPreference.__table__.delete().where(
+                        UserPreference.user_id == current_user_id(),
+                        UserPreference.topic_id == t.id,
+                    )
+                )
         await db.delete(f)
         await db.commit()
         from app.services import rails as _rails

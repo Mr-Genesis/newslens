@@ -29,6 +29,23 @@ TEST_DB_URL = os.getenv(
 )
 
 
+@pytest.fixture(autouse=True)
+def _no_bg_fire_and_forget(monkeypatch):
+    """Disable per-request fire-and-forget background jobs in the integration harness.
+
+    ``schedule_topic_backfill`` (fired from POST /follows and PUT /profile) spawns an
+    ``asyncio.create_task`` that opens its OWN ``async_session()`` — a real pool connection
+    OUTSIDE the per-test outer transaction — and makes a network embedding call. When the
+    per-test event loop tears down mid-flight, that connection is left ``idle in transaction``
+    and later deadlocks ``test_foundation``'s ``DROP SCHEMA public CASCADE``. Off by default:
+    the scheduler + backfill are covered directly (``backfill_topic_articles``) or via a stubbed
+    ``schedule_topic_backfill``; the one test that exercises a real task opts back in.
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "topic_backfill_enabled", False, raising=False)
+
+
 @pytest_asyncio.fixture
 async def engine():
     eng = create_async_engine(TEST_DB_URL, future=True)
