@@ -1251,6 +1251,17 @@ async def record_swipe(
                             weight=max(0.0, 1.0 + weight_delta),
                         )
                     )
+                # Unify (swipe half): a POSITIVE swipe (right/up) is an explicit "more of this",
+                # so mirror it into a kind='topic' Follow — otherwise a swipe-born interest shows in
+                # Your Topics / the topic chips / feed rank but never gets a "News You Follow" rail,
+                # re-forking the two lists the unify feature keeps as one. _sync_topic_follow is
+                # idempotent + case-insensitive (reuses the canonical Topic.name) and self-heals the
+                # interest; its topic backfill is deduped + config-gated (a no-op in the test harness).
+                # A LEFT swipe is NEGATIVE: it still nudges the interest weight (max(0, 1-0.2)=0.8) but
+                # must NOT raise a rail for a topic the user swiped AWAY from — hence the weight_delta>0
+                # gate (unknown/zero-delta directions fall through too).
+                if weight_delta > 0:
+                    await _sync_topic_follow(db, at.topic.name)
                 break  # Only adjust primary topic
 
     await db.commit()

@@ -148,3 +148,94 @@ async def test_backfill_topics_reconciles_legacy_follow_without_interest(aclient
     r = await aclient.post("/profile/backfill-topics")
     assert r.status_code == 200
     assert await _interests(aclient) == {"Seeded A", "Seeded B"}  # follows reconciled into interests
+
+
+# ── Swipe path: a POSITIVE swipe mirrors the interest into a topic follow ──
+# (the item deferred by the 5762739 adversarial review — "needs a negative-swipe product call")
+
+
+async def _article_with_topic(db, topic_name):
+    """Seed a Source + Article tagged to a NEW Topic, so a swipe on that article has a primary topic
+    to mirror. Unique topic_name per test keeps the process-level rails cache from leaking rails across
+    tests (the negative assertions stay meaningful even on a stale-cache hit)."""
+    from datetime import datetime, timezone
+
+    from app.models import Article, ArticleTopic, Source, SourceType
+
+    src = Source(
+        name=f"src-{topic_name}", url=f"https://{topic_name}.example",
+        rss_url=f"https://{topic_name}.example/rss", source_type=SourceType.wire,
+        region="global", category="world",
+    )
+    db.add(src)
+    await db.flush()
+    topic = Topic(name=topic_name)
+    db.add(topic)
+    await db.flush()
+    art = Article(
+        title=f"{topic_name} headline", url=f"https://{topic_name}.example/a1",
+        source_id=src.id, snippet="A snippet.", published_at=datetime.now(timezone.utc),
+    )
+    db.add(art)
+    await db.flush()
+    db.add(ArticleTopic(article_id=art.id, topic_id=topic.id, relevance_score=1.0))
+    await db.flush()
+    return art, topic
+
+
+async def _rail_keys(aclient):
+    """Set of (kind, value) for the "News You Follow" rails — one per rail-able follow (even empty)."""
+    rails = (await aclient.get("/follows/rails")).json()["rails"]
+    return {(r["kind"], r["value"]) for r in rails}
+
+
+@pytest.mark.asyncio
+async def test_right_swipe_creates_interest_and_topic_follow(aclient, db_session, monkeypatch):
+    """Deferred gap from 5762739: a POSITIVE (right) swipe must create BOTH the UserPreference interest
+    AND the matching kind='topic' Follow — so a swipe-born interest also earns a "News You Follow" rail
+    instead of showing only in Your Topics / chips / feed rank."""
+    monkeypatch.setattr(fetcher, "schedule_topic_backfill", lambda tid: None)
+    await _ensure_user(db_session)
+    art, _ = await _article_with_topic(db_session, "Space Exploration")
+    await db_session.commit()
+
+    r = await aclient.post("/discover/swipe", json={"article_id": art.id, "direction": "right"})
+    assert r.status_code == 204
+
+    assert "Space Exploration" in await _interests(aclient)                 # interest (existing behavior)
+    assert await _topic_follow_values(aclient) == ["Space Exploration"]     # topic follow (the fix)
+    assert ("topic", "Space Exploration") in await _rail_keys(aclient)      # → surfaces a rail
+
+
+@pytest.mark.asyncio
+async def test_up_swipe_also_creates_topic_follow(aclient, db_session, monkeypatch):
+    """The other positive direction (up / save, +0.3) mirrors into a topic follow too — the gate is
+    weight_delta > 0, not literally "right"."""
+    monkeypatch.setattr(fetcher, "schedule_topic_backfill", lambda tid: None)
+    await _ensure_user(db_session)
+    art, _ = await _article_with_topic(db_session, "Marine Biology")
+    await db_session.commit()
+
+    r = await aclient.post("/discover/swipe", json={"article_id": art.id, "direction": "up"})
+    assert r.status_code == 204
+    assert await _topic_follow_values(aclient) == ["Marine Biology"]
+
+
+@pytest.mark.asyncio
+async def test_left_swipe_creates_no_follow_and_no_rail(aclient, db_session, monkeypatch):
+    """A NEGATIVE (left) swipe must NOT create a topic follow nor surface a rail for a topic the user
+    swiped AWAY from — even though it still nudges the interest weight (the intentional asymmetry that
+    is the whole reason for the weight_delta > 0 gate)."""
+    monkeypatch.setattr(fetcher, "schedule_topic_backfill", lambda tid: None)
+    await _ensure_user(db_session)
+    art, _ = await _article_with_topic(db_session, "Competitive Curling")
+    await db_session.commit()
+
+    r = await aclient.post("/discover/swipe", json={"article_id": art.id, "direction": "left"})
+    assert r.status_code == 204
+
+    assert await _topic_follow_values(aclient) == []                            # no topic follow
+    assert ("topic", "Competitive Curling") not in await _rail_keys(aclient)    # no rail surfaced
+    # The interest IS still created (weight max(0, 1-0.2)=0.8): a left swipe nudges personalization but
+    # must not promote the topic into "News You Follow".
+    assert "Competitive Curling" in await _interests(aclient)
