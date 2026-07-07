@@ -200,3 +200,22 @@ async def test_invalidate_mid_build_skips_stale_cache_write(db_session, monkeypa
     await rails_svc.rails_for_user(db_session, 1)
     # The generation advanced during the build → the stale result was NOT cached.
     assert 1 not in rails_svc._cache
+
+
+@pytest.mark.asyncio
+async def test_topic_and_saved_search_same_value_dedupe_to_one_rail(aclient, db_session):
+    """Adversarial-review fix: a `topic` follow and a `saved_search` follow may legally share a value
+    (uq_follow keys on kind too), which the interests↔topic-follow unify makes likely. Rails must
+    collapse them to a SINGLE 'AI' header, keeping the precise topic rail — not render two identical
+    headers over overlapping clusters."""
+    await _ensure_user(db_session)
+    c, _ = await _story(db_session, "AI breakthrough", topic="AI")
+    db_session.add(Follow(user_id=1, kind="topic", value="AI"))
+    db_session.add(Follow(user_id=1, kind="saved_search", value="AI"))
+    await db_session.flush()
+
+    rails = (await aclient.get("/follows/rails")).json()["rails"]
+    ai_rails = [x for x in rails if x["value"].strip().lower() == "ai"]
+    assert len(ai_rails) == 1                                   # collapsed, not two identical headers
+    assert ai_rails[0]["kind"] == "topic"                       # kept the precise ArticleTopic match
+    assert {s["cluster_id"] for s in ai_rails[0]["stories"]} == {c.id}
