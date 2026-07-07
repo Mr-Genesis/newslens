@@ -226,5 +226,5 @@ async def test_backfill_my_topics_endpoint_schedules_all_subscriptions(aclient, 
 
     r = await aclient.post("/profile/backfill-topics")
     assert r.status_code == 200
-    assert r.json() == {"topics": 2, "scheduled": 2}
+    assert r.json() == {"topics": 2, "scheduled": 2, "reconciled": 0}  # interests only, no legacy follows
     assert set(scheduled) == {t1.id, t2.id}
