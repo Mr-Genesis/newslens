@@ -2011,6 +2011,25 @@ async def create_follow(body: FollowCreate, db: AsyncSession = Depends(get_db)):
     ).scalar_one_or_none()
     if existing is not None:
         return FollowOut.model_validate(existing)
+    # WS-2 dedupe (write-side): a saved_search is the least precise rail, so if a more-precise
+    # topic/entity follow already covers this value (case-insensitively), return THAT follow instead
+    # of minting a redundant row that would render a second identical header. Prefer topic (the exact
+    # ArticleTopic match) over entity. Closes the door the interests<->topic-follow unify opened — a
+    # chip/onboarding auto-creates the topic follow, and "Follow this search" would re-add it as free
+    # text. rails._dedupe_follows still covers rows minted by other paths (read-side complement).
+    if kind == "saved_search":
+        for _pkind in ("topic", "entity"):
+            precise = (
+                await db.execute(
+                    select(Follow).where(
+                        Follow.user_id == current_user_id(),
+                        Follow.kind == _pkind,
+                        func.lower(Follow.value) == value.lower(),
+                    )
+                )
+            ).scalars().first()
+            if precise is not None:
+                return FollowOut.model_validate(precise)
     # WS-2 (#112): cap free-text follows so the rails section stays a curated shelf, not a firehose.
     if kind == "saved_search":
         from app.config import settings as _cfg
