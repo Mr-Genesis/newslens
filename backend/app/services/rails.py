@@ -286,6 +286,32 @@ async def _cluster_id_since(db: AsyncSession, cluster_ids: list[int]):
     return {s.id: s for s in story_rows}, meta
 
 
+# Kind priority when two follows collide on a normalized value: keep the most precise rail. A `topic`
+# rail is an exact ArticleTopic membership match; an `entity` rail is a resolved-entity match; a
+# `saved_search` rail is a fuzzy hybrid over the same words. So topic > entity > saved_search.
+_KIND_PRIORITY = {"topic": 0, "entity": 1, "saved_search": 2}
+
+
+def _dedupe_follows(follows: list[Follow]) -> list[Follow]:
+    """Collapse rail-able follows that share a value (case-insensitively) ACROSS kinds, so "News You
+    Follow" never renders two rails with an identical header. This collision is legal — uq_follow keys
+    on (user_id, kind, value), so a `topic` 'AI' and a `saved_search` 'AI' are two distinct rows — and
+    the interests↔topic-follow unify makes it likely: chips/onboarding auto-create the `topic` follow
+    while /follows and "Follow this search" create a `saved_search` follow on the SAME free text.
+
+    Keep the highest-priority kind per normalized value (topic beats saved_search — see _KIND_PRIORITY);
+    same-priority ties keep the first seen, which is the newest since `follows` arrive created_at desc.
+    Input order is otherwise preserved (each surviving follow stays at its own position)."""
+    winner: dict[str, Follow] = {}
+    for f in follows:
+        key = (f.value or "").strip().lower()
+        cur = winner.get(key)
+        if cur is None or _KIND_PRIORITY.get(f.kind, 99) < _KIND_PRIORITY.get(cur.kind, 99):
+            winner[key] = f
+    kept = {f.id for f in winner.values()}
+    return [f for f in follows if f.id in kept]
+
+
 async def rails_for_user(db: AsyncSession, user_id: int) -> list[dict]:
     """The whole "News You Follow" payload for a user: one rail per rail-able follow, newest-first,
     each with ≤N stories in the 72h window and a badge new_count. Source follows are excluded.
@@ -312,6 +338,10 @@ async def rails_for_user(db: AsyncSession, user_id: int) -> list[dict]:
             .order_by(Follow.created_at.desc())
         )
     ).scalars().all()
+    # Collapse cross-kind collisions on the same value (e.g. topic 'AI' + saved_search 'AI') so we
+    # don't render two rails with an identical header. Do it BEFORE building so the dropped follow's
+    # eval never runs.
+    follows = _dedupe_follows(follows)
 
     rails: list[dict] = []
     for f in follows:
