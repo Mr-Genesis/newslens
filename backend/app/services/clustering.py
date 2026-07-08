@@ -6,13 +6,14 @@ O(n^2) pairwise comparison in Python.
 """
 
 import structlog
-from sqlalchemy import select, text
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session
 from app.models import (
     Article,
+    ArticleEntity,
     ArticleTopic,
     ClusterArticle,
     ClusterEdge,
@@ -144,7 +145,12 @@ async def _find_nearest_cluster(article: Article) -> int | None:
     or None if this should start a new cluster.
     """
     async with async_session() as session:
-        # Use pgvector cosine distance operator to find similar articles that are already in clusters.
+        # Fetch the nearest already-clustered article WITHOUT the threshold in the WHERE, then apply the
+        # threshold in Python. This is behaviourally identical to filtering in SQL (the global-nearest
+        # is the nearest-under-threshold iff it is itself under threshold), but it lets us LOG the
+        # near-miss distance for every article — the doc↔doc distribution needed to calibrate
+        # cluster_similarity_threshold from real data (mirrors rails' rail_distance_histogram). See
+        # docs/fixes/follow-rails-identical-rootcause.md. The ORDER BY … LIMIT 1 rides the HNSW index.
         try:
             result = await session.execute(
                 text("""
@@ -152,14 +158,10 @@ async def _find_nearest_cluster(article: Article) -> int | None:
                     FROM articles a
                     JOIN cluster_articles ca ON ca.article_id = a.id
                     WHERE a.embedding IS NOT NULL
-                      AND a.embedding <=> :embedding < :threshold
                     ORDER BY distance
                     LIMIT 1
                 """),
-                {
-                    "embedding": vector_literal(article.embedding),
-                    "threshold": settings.cluster_similarity_threshold,
-                },
+                {"embedding": vector_literal(article.embedding)},
             )
             row = result.first()
         except Exception as e:  # noqa: BLE001 — a NN lookup failure must not abort the whole run;
@@ -167,7 +169,213 @@ async def _find_nearest_cluster(article: Article) -> int | None:
             logger.warning("cluster_nn_lookup_failed", article_id=getattr(article, "id", None), error=str(e))
             return None
 
-        if row:
-            return row[0]  # cluster_id
+        if not row:
+            return None
+
+        cluster_id, distance = row[0], float(row[1])
+        threshold = settings.cluster_similarity_threshold
+        # Near-miss = just outside the bar (threshold ≤ dist < 2×threshold): the same-event pair we are
+        # most likely failing to club. A pile of these is the signal to loosen the threshold (Phase 2).
+        logger.info(
+            "cluster_distance_probe",
+            article_id=getattr(article, "id", None),
+            nearest_cluster_id=cluster_id,
+            distance=round(distance, 4),
+            threshold=threshold,
+            matched=distance < threshold,
+            near_miss=threshold <= distance < threshold * 2,
+        )
+        return cluster_id if distance < threshold else None
 
     return None
+
+
+# ── Phase 3: cluster reconcile / merge ───────────────────────────────────────────────
+# See docs/fixes/follow-rails-identical-rootcause.md. The strict 0.15 join bar + single-linkage +
+# permanent placement can seed TWO clusters for one event that never reconcile. This job merges them.
+
+
+async def _cluster_entity_sets(session: AsyncSession, cluster_ids: list[int]) -> dict[int, set[int]]:
+    """cluster_id -> set of entity_ids featured in its articles (loose-band merge confirmation)."""
+    rows = (
+        await session.execute(
+            select(ClusterArticle.cluster_id, ArticleEntity.entity_id)
+            .join(ArticleEntity, ArticleEntity.article_id == ClusterArticle.article_id)
+            .where(ClusterArticle.cluster_id.in_(cluster_ids))
+        )
+    ).all()
+    out: dict[int, set[int]] = {}
+    for cid, eid in rows:
+        out.setdefault(cid, set()).add(eid)
+    return out
+
+
+async def _cluster_topic_sets(session: AsyncSession, cluster_ids: list[int]) -> dict[int, set[int]]:
+    """cluster_id -> set of topic_ids on its articles. Topics are assigned at ingest, so this
+    confirmation works on singletons too — unlike entities, which need a settled (≥2-source) cluster."""
+    rows = (
+        await session.execute(
+            select(ClusterArticle.cluster_id, ArticleTopic.topic_id)
+            .join(ArticleTopic, ArticleTopic.article_id == ClusterArticle.article_id)
+            .where(ClusterArticle.cluster_id.in_(cluster_ids))
+        )
+    ).all()
+    out: dict[int, set[int]] = {}
+    for cid, tid in rows:
+        out.setdefault(cid, set()).add(tid)
+    return out
+
+
+async def _merge_into(session: AsyncSession, survivor: int, losers: list[int]) -> None:
+    """Fold `losers` into `survivor` in ONE transaction. FK order matters (cluster_articles and
+    cluster_edges are RESTRICT): move the child cluster_articles off each loser, drop its best-effort
+    timeline edges, THEN delete the emptied cluster (impressions CASCADE). No article overlap is
+    possible — an article lives in exactly one cluster — so uq_cluster_article can't fire."""
+    for lid in losers:
+        await session.execute(
+            update(ClusterArticle).where(ClusterArticle.cluster_id == lid).values(cluster_id=survivor)
+        )
+        # Drop edges touching the loser rather than re-point (avoids self-edge + uq_cluster_edge
+        # conflicts); timeline links are best-effort and re-form on cluster creation.
+        await session.execute(
+            delete(ClusterEdge).where(
+                or_(ClusterEdge.src_cluster_id == lid, ClusterEdge.dst_cluster_id == lid)
+            )
+        )
+        await session.execute(delete(StoryCluster).where(StoryCluster.id == lid))
+    # Survivor's article set changed → every source-set-keyed cache is stale. Clearing source_hash
+    # invalidates the lens read-paths; nulling summary re-arms the snippet fallback + schedule_summary.
+    await session.execute(
+        update(StoryCluster)
+        .where(StoryCluster.id == survivor)
+        .values(
+            summary=None,
+            summary_generated_at=None,
+            coherence=None,
+            analysis_json=None,
+            impact_json=None,
+            strategic_json=None,
+            trivia_json=None,
+            extra_json=None,
+            source_hash=None,
+        )
+    )
+
+
+async def reconcile_clusters() -> None:
+    """Merge same-event clusters mis-seeded as parallel singletons. Centroid-distance driven with a
+    two-tier precision guard (tight pure-semantic OR loose + shared entity/topic) and union-find so a
+    chain A~B~C collapses to one. Gated by cluster_merge_enabled. Idempotent + skip-tolerant: each
+    group merges in its own transaction, one failure never aborts the rest, and a re-run is a no-op
+    once the near-duplicates are gone. See docs/fixes/follow-rails-identical-rootcause.md."""
+    if not settings.cluster_merge_enabled:
+        return
+
+    from datetime import datetime, timedelta, timezone
+
+    import numpy as np
+
+    async with async_session() as session:
+        since = datetime.now(timezone.utc) - timedelta(hours=settings.cluster_merge_window_hours)
+        cand_ids = (
+            await session.execute(
+                select(ClusterArticle.cluster_id)
+                .join(Article, Article.id == ClusterArticle.article_id)
+                .where(Article.published_at.isnot(None), Article.published_at >= since)
+                .distinct()
+                .limit(settings.cluster_merge_max)
+            )
+        ).scalars().all()
+        if len(cand_ids) < 2:
+            return
+
+        rows = (
+            await session.execute(
+                select(ClusterArticle.cluster_id, Article.embedding)
+                .join(Article, Article.id == ClusterArticle.article_id)
+                .where(ClusterArticle.cluster_id.in_(cand_ids), Article.embedding.isnot(None))
+            )
+        ).all()
+        vecs: dict[int, list] = {}
+        for cid, emb in rows:
+            if emb is not None:
+                vecs.setdefault(cid, []).append(np.asarray(emb, dtype=float))
+        ids = [c for c in cand_ids if c in vecs]
+        if len(ids) < 2:
+            return
+
+        # Per-cluster L2-normalized centroid → dot product IS cosine similarity; distance = 1 - dot.
+        cents = []
+        for c in ids:
+            m = np.mean(np.stack(vecs[c]), axis=0)
+            norm = float(np.linalg.norm(m))
+            cents.append(m / norm if norm > 0 else m)
+        sim = np.stack(cents) @ np.stack(cents).T
+
+        counts = dict(
+            (
+                await session.execute(
+                    select(ClusterArticle.cluster_id, func.count())
+                    .where(ClusterArticle.cluster_id.in_(ids))
+                    .group_by(ClusterArticle.cluster_id)
+                )
+            ).all()
+        )
+        ent_sets = await _cluster_entity_sets(session, ids)
+        topic_sets = await _cluster_topic_sets(session, ids)
+
+    # Union-find over confirmed merge pairs.
+    parent = {c: c for c in ids}
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    tight, loose = settings.cluster_merge_threshold_tight, settings.cluster_merge_threshold_loose
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            dist = 1.0 - float(sim[i][j])
+            if dist >= loose:
+                continue
+            if dist < tight:
+                _union(ids[i], ids[j])  # pure-semantic: merge, no confirmation
+            elif (ent_sets.get(ids[i], set()) & ent_sets.get(ids[j], set())) or (
+                topic_sets.get(ids[i], set()) & topic_sets.get(ids[j], set())
+            ):
+                _union(ids[i], ids[j])  # loose band: only with a shared entity/topic
+
+    groups: dict[int, list[int]] = {}
+    for c in ids:
+        groups.setdefault(_find(c), []).append(c)
+    merges = [g for g in groups.values() if len(g) >= 2]
+    if not merges:
+        return
+
+    merged = 0
+    for group in merges:
+        survivor = max(group, key=lambda c: (counts.get(c, 0), -c))  # most articles, tie → lowest id
+        losers = [c for c in group if c != survivor]
+        try:
+            async with async_session() as session:
+                await _merge_into(session, survivor, losers)
+                await session.commit()
+            from app.services.summarizer import schedule_summary
+
+            schedule_summary(survivor)  # article set changed → regenerate the summary in the background
+            merged += len(losers)
+        except Exception as e:  # noqa: BLE001 — one bad group must not abort the rest
+            logger.warning("cluster_merge_failed", survivor=survivor, losers=losers, error=str(e))
+
+    logger.info(
+        "cluster_reconcile_complete",
+        candidate_clusters=len(ids),
+        groups=len(merges),
+        clusters_merged=merged,
+    )

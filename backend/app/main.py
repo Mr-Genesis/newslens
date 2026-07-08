@@ -147,7 +147,7 @@ async def start_scheduler():
     from app.services.fetcher import fetch_all_rss
     from app.services.gdelt import fetch_gdelt
     from app.services.embeddings import backfill_embeddings
-    from app.services.clustering import run_clustering
+    from app.services.clustering import reconcile_clusters, run_clustering
     from app.services.summarizer import backfill_summaries
     from app.services.fetcher import backfill_topic_assignments
     from app.services.entities import backfill_entities
@@ -215,6 +215,19 @@ async def start_scheduler():
         minutes=settings.rss_fetch_interval_minutes,
         id="clustering",
         replace_existing=True,
+    )
+    # Phase 3 (docs/fixes/follow-rails-identical-rootcause.md): periodic cluster reconcile/merge — folds
+    # same-event clusters mis-seeded as parallel singletons. Internally gated by cluster_merge_enabled
+    # (dark by default); max_instances=1 + coalesce so a slow centroid scan never overlaps itself.
+    scheduler.add_job(
+        reconcile_clusters,
+        "interval",
+        minutes=settings.cluster_merge_interval_minutes,
+        id="cluster_reconcile",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
     )
     scheduler.add_job(
         backfill_summaries,

@@ -261,13 +261,15 @@ async def get_feed(
             as_of = as_of.replace(tzinfo=timezone.utc)
         query = query.where(Article.fetched_at <= as_of)
 
-    # G2: when personalizing, fetch a bounded recent pool and rerank it (recency + entity relevance)
-    # BEFORE paginating, so a high-affinity story can cross page boundaries within the horizon. When
-    # off, take the exact legacy path (count + offset/limit) → byte-identical response.
-    if app_settings.uer_enabled:
+    # Fetch a bounded recent pool whenever we need the full candidate set BEFORE paginating — either to
+    # personalize (rerank so a high-affinity story crosses page boundaries) OR to collapse same-cluster
+    # siblings to one row (Phase 4). Only when BOTH are off do we take the exact legacy path
+    # (count + offset/limit) → byte-identical response.
+    use_pool = app_settings.uer_enabled or app_settings.feed_collapse_clusters
+    if use_pool:
         pool_result = await db.execute(query.limit(app_settings.uer_feed_pool_size))
         articles = pool_result.scalars().all()
-        total = len(articles)  # personalization horizon = the pool
+        total = len(articles)  # provisional (pool horizon); corrected after any collapse below
     else:
         count_query = select(func.count()).select_from(query.subquery())
         total = (await db.execute(count_query)).scalar_one()
@@ -309,8 +311,8 @@ async def get_feed(
             ).all()
             clusters_with_summary = {row[0] for row in sum_rows}
 
-    # G2: rerank the pool by the recency+relevance blend, then slice the requested page. When off,
-    # `articles` is already the legacy page, so page_articles == articles (byte-identical).
+    # G2: rerank the pool by the recency+relevance blend (in place). The page slice happens in the
+    # collapse block below (pool path) or is a no-op passthrough on the legacy path.
     if app_settings.uer_enabled:
         from app.services import entities
 
@@ -337,6 +339,23 @@ async def get_feed(
             key=lambda a: (blends[a.id], pub_ts[a.id] if pub_ts[a.id] is not None else float("-inf"), a.id),
             reverse=True,
         )
+
+    # Phase 4: collapse same-cluster siblings to ONE representative (the first in the current order =
+    # freshest / top-ranked), keeping each unclustered article as its own row. Done BEFORE the page
+    # slice so per_page counts STORIES, not articles; get_cluster still shows every sibling. See
+    # docs/fixes/follow-rails-identical-rootcause.md.
+    if use_pool:
+        if app_settings.feed_collapse_clusters:
+            _seen: set[int] = set()
+            _collapsed: list[Article] = []
+            for a in articles:
+                cid = art_to_cluster.get(a.id)
+                if cid is None or cid not in _seen:
+                    if cid is not None:
+                        _seen.add(cid)
+                    _collapsed.append(a)
+            articles = _collapsed
+        total = len(articles)  # stories in the horizon (post-collapse)
         page_articles = articles[offset:offset + per_page]
     else:
         page_articles = articles

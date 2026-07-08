@@ -290,11 +290,9 @@ async def embed_article(article_id: int):
         if not article:
             return
 
-        text = article.title
-        if article.snippet:
-            text += " " + article.snippet
-
-        embedding = await generate_embedding(text)
+        # Single source of truth for the embed recipe (title + bounded body) — must match the batch
+        # path in _backfill_once so single- and batch-embedded articles land in the same space.
+        embedding = await generate_embedding(_article_embed_text(article))
 
         if embedding:
             await session.execute(
@@ -316,10 +314,25 @@ async def embed_article(article_id: int):
 
 
 def _article_embed_text(article: Article) -> str:
-    text = article.title or ""
-    if article.snippet:
-        text += " " + article.snippet
-    return text
+    """Text fed to the embedding model for an article. Title + a bounded slice of the article BODY
+    (extracted_text), falling back to the card snippet and then to title-only.
+
+    Historically this was title + snippet[:300] ONLY: the ≤16k-char body was captured (models.py
+    extracted_text) but never embedded, which starved BOTH clustering (doc↔doc NN) AND the
+    saved-search rails/search (query↔doc ANN) — every feature that matches on articles.embedding — of
+    the shared body signal that makes same-event coverage from different outlets look similar. See
+    docs/fixes/follow-rails-identical-rootcause.md. `embedding_body_chars=0` restores the legacy path.
+    """
+    title = article.title or ""
+    n = settings.embedding_body_chars
+    if n > 0:
+        # Prefer the full body; snippet is a 300-char prefix of it, so this is a strict superset when
+        # a body exists. Fall back to snippet (then nothing) when no body was extracted.
+        body = (article.extracted_text or article.snippet or "")[:n]
+    else:
+        body = article.snippet or ""  # legacy: card snippet only
+    text = f"{title} {body}".strip() if body else title
+    return text or title
 
 
 async def backfill_embeddings(session=None):

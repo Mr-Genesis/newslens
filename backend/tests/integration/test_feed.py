@@ -1,5 +1,7 @@
-"""E0: /feed must report real source_count + cluster_id (multi-source visible)
-and serve the feed with a bounded query count (no per-article N+1)."""
+"""E0: /feed must report real source_count + cluster_id and, per Phase 4
+(docs/fixes/follow-rails-identical-rootcause.md), COLLAPSE same-cluster articles to one row (so a
+multi-source story is one row with an N-sources badge, not N near-identical rows), while still serving
+the feed with a bounded query count (no per-article N+1)."""
 import pytest
 from sqlalchemy import event
 
@@ -41,21 +43,29 @@ async def _seed(db_session):
 
 
 @pytest.mark.asyncio
-async def test_feed_reports_real_source_count_and_cluster(aclient, db_session):
+async def test_feed_collapses_cluster_and_reports_source_count(aclient, db_session):
     cl, _arts, _standalone = await _seed(db_session)
     resp = await aclient.get("/feed?per_page=50")
     assert resp.status_code == 200
-    items = {it["title"]: it for it in resp.json()["articles"]}
+    items = resp.json()["articles"]
 
-    c0 = items["Clustered 0"]
-    assert c0["source_count"] == 3
-    assert c0["cluster_id"] == cl.id
-    assert c0["has_ai_summary"] is True
+    # Phase 4: the 3 clustered articles collapse to ONE representative row (which of the three wins is
+    # order-dependent and not asserted), so the feed shows exactly two stories — the cluster + the
+    # standalone — not four article rows. The badge still reflects the true cluster size.
+    clustered = [it for it in items if it["cluster_id"] == cl.id]
+    assert len(clustered) == 1, f"cluster should collapse to one row, got {len(clustered)}"
+    rep = clustered[0]
+    assert rep["source_count"] == 3
+    assert rep["has_ai_summary"] is True
+    assert rep["title"] in {"Clustered 0", "Clustered 1", "Clustered 2"}
 
-    s = items["Standalone"]
-    assert s["source_count"] == 1
-    assert s["cluster_id"] is None
-    assert s["has_ai_summary"] is False
+    standalone = [it for it in items if it["title"] == "Standalone"]
+    assert len(standalone) == 1
+    assert standalone[0]["source_count"] == 1
+    assert standalone[0]["cluster_id"] is None
+    assert standalone[0]["has_ai_summary"] is False
+
+    assert len(items) == 2  # one row per cluster + the standalone
 
 
 @pytest.mark.asyncio
@@ -97,11 +107,12 @@ async def test_feed_no_n_plus_one(aclient, db_session, engine):
         event.remove(sync_engine, "before_cursor_execute", _before_cursor)
 
     assert resp.status_code == 200
-    assert len(resp.json()["articles"]) == 25
+    # Phase 4: the 4 clustered articles collapse to one row → 21 standalone + 1 cluster rep = 22.
+    assert len(resp.json()["articles"]) == 22
     # Endpoint issues a bounded set of queries: count, page, source selectin,
     # cluster-membership, per-cluster count, summary set, recent feedback, and WS-5's one-hop seed
     # probe (a single O(1) UER lookup — 0 rows for this zero-signal user, then expansion short-circuits).
-    # Far fewer than 1-per-article (which would be 25+). Allow generous headroom.
+    # Collapse is pure Python (adds no SELECTs). Far fewer than 1-per-article. Allow generous headroom.
     assert counter["n"] <= 13, f"feed issued {counter['n']} SELECTs (possible N+1)"
 
 
