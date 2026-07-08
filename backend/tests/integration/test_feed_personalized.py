@@ -172,5 +172,6 @@ async def test_feed_on_no_n_plus_one(aclient, db_session, engine, monkeypatch):
         event.remove(sync_engine, "before_cursor_execute", _before)
 
     assert resp.status_code == 200
-    assert len(resp.json()["articles"]) == 25
+    # Phase 4: the 4 clustered articles collapse to one row → 21 standalone + 1 cluster rep = 22.
+    assert len(resp.json()["articles"]) == 22
     assert counter["n"] <= 15, f"feed (personalized) issued {counter['n']} SELECTs (possible N+1)"

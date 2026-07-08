@@ -227,6 +227,15 @@ class Settings(BaseSettings):
     embedding_quota_cooldown_minutes: int = 30   # after a 429, skip backfill runs this long (RPD resets)
     embedding_error_cooldown_minutes: int = 10   # after a systemic non-quota failure (nothing embedded
                                                  # even per-text), back off this long instead of re-firing
+    # Article-embedding INPUT. Historically the vector was title + snippet[:300] only — the full body
+    # (extracted_text, ≤16k) was captured but NEVER embedded, starving BOTH clustering (doc↔doc NN) and
+    # the saved-search rails/search (query↔doc ANN) of the shared body signal — see
+    # docs/fixes/follow-rails-identical-rootcause.md. >0 folds a bounded body window into the embed text
+    # (falling back to snippet, then title); 0 restores the legacy snippet-only behavior. CHANGING THIS
+    # REQUIRES A RE-EMBED (scripts/reembed.py) so old/new vectors are comparable, plus re-tuning
+    # cluster_similarity_threshold + rails_dist_*. Kept modest (not the full 16k) to avoid whole-article
+    # topic drift over-merging distinct same-domain events.
+    embedding_body_chars: int = 2000
 
     # Summary config
     summary_model: str = "gpt-4o-mini"
@@ -248,6 +257,23 @@ class Settings(BaseSettings):
     # Clustering
     cluster_similarity_threshold: float = 0.15  # cosine distance (1 - similarity)
     new_topic_max_similarity: float = 0.6
+    # Phase 3 (docs/fixes/follow-rails-identical-rootcause.md) — periodic cluster reconcile/merge.
+    # Fixes the "permanent parallel singletons" trap: the strict join bar + single-linkage can seed two
+    # clusters for ONE event, and placement is permanent with no merge. This job merges clusters whose
+    # centroids are a tight pure-semantic match, OR a looser match CONFIRMED by a shared entity/topic
+    # (mirrors the rails precision guard). Ship DARK (off) until the Phase-2 threshold is calibrated —
+    # it reassigns rows, so it is harder to reverse than a threshold bump. Thresholds are hypotheses;
+    # calibrate with scripts/measure_cluster_distances.py.
+    cluster_merge_enabled: bool = False
+    cluster_merge_interval_minutes: int = 60
+    cluster_merge_window_hours: int = 72      # only reconcile clusters with an article this recent
+    cluster_merge_max: int = 300              # cap candidate clusters/run (bounds the O(k^2) centroid scan)
+    cluster_merge_threshold_tight: float = 0.13  # pure-semantic centroid match → merge, no confirmation
+    cluster_merge_threshold_loose: float = 0.25  # merge only when a shared entity/topic confirms
+    # Phase 4 — collapse same-cluster articles to ONE feed row (freshest/top-ranked representative) so a
+    # 3-source story shows once with a source_count badge instead of 3 near-identical rows. On ⇒ the feed
+    # always paginates over a bounded pool (like the personalized path) so per_page counts STORIES.
+    feed_collapse_clusters: bool = True
 
     # Recommendation
     default_explore_ratio: float = 0.3
